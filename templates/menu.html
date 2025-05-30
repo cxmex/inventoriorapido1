@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inventory Management System</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f5f5f5;
+            padding-bottom: 30px;
+        }
+        .app-header {
+            background-color: #2196F3;
+            color: white;
+            padding: 15px 0;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .action-button {
+            margin-bottom: 15px;
+            font-weight: 500;
+        }
+        .card {
+            margin-bottom: 10px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+            transition: box-shadow 0.2s;
+        }
+        .card:hover {
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+            cursor: pointer;
+        }
+        .metric {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            margin-right: 5px;
+            font-weight: bold;
+        }
+        .metric-total {
+            background-color: #E3F2FD;
+            color: #1565C0;
+        }
+        .metric-sales {
+            background-color: #E8F5E9;
+            color: #2E7D32;
+        }
+        .metric-sales.inactive {
+            background-color: #EEEEEE;
+            color: #757575;
+        }
+        .metric-negative {
+            background-color: #F44336;
+            color: white;
+        }
+        .metric-negative.inactive {
+            background-color: #EEEEEE;
+            color: #757575;
+        }
+        .metric-label {
+            font-size: 10px;
+            margin-left: 2px;
+        }
+        .turnover-rate {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .turnover-0 {
+            background-color: #EEEEEE;
+            color: #757575;
+        }
+        .turnover-1 {
+            background-color: #FFF9C4;
+            color: #5D4037;
+        }
+        .turnover-2 {
+            background-color: #FFEB3B;
+            color: #5D4037;
+        }
+        .turnover-3 {
+            background-color: #FFC107;
+            color: white;
+        }
+        .turnover-4 {
+            background-color: #FF9800;
+            color: white;
+        }
+        .turnover-5 {
+            background-color: #FF5722;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <header class="app-header">
+        <div class="container">
+            <h1 class="text-center">Inventory Management</h1>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="row mb-4">
+            <div class="col-md-4">
+                <a href="#" class="btn btn-primary btn-lg d-block action-button">
+                    <i class="bi bi-pencil-square"></i> Nota
+                </a>
+            </div>
+            <div class="col-md-4">
+                <a href="#" class="btn btn-success btn-lg d-block action-button">
+                    <i class="bi bi-file-text"></i> Ver Notas
+                </a>
+            </div>
+            <div class="col-md-4">
+                <a href="/modelos" class="btn btn-primary btn-lg d-block action-button">
+                    <i class="bi bi-list-ul"></i> Modelos
+                </a>
+            </div>
+            <div class="col-md-4">
+                <a href="/verventasxsemana" class="btn btn-primary btn-lg d-block action-button">
+                    <i class="bi bi-list-ul"></i> Ver Ventas por Semana
+                </a>
+            </div>
+            <div class="col-md-4">
+                <a href="/conteorapido" class="btn btn-primary btn-lg d-block action-button">
+                    <i class="bi bi-list-ul"></i> Conteo Rapido
+                </a>
+            </div>
+        </div>
+
+        <h2 class="mb-3">Inventario Estilos (Prioridad 1)</h2>
+        
+        {% if inventory_styles %}
+            <div class="row">
+                {% for item in inventory_styles %}
+                    <div class="col-md-6 mb-3">
+                        <div class="card" onclick="window.location.href='/inventory/{{ item.id }}'">
+                            <div class="card-body">
+                                <h5 class="card-title">{{ item.nombre }}</h5>
+                                <p class="card-text text-muted">ID: {{ item.id }}</p>
+                                
+                                <div class="mt-2">
+                                    <!-- Total terex1 -->
+                                    <span class="metric metric-total">
+                                        {{ item.total_terex1 }}
+                                        <span class="metric-label">tot</span>
+                                    </span>
+                                    
+                                    <!-- Sales count -->
+                                    <span class="metric metric-sales {% if item.ventas_count == 0 %}inactive{% endif %}">
+                                        {{ item.ventas_count }}
+                                        <span class="metric-label">und</span>
+                                    </span>
+                                    
+                                    <!-- Negative count -->
+                                    <span class="metric metric-negative {% if item.negatives_count == 0 %}inactive{% endif %}">
+                                        {{ item.negatives_count }}
+                                        <span class="metric-label">neg</span>
+                                    </span>
+                                    
+                                    <!-- Turnover rate -->
+                                    {% set turnover_class = 0 %}
+                                    {% if item.turnover_rate > 50 %}
+                                        {% set turnover_class = 5 %}
+                                    {% elif item.turnover_rate > 30 %}
+                                        {% set turnover_class = 4 %}
+                                    {% elif item.turnover_rate > 20 %}
+                                        {% set turnover_class = 3 %}
+                                    {% elif item.turnover_rate > 10 %}
+                                        {% set turnover_class = 2 %}
+                                    {% elif item.turnover_rate > 0 %}
+                                        {% set turnover_class = 1 %}
+                                    {% endif %}
+                                    
+                                    <span class="turnover-rate turnover-{{ turnover_class }}">
+                                        {{ "%.1f"|format(item.turnover_rate) }}%
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="alert alert-info">
+                No inventory styles found with priority 1.
+            </div>
+        {% endif %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

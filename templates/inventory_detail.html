@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ estilo_nombre }} - Inventory</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f5f5f5;
+            padding-bottom: 30px;
+        }
+        .app-header {
+            background-color: #2196F3;
+            color: white;
+            padding: 15px 0;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .filter-controls {
+            margin-bottom: 20px;
+            background-color: white;
+            padding: 15px;
+            border-radius: 4px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+        }
+        .inventory-table {
+            width: 100%;
+            border-collapse: collapse;
+            background-color: white;
+            border-radius: 4px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+        }
+        .inventory-table th {
+            background-color: #f2f2f2;
+            padding: 12px 8px;
+            text-align: left;
+            position: sticky;
+            top: 0;
+            font-weight: 600;
+        }
+        .inventory-table td {
+            padding: 10px 8px;
+            border-bottom: 1px solid #ddd;
+        }
+        .inventory-table tr:hover {
+            background-color: #f5f5f5;
+        }
+        .negative-value {
+            color: #F44336;
+            font-weight: bold;
+        }
+        .terex1-input {
+            width: 80px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            padding: 6px;
+        }
+        .current-value {
+            display: inline-block;
+            padding: 6px 12px;
+            background-color: #f8f9fa;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            margin-right: 5px;
+            font-weight: 500;
+        }
+        .success-alert {
+            background-color: #4CAF50;
+            color: white;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+        }
+    </style>
+</head>
+<body>
+    <header class="app-header">
+        <div class="container">
+            <h1 class="text-center">{{ estilo_nombre }} - Inventory</h1>
+        </div>
+    </header>
+    
+    <div class="container">
+        <div class="row mb-3">
+            <div class="col">
+                <a href="/" class="btn btn-primary">Back to Menu</a>
+            </div>
+        </div>
+
+        <!-- Success Message -->
+        <div class="success-alert" id="success-alert" style="display: none;">
+            Inventory updated successfully!
+        </div>
+        
+        <!-- Filter Controls -->
+        <div class="filter-controls">
+            <div class="row">
+                <div class="col-md-6 mb-2">
+                    <input type="text" id="name-filter" class="form-control" placeholder="Filter by Name...">
+                </div>
+                <div class="col-md-3 mb-2">
+                    <select id="brand-filter" class="form-control">
+                        <option value="">All Brands</option>
+                        {% for brand in brands %}
+                        <option value="{{ brand }}">{{ brand }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-3 mb-2">
+                    <select id="stock-filter" class="form-control">
+                        <option value="all">All Items</option>
+                        <option value="negative">Negative Stock</option>
+                        <option value="zero">Zero Stock</option>
+                        <option value="positive">Positive Stock</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Inventory Table -->
+        <div class="table-responsive">
+            <table class="inventory-table">
+                <thead>
+                    <tr>
+                        <th>Barcode</th>
+                        <th>Name</th>
+                        <th>Brand</th>
+                        <th>Stock</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in inventory_items %}
+                    <tr class="inventory-item" 
+                        data-name="{{ item.name|lower }}" 
+                        data-brand="{{ item.marca|upper if item.marca else '' }}"
+                        data-stock="{{ item.terex1 if item.terex1 is not none else 0 }}">
+                        <td>{{ item.barcode }}</td>
+                        <td>{{ item.name }}</td>
+                        <td>{{ item.marca }}</td>
+                        <td class="{% if item.terex1 is not none and item.terex1 < 0 %}negative-value{% endif %}">
+                            {{ item.terex1 if item.terex1 is not none else 0 }}
+                        </td>
+                        <td>
+                            <form method="POST" action="/update-terex1" id="update-form-{{ item.barcode }}">
+                                <input type="hidden" name="barcode" value="{{ item.barcode }}">
+                                <input type="hidden" name="name" value="{{ item.name }}">
+                                <input type="hidden" name="estilo_id" value="{{ estilo_id }}">
+                                
+                                <div class="form-group">
+                                    <div class="input-group">
+                                        <!-- Current value display -->
+                                        <span class="current-value">{{ item.terex1 if item.terex1 is not none else 0 }}</span>
+                                        
+                                        <!-- Input for new value -->
+                                        <input 
+                                            type="number" 
+                                            name="new_value" 
+                                            class="form-control terex1-input" 
+                                            value="{{ item.terex1 if item.terex1 is not none else 0 }}" 
+                                            required
+                                        >
+                                        
+                                        <!-- Submit button -->
+                                        <button 
+                                            type="submit" 
+                                            class="btn btn-primary btn-sm ms-2"
+                                        >
+                                            Corregir
+                                        </button>
+                                    </div>
+                                </div>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Check for success parameter in URL
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.get('success') === 'true') {
+                // Show success message
+                const successAlert = document.getElementById('success-alert');
+                successAlert.style.display = 'block';
+                // Hide after 3 seconds
+                setTimeout(function() {
+                    successAlert.style.display = 'none';
+                }, 3000);
+                
+                // Remove success parameter from URL without page reload
+                const newUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+                window.history.replaceState({path: newUrl}, '', newUrl);
+            }
+            
+            // Filter functionality
+            function applyFilters() {
+                const nameFilter = document.getElementById('name-filter').value.toLowerCase();
+                const brandFilter = document.getElementById('brand-filter').value;
+                const stockFilter = document.getElementById('stock-filter').value;
+                
+                document.querySelectorAll('.inventory-item').forEach(function(item) {
+                    const name = item.getAttribute('data-name');
+                    const brand = item.getAttribute('data-brand');
+                    const stock = parseInt(item.getAttribute('data-stock'));
+                    
+                    let nameMatch = name.includes(nameFilter);
+                    let brandMatch = !brandFilter || brand === brandFilter;
+                    let stockMatch = true;
+                    
+                    if (stockFilter === 'negative') {
+                        stockMatch = stock < 0;
+                    } else if (stockFilter === 'zero') {
+                        stockMatch = stock === 0;
+                    } else if (stockFilter === 'positive') {
+                        stockMatch = stock > 0;
+                    }
+                    
+                    if (nameMatch && brandMatch && stockMatch) {
+                        item.style.display = '';
+                    } else {
+                        item.style.display = 'none';
+                    }
+                });
+            }
+            
+            // Register event handlers for filters
+            document.getElementById('name-filter').addEventListener('input', applyFilters);
+            document.getElementById('brand-filter').addEventListener('change', applyFilters);
+            document.getElementById('stock-filter').addEventListener('change', applyFilters);
+        });
+    </script>
+</body>
+</html>
