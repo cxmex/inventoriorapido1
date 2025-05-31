@@ -231,7 +231,10 @@ async def home(request: Request):
             }
         )
 
+
 # Inventory detail page
+# Inventory detail page - FIXED VERSION
+# Fixed Inventory detail page - Version 2
 @app.get("/inventory/{estilo_id}", response_class=HTMLResponse)
 async def inventory_detail(request: Request, estilo_id: int):
     try:
@@ -249,7 +252,8 @@ async def inventory_detail(request: Request, estilo_id: int):
         if style_response and len(style_response) > 0:
             style_name = style_response[0].get('nombre', "Unknown Style")
         
-        # Fetch inventory items for the style
+        # CRITICAL FIX: Use the SAME method that works in your debug
+        # Get ALL inventory items WITHOUT any conversion/processing
         inventory_response = await supabase_request(
             method="GET",
             endpoint="/rest/v1/inventario1",
@@ -259,28 +263,90 @@ async def inventory_detail(request: Request, estilo_id: int):
             }
         )
         
-        # Get available brands for filtering
+        print(f"Retrieved {len(inventory_response)} total items for estilo_id {estilo_id}", flush=True)
+        
+        # Process inventory data with MINIMAL conversion
         brands = set()
+        processed_items = []
+        
+        negative_count = 0
+        zero_count = 0
+        positive_count = 0
+        
         for item in inventory_response:
+            # CRITICAL: Don't modify the terex1 value unless absolutely necessary
+            terex1_value = item.get('terex1')
+            
+            # Only process if terex1 is not None
+            if terex1_value is not None:
+                # Keep the original value but ensure it's the right type
+                if isinstance(terex1_value, (int, float)):
+                    # It's already a number, keep it as is
+                    final_terex1 = int(terex1_value)
+                elif isinstance(terex1_value, str):
+                    # Convert string to int
+                    try:
+                        final_terex1 = int(terex1_value.strip()) if terex1_value.strip() else 0
+                    except ValueError:
+                        try:
+                            final_terex1 = int(float(terex1_value.strip()))
+                        except (ValueError, AttributeError):
+                            final_terex1 = 0
+                else:
+                    final_terex1 = 0
+            else:
+                final_terex1 = 0
+            
+            # Update the item with the processed value
+            item['terex1'] = final_terex1
+            
+            # Count items by type
+            if final_terex1 < 0:
+                negative_count += 1
+                print(f"NEGATIVE ITEM: {item.get('name', 'No name')} - Barcode: {item.get('barcode')} - Value: {final_terex1}", flush=True)
+            elif final_terex1 == 0:
+                zero_count += 1
+            else:
+                positive_count += 1
+            
+            # Add brand to set
             if item.get('marca'):
                 brands.add(item.get('marca').upper())
+            
+            processed_items.append(item)
         
         # Sort brands alphabetically
         sorted_brands = sorted(list(brands))
+        
+        print(f"FINAL COUNTS for estilo_id {estilo_id}: Negative: {negative_count}, Zero: {zero_count}, Positive: {positive_count}", flush=True)
+        
+        # Double-check by filtering the processed items
+        actual_negative_items = [item for item in processed_items if item.get('terex1', 0) < 0]
+        print(f"Double-check: Found {len(actual_negative_items)} negative items in processed list", flush=True)
+        
+        if len(actual_negative_items) != negative_count:
+            print(f"WARNING: Count mismatch! negative_count={negative_count}, actual_negative_items={len(actual_negative_items)}", flush=True)
         
         return templates.TemplateResponse(
             "inventory_detail.html", 
             {
                 "request": request, 
-                "inventory_items": inventory_response,
+                "inventory_items": processed_items,
                 "estilo_id": estilo_id,
                 "estilo_nombre": style_name,
-                "brands": sorted_brands
+                "brands": sorted_brands,
+                # Add debug info to template
+                "debug_counts": {
+                    "negative": negative_count,
+                    "zero": zero_count,
+                    "positive": positive_count,
+                    "total": len(processed_items)
+                }
             }
         )
     except Exception as e:
         print(f"Error loading inventory: {str(e)}", flush=True)
-        traceback.print_exc()  # Print stack trace for more details
+        traceback.print_exc()
         return templates.TemplateResponse(
             "error.html", 
             {
@@ -288,6 +354,121 @@ async def inventory_detail(request: Request, estilo_id: int):
                 "error_message": f"Error loading inventory: {str(e)}"
             }
         )
+
+
+# Alternative approach: Get negative items separately and merge
+@app.get("/inventory/{estilo_id}/alternative", response_class=HTMLResponse)
+async def inventory_detail_alternative(request: Request, estilo_id: int):
+    """Alternative approach: Get all items and negative items separately, then merge"""
+    try:
+        # Get the style name
+        style_response = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/inventario_estilos",
+            params={
+                "select": "nombre",
+                "id": f"eq.{estilo_id}"
+            }
+        )
+        
+        style_name = "Unknown Style"
+        if style_response and len(style_response) > 0:
+            style_name = style_response[0].get('nombre', "Unknown Style")
+        
+        # Method 1: Get ALL items
+        all_items = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/inventario1",
+            params={
+                "select": "barcode,name,terex1,marca,estilo_id",
+                "estilo_id": f"eq.{estilo_id}"
+            }
+        )
+        
+        # Method 2: Get ONLY negative items (we know this works from your debug)
+        negative_items = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/inventario1",
+            params={
+                "select": "barcode,name,terex1,marca,estilo_id",
+                "estilo_id": f"eq.{estilo_id}",
+                "terex1": "lt.0"
+            }
+        )
+        
+        print(f"Alternative method: All items: {len(all_items)}, Negative items: {len(negative_items)}", flush=True)
+        
+        # Create a set of negative barcodes for quick lookup
+        negative_barcodes = {item.get('barcode') for item in negative_items}
+        
+        # Process all items, but use the negative items data where applicable
+        processed_items = []
+        brands = set()
+        
+        for item in all_items:
+            barcode = item.get('barcode')
+            
+            # If this item is in our negative items list, use that data
+            if barcode in negative_barcodes:
+                # Find the matching negative item
+                negative_item = next((neg for neg in negative_items if neg.get('barcode') == barcode), None)
+                if negative_item:
+                    # Use the negative item data (which we know has the correct terex1 value)
+                    item = negative_item.copy()
+                    print(f"Using negative item data for {item.get('name', 'No name')}: {item.get('terex1')}", flush=True)
+            
+            # Ensure terex1 is an integer
+            terex1_val = item.get('terex1')
+            if terex1_val is not None:
+                try:
+                    item['terex1'] = int(terex1_val)
+                except (ValueError, TypeError):
+                    item['terex1'] = 0
+            else:
+                item['terex1'] = 0
+            
+            # Add brand
+            if item.get('marca'):
+                brands.add(item.get('marca').upper())
+            
+            processed_items.append(item)
+        
+        # Count final items
+        final_negative = sum(1 for item in processed_items if item.get('terex1', 0) < 0)
+        final_zero = sum(1 for item in processed_items if item.get('terex1', 0) == 0)
+        final_positive = sum(1 for item in processed_items if item.get('terex1', 0) > 0)
+        
+        print(f"Alternative method final counts: Negative: {final_negative}, Zero: {final_zero}, Positive: {final_positive}", flush=True)
+        
+        return templates.TemplateResponse(
+            "inventory_detail.html", 
+            {
+                "request": request, 
+                "inventory_items": processed_items,
+                "estilo_id": estilo_id,
+                "estilo_nombre": style_name,
+                "brands": sorted(list(brands)),
+                "debug_counts": {
+                    "negative": final_negative,
+                    "zero": final_zero,
+                    "positive": final_positive,
+                    "total": len(processed_items)
+                }
+            }
+        )
+        
+    except Exception as e:
+        print(f"Error in alternative method: {str(e)}", flush=True)
+        traceback.print_exc()
+        return templates.TemplateResponse(
+            "error.html", 
+            {
+                "request": request, 
+                "error_message": f"Alternative method error: {str(e)}"
+            }
+        )
+    
+    
 
 # Update terex1 endpoint - IMPROVED VERSION WITH DIRECT REQUESTS
 @app.post("/update-terex1", response_class=HTMLResponse)
@@ -316,8 +497,13 @@ async def update_terex1(
             old_value = current_item[0].get('terex1', 0)
             if old_value is None:
                 old_value = 0
+            else:
+                try:
+                    old_value = int(old_value)
+                except (ValueError, TypeError):
+                    old_value = 0
         
-        print(f"Current value for {barcode}: {old_value}", flush=True)
+        print(f"Current value for {barcode}: {old_value}, updating to: {new_value}", flush=True)
         
         # Update the inventory1 table
         try:
@@ -424,7 +610,12 @@ async def update_terex1(
             }
         )
 
-# Directory Structure Checker
+
+
+
+
+
+    # Directory Structure Checker
 @app.get("/check-static")
 async def check_static():
     """Endpoint to check static files directory structure"""
@@ -694,36 +885,95 @@ async def ver_ventas_por_semana(request: Request):
         print(f"Fetching weekly sales data for the last 15 weeks", flush=True)
         
         try:
-            # Call the Supabase function we created
+            # Call both Supabase functions
             async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{SUPABASE_URL}/rest/v1/rpc/get_weekly_sales",
+                # Get data by estilo
+                response_by_estilo = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_weekly_sales_by_estilo",
                     headers=HEADERS,
-                    params={"weeks_back": 15}  # Optional - since the default is 15
+                    params={"weeks_back": 15}
                 )
                 
-                if response.status_code >= 400:
-                    print(f"Function call error: {response.text}", flush=True)
-                    raise Exception(f"Function call failed: {response.status_code}, {response.text}")
+                # Get total data (for the table)
+                response_total = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_weekly_sales_total",
+                    headers=HEADERS,
+                    params={"weeks_back": 15}
+                )
                 
-                weekly_results = response.json()
-                print(f"Retrieved sales data for {len(weekly_results)} weeks", flush=True)
+                if response_by_estilo.status_code >= 400:
+                    print(f"Function call error (by estilo): {response_by_estilo.text}", flush=True)
+                    raise Exception(f"Function call failed: {response_by_estilo.status_code}")
+                
+                if response_total.status_code >= 400:
+                    print(f"Function call error (total): {response_total.text}", flush=True)
+                    raise Exception(f"Function call failed: {response_total.status_code}")
+                
+                weekly_results_by_estilo = response_by_estilo.json()
+                weekly_results_total = response_total.json()
+                
+                print(f"Retrieved sales data for {len(weekly_results_by_estilo)} records by estilo", flush=True)
             
-            # Process the results
+            # Process total results for the table
             week_totals = {}
-            chart_data = []
-            
-            for row in weekly_results:
+            for row in weekly_results_total:
                 week_key = row.get('week_start')
                 total = float(row.get('total_revenue', 0) or 0)
-                
                 week_totals[week_key] = total
+            
+            # Process results by estilo for the chart
+            chart_data_by_estilo = {}
+            all_weeks = set()
+            all_estilos = set()
+            
+            for row in weekly_results_by_estilo:
+                week_key = row.get('week_start')
+                estilo = row.get('estilo')
+                total = float(row.get('total_revenue', 0) or 0)
                 
-                # Simplify date format for chart (day/month only)
+                # Simplify date format for chart
                 simple_date = datetime.strptime(week_key, "%d/%m/%Y").strftime("%d/%m")
-                chart_data.append({
-                    "week": simple_date,
-                    "total": round(total, 2)
+                
+                if estilo not in chart_data_by_estilo:
+                    chart_data_by_estilo[estilo] = {}
+                
+                chart_data_by_estilo[estilo][simple_date] = round(total, 2)
+                all_weeks.add(simple_date)
+                all_estilos.add(estilo)
+            
+            # Prepare chart data structure
+            chart_data = {
+                'labels': sorted(list(all_weeks), key=lambda x: datetime.strptime(x, "%d/%m")),
+                'datasets': []
+            }
+            
+            # Define colors for different estilos
+            colors = [
+                {'bg': 'rgba(255, 99, 132, 0.7)', 'border': 'rgba(255, 99, 132, 1)'},
+                {'bg': 'rgba(54, 162, 235, 0.7)', 'border': 'rgba(54, 162, 235, 1)'},
+                {'bg': 'rgba(255, 206, 86, 0.7)', 'border': 'rgba(255, 206, 86, 1)'},
+                {'bg': 'rgba(75, 192, 192, 0.7)', 'border': 'rgba(75, 192, 192, 1)'},
+                {'bg': 'rgba(153, 102, 255, 0.7)', 'border': 'rgba(153, 102, 255, 1)'},
+                {'bg': 'rgba(255, 159, 64, 0.7)', 'border': 'rgba(255, 159, 64, 1)'},
+                {'bg': 'rgba(199, 199, 199, 0.7)', 'border': 'rgba(199, 199, 199, 1)'},
+                {'bg': 'rgba(83, 102, 255, 0.7)', 'border': 'rgba(83, 102, 255, 1)'}
+            ]
+            
+            # Create dataset for each estilo
+            for i, estilo in enumerate(sorted(all_estilos)):
+                color = colors[i % len(colors)]
+                data = []
+                
+                for week in chart_data['labels']:
+                    value = chart_data_by_estilo.get(estilo, {}).get(week, 0)
+                    data.append(value)
+                
+                chart_data['datasets'].append({
+                    'label': estilo,
+                    'data': data,
+                    'backgroundColor': color['bg'],
+                    'borderColor': color['border'],
+                    'borderWidth': 1
                 })
             
             print(f"Weekly totals: {week_totals}", flush=True)
@@ -733,7 +983,8 @@ async def ver_ventas_por_semana(request: Request):
                 {
                     "request": request,
                     "week_totals": week_totals,
-                    "chart_data": chart_data
+                    "chart_data": chart_data,
+                    "chart_data_by_estilo": True  # Flag to indicate we have estilo data
                 }
             )
             
@@ -745,7 +996,8 @@ async def ver_ventas_por_semana(request: Request):
                 {
                     "request": request,
                     "week_totals": {},
-                    "chart_data": []
+                    "chart_data": {'labels': [], 'datasets': []},
+                    "chart_data_by_estilo": False
                 }
             )
             
@@ -759,6 +1011,7 @@ async def ver_ventas_por_semana(request: Request):
                 "error_message": f"Error loading weekly sales: {str(e)}"
             }
         )
+
 
 # Add this new endpoint to your FastAPI app
 # Make sure this route is properly defined in your main FastAPI app
@@ -957,6 +1210,832 @@ async def add_model(
                 "error_message": f"Error adding model: {str(e)}"
             }
         )
+
+
+@app.get("/verinventariodaily", response_class=HTMLResponse)
+async def ver_inventario_daily(request: Request):
+    """
+    Endpoint to display daily inventory chart with data from inventario_daily table
+    """
+    try:
+        print(f"Fetching daily inventory data for the last 30 days", flush=True)
+        
+        try:
+            # Calculate date range (last 30 days)
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=30)
+            
+            # Format dates for Supabase query
+            start_date_str = start_date.strftime('%Y-%m-%d')
+            end_date_str = end_date.strftime('%Y-%m-%d')
+            
+            print(f"Fetching inventory daily data from {start_date_str} to {end_date_str}", flush=True)
+            
+            # Fetch data from inventario_daily table
+            daily_data = await supabase_request(
+                method="GET",
+                endpoint="/rest/v1/inventario_daily",
+                params={
+                    "select": "*",
+                    "fecha": f"gte.{start_date_str}",
+                    "order": "fecha.asc"
+                }
+            )
+            
+            print(f"Retrieved {len(daily_data)} daily inventory records", flush=True)
+            
+            # Debug: Print first few records to see the actual structure
+            if daily_data:
+                print(f"Sample record: {daily_data[0]}", flush=True)
+            
+            if not daily_data:
+                return templates.TemplateResponse(
+                    "inventario_daily.html",
+                    {
+                        "request": request,
+                        "daily_totals": {},
+                        "chart_data": {'labels': [], 'datasets': []},
+                        "has_chart_data": False
+                    }
+                )
+            
+            # Process data for chart
+            daily_totals = {}
+            all_estilos = set()
+            
+            # Group data by date and collect all estilos
+            for record in daily_data:
+                fecha = record.get('fecha')
+                estilo = record.get('estilo')
+                # Changed from 'cantidad' to 'qty'
+                qty = record.get('qty', 0)
+                
+                # Convert qty to int if it's not None
+                if qty is not None:
+                    try:
+                        qty = int(qty)
+                    except (ValueError, TypeError):
+                        qty = 0
+                else:
+                    qty = 0
+                
+                print(f"Processing record: fecha={fecha}, estilo={estilo}, qty={qty}", flush=True)
+                
+                if fecha not in daily_totals:
+                    daily_totals[fecha] = {
+                        'total_quantity': 0,
+                        'estilos': {}
+                    }
+                
+                daily_totals[fecha]['estilos'][estilo] = qty
+                daily_totals[fecha]['total_quantity'] += qty
+                all_estilos.add(estilo)
+            
+            # Prepare chart data
+            sorted_dates = sorted(daily_totals.keys())
+            chart_labels = [datetime.strptime(date, '%Y-%m-%d').strftime('%d/%m') for date in sorted_dates]
+            
+            # Create datasets for each estilo
+            datasets = []
+            colors = [
+                {'bg': 'rgba(255, 99, 132, 0.7)', 'border': 'rgba(255, 99, 132, 1)'},
+                {'bg': 'rgba(54, 162, 235, 0.7)', 'border': 'rgba(54, 162, 235, 1)'},
+                {'bg': 'rgba(255, 206, 86, 0.7)', 'border': 'rgba(255, 206, 86, 1)'},
+                {'bg': 'rgba(75, 192, 192, 0.7)', 'border': 'rgba(75, 192, 192, 1)'},
+                {'bg': 'rgba(153, 102, 255, 0.7)', 'border': 'rgba(153, 102, 255, 1)'},
+                {'bg': 'rgba(255, 159, 64, 0.7)', 'border': 'rgba(255, 159, 64, 1)'},
+                {'bg': 'rgba(199, 199, 199, 0.7)', 'border': 'rgba(199, 199, 199, 1)'},
+                {'bg': 'rgba(83, 102, 255, 0.7)', 'border': 'rgba(83, 102, 255, 1)'}
+            ]
+            
+            for i, estilo in enumerate(sorted(all_estilos)):
+                if estilo:  # Skip empty estilos
+                    color = colors[i % len(colors)]
+                    data = []
+                    
+                    for fecha in sorted_dates:
+                        qty = daily_totals[fecha]['estilos'].get(estilo, 0)
+                        data.append(qty)
+                    
+                    datasets.append({
+                        'label': estilo,
+                        'data': data,
+                        'backgroundColor': color['bg'],
+                        'borderColor': color['border'],
+                        'borderWidth': 2,
+                        'fill': False,
+                        'tension': 0.1
+                    })
+            
+            chart_data = {
+                'labels': chart_labels,
+                'datasets': datasets
+            }
+            
+            print(f"Processed data for {len(sorted_dates)} dates and {len(all_estilos)} estilos", flush=True)
+            print(f"Chart data has {len(datasets)} datasets", flush=True)
+            
+            return templates.TemplateResponse(
+                "inventario_daily.html",
+                {
+                    "request": request,
+                    "daily_totals": daily_totals,
+                    "chart_data": chart_data,
+                    "has_chart_data": True
+                }
+            )
+            
+        except Exception as fetch_error:
+            print(f"Error fetching inventory data: {str(fetch_error)}", flush=True)
+            traceback.print_exc()
+            return templates.TemplateResponse(
+                "inventario_daily.html",
+                {
+                    "request": request,
+                    "daily_totals": {},
+                    "chart_data": {'labels': [], 'datasets': []},
+                    "has_chart_data": False
+                }
+            )
+            
+    except Exception as e:
+        traceback.print_exc()
+        return templates.TemplateResponse(
+            "error.html",
+            {
+                "request": request,
+                "error_message": f"Error loading daily inventory: {str(e)}"
+            }
+        )
+
+
+# Travel Sales Endpoints
+@app.get("/ventasviaje", response_class=HTMLResponse)
+async def get_ventas_viaje_form(request: Request):
+    """Render the travel sales form"""
+    try:
+        print("Fetching styles for ventasviaje form", flush=True)
+        
+        # Get available styles from inventario_estilos where prioridad=1
+        estilos = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/inventario_estilos",
+            params={
+                "select": "id,nombre,precio",
+                "prioridad": "eq.1"
+            }
+        )
+        
+        print(f"Retrieved {len(estilos)} styles for ventasviaje", flush=True)
+        
+        # Convert to JSON string for JavaScript
+        import json
+        estilos_json = json.dumps(estilos)
+        
+        return templates.TemplateResponse("ventasviaje.html", {
+            "request": request,
+            "estilos": estilos,
+            "estilos_json": estilos_json
+        })
+    except Exception as e:
+        print(f"Error in ventasviaje GET: {str(e)}", flush=True)
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error fetching styles: {str(e)}")
+
+@app.post("/ventasviaje")
+async def process_ventas_viaje(
+    request: Request,
+    cliente: str = Form(...),
+    quantities: List[int] = Form(...),
+    style_ids: List[int] = Form(...),
+    prices: List[float] = Form(...)
+):
+    """Process the travel sales form and save to ventas_travel2"""
+    try:
+        print(f"Processing ventasviaje form submission for cliente: {cliente}", flush=True)
+        print(f"Quantities: {quantities}", flush=True)
+        print(f"Style IDs: {style_ids}", flush=True)
+        print(f"Prices: {prices}", flush=True)
+        
+        # Validate that all arrays have the same length
+        if not (len(quantities) == len(style_ids) == len(prices)):
+            raise HTTPException(status_code=400, detail="Mismatched array lengths")
+        
+        # Get the next order_id by finding the maximum existing order_id and adding 1
+        try:
+            max_order_response = await supabase_request(
+                method="GET",
+                endpoint="/rest/v1/ventas_travel2",
+                params={
+                    "select": "order_id",
+                    "order": "order_id.desc",
+                    "limit": "1"
+                }
+            )
+            
+            next_order_id = 1  # Default if no records exist
+            if max_order_response and len(max_order_response) > 0:
+                max_order_id = max_order_response[0].get('order_id', 0)
+                next_order_id = max_order_id + 1
+                
+            print(f"Next order_id will be: {next_order_id}", flush=True)
+        except Exception as order_error:
+            print(f"Error getting next order_id, using 1: {str(order_error)}", flush=True)
+            next_order_id = 1
+        
+        # Prepare data for insertion
+        ventas_data = []
+        total_amount = 0
+        
+        for i in range(len(quantities)):
+            if quantities[i] > 0:  # Only process items with quantity > 0
+                print(f"Processing item {i}: qty={quantities[i]}, style_id={style_ids[i]}, price={prices[i]}", flush=True)
+                
+                # Get style name from inventario_estilos
+                style_response = await supabase_request(
+                    method="GET",
+                    endpoint="/rest/v1/inventario_estilos",
+                    params={
+                        "select": "nombre",
+                        "id": f"eq.{style_ids[i]}"
+                    }
+                )
+                
+                if not style_response:
+                    raise HTTPException(status_code=404, detail=f"Style with ID {style_ids[i]} not found")
+                
+                style_name = style_response[0]["nombre"]
+                line_total = quantities[i] * int(prices[i])
+                total_amount += line_total
+                
+                ventas_data.append({
+                    "order_id": next_order_id,
+                    "cliente": cliente,
+                    "qty": quantities[i],
+                    "estilo_id": style_ids[i],
+                    "estilo": style_name,
+                    "precio": int(prices[i]),
+                    "subtotal": line_total
+                })
+                
+                print(f"Added item: {style_name}, qty: {quantities[i]}, precio: {int(prices[i])}, subtotal: {line_total}", flush=True)
+        
+        if not ventas_data:
+            raise HTTPException(status_code=400, detail="No items with quantity > 0 found")
+        
+        print(f"Prepared {len(ventas_data)} items for insertion with order_id {next_order_id}, total amount: {total_amount}", flush=True)
+        
+        # Insert data into ventas_travel2 table
+        response = await supabase_request(
+            method="POST",
+            endpoint="/rest/v1/ventas_travel2",
+            json_data=ventas_data
+        )
+        
+        print(f"Supabase insert response: {response}", flush=True)
+        
+        if response:
+            print(f"Successfully recorded {len(ventas_data)} sales items for order {next_order_id}", flush=True)
+            
+            return {
+                "success": True,
+                "message": f"Successfully recorded {len(ventas_data)} sales items",
+                "total_amount": total_amount,
+                "items_recorded": len(ventas_data),
+                "order_id": next_order_id,
+                "cliente": cliente,
+                "ventas_data": ventas_data  # Include for sharing
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to insert data")
+            
+    except Exception as e:
+        print(f"Error in ventasviaje POST: {str(e)}", flush=True)
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error processing sales: {str(e)}")
+
+# Alternative AJAX endpoint for ventasviaje
+@app.post("/ventasviaje/ajax")
+async def process_ventas_viaje_ajax(request: Request):
+    """Process travel sales via AJAX"""
+    try:
+        # Get JSON data from request
+        data = await request.json()
+        sales_data = data.get('sales_data', [])
+        
+        print(f"Processing AJAX ventasviaje with {len(sales_data)} items", flush=True)
+        
+        ventas_data = []
+        total_amount = 0
+        
+        for item in sales_data:
+            if item.get("qty", 0) > 0:
+                # Get style info from inventario_estilos
+                style_response = await supabase_request(
+                    method="GET",
+                    endpoint="/rest/v1/inventario_estilos",
+                    params={
+                        "select": "nombre,precio",
+                        "id": f"eq.{item['estilo_id']}",
+                        "prioridad": "eq.1"
+                    }
+                )
+                
+                if not style_response:
+                    continue
+                
+                style_info = style_response[0]
+                line_total = item["qty"] * style_info["precio"]
+                total_amount += line_total
+                
+                ventas_data.append({
+                    "qty": item["qty"],
+                    "estilo_id": item["estilo_id"],
+                    "estilo": style_info["nombre"],
+                    "precio": int(style_info["precio"])
+                })
+        
+        if ventas_data:
+            response = await supabase_request(
+                method="POST",
+                endpoint="/rest/v1/ventas_travel2",
+                json_data=ventas_data
+            )
+            
+            print(f"AJAX: Successfully recorded {len(ventas_data)} items", flush=True)
+            return {
+                "success": True,
+                "message": "Sales recorded successfully",
+                "total_amount": total_amount,
+                "items_recorded": len(ventas_data)
+            }
+        else:
+            return {"success": False, "message": "No valid items to record"}
+            
+    except Exception as e:
+        print(f"Error in AJAX ventasviaje: {str(e)}", flush=True)
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "message": f"Error: {str(e)}"}
+
+
+
+# View Travel Sales Endpoint - Clean Template Approach
+@app.get("/verventasviaje", response_class=HTMLResponse)
+async def ver_ventas_viaje(request: Request):
+    """View all travel sales with sharing options"""
+    try:
+        print("Fetching all travel sales from ventas_travel2", flush=True)
+        
+        # Get all sales from ventas_travel2 ordered by order_id descending
+        ventas = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/ventas_travel2",
+            params={
+                "select": "*",
+                "order": "order_id.desc,created_at.desc"
+            }
+        )
+        
+        if not isinstance(ventas, list):
+            ventas = []
+        
+        print(f"Retrieved {len(ventas)} travel sales records", flush=True)
+        
+        # Group by order_id - simple approach
+        orders = {}
+        for venta in ventas:
+            order_id = venta.get('order_id')
+            if order_id not in orders:
+                orders[order_id] = {
+                    'order_id': order_id,
+                    'cliente': venta.get('cliente', ''),
+                    'created_at': venta.get('created_at', ''),
+                    'productos': [],  # Use 'productos' instead of 'items'
+                    'total': 0
+                }
+            
+            # Handle null values safely
+            qty = venta.get('qty') or 0
+            precio = venta.get('precio') or 0
+            subtotal = venta.get('subtotal')
+            if subtotal is None:
+                subtotal = qty * precio
+            
+            orders[order_id]['productos'].append({
+                'qty': qty,
+                'estilo': venta.get('estilo', ''),
+                'precio': precio,
+                'subtotal': subtotal
+            })
+            
+            orders[order_id]['total'] += subtotal
+        
+        # Convert to list and sort
+        orders_list = list(orders.values())
+        orders_list.sort(key=lambda x: x['order_id'], reverse=True)
+        
+        print(f"Grouped into {len(orders_list)} orders", flush=True)
+        
+        return templates.TemplateResponse("ver_ventas_viaje.html", {
+            "request": request,
+            "orders": orders_list
+        })
+        
+    except Exception as e:
+        print(f"Error loading travel sales: {str(e)}", flush=True)
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error loading travel sales: {str(e)}")
+
+# Share specific order via WhatsApp
+@app.get("/verventasviaje/whatsapp/{order_id}")
+async def share_order_whatsapp(order_id: int):
+    """Generate WhatsApp link for specific order"""
+    try:
+        print(f"Generating WhatsApp link for order {order_id}", flush=True)
+        
+        # Get order details
+        ventas = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/ventas_travel2",
+            params={
+                "select": "*",
+                "order_id": f"eq.{order_id}",
+                "order": "created_at.asc"
+            }
+        )
+        
+        if not ventas:
+            raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
+        
+        # Build WhatsApp message
+        first_item = ventas[0]
+        cliente = first_item.get('cliente', 'Cliente')
+        created_at = first_item.get('created_at', '')
+        
+        # Parse date
+        try:
+            from datetime import datetime
+            if created_at:
+                date_obj = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                formatted_date = date_obj.strftime('%d/%m/%Y %H:%M')
+            else:
+                formatted_date = 'N/A'
+        except:
+            formatted_date = 'N/A'
+        
+        message = f"🧾 *RECIBO DE VENTA*\n\n"
+        message += f"📋 Orden: #{order_id}\n"
+        message += f"👤 Cliente: {cliente}\n"
+        message += f"📅 Fecha: {formatted_date}\n\n"
+        message += f"📦 *PRODUCTOS:*\n"
+        
+        total = 0
+        for item in ventas:
+            qty = item.get('qty') or 0
+            estilo = item.get('estilo', '')
+            precio = item.get('precio') or 0
+            subtotal = item.get('subtotal')
+            
+            # Calculate subtotal if missing
+            if subtotal is None:
+                subtotal = qty * precio
+            
+            total += subtotal
+            
+            message += f"• {qty}x {estilo} - ${precio} = ${subtotal}\n"
+        
+        message += f"\n💰 *TOTAL: ${total}*\n\n"
+        message += f"Gracias por su compra! 🙏"
+        
+        # Encode for WhatsApp URL
+        import urllib.parse
+        encoded_message = urllib.parse.quote(message)
+        whatsapp_url = f"https://wa.me/?text={encoded_message}"
+        
+        print(f"Generated WhatsApp URL for order {order_id}", flush=True)
+        
+        return {
+            "success": True,
+            "whatsapp_url": whatsapp_url,
+            "message": message,
+            "order_id": order_id,
+            "cliente": cliente,
+            "total": total
+        }
+        
+    except Exception as e:
+        print(f"Error generating WhatsApp link: {str(e)}", flush=True)
+        raise HTTPException(status_code=500, detail=f"Error generating WhatsApp link: {str(e)}")
+
+# Generate PDF for specific order
+@app.get("/verventasviaje/pdf/{order_id}")
+async def generate_order_pdf(order_id: int):
+    """Generate PDF for specific order"""
+    try:
+        print(f"Generating PDF for order {order_id}", flush=True)
+        
+        # Get order details
+        ventas = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/ventas_travel2",
+            params={
+                "select": "*",
+                "order_id": f"eq.{order_id}",
+                "order": "created_at.asc"
+            }
+        )
+        
+        if not ventas:
+            raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
+        
+        # Try to generate PDF
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.pdfgen import canvas
+            from reportlab.lib.units import inch
+            import io
+            import base64
+            from datetime import datetime
+            
+            # Create PDF in memory
+            buffer = io.BytesIO()
+            p = canvas.Canvas(buffer, pagesize=A4)
+            width, height = A4
+            
+            # Get order info
+            first_item = ventas[0]
+            cliente = first_item.get('cliente', 'Cliente')
+            created_at = first_item.get('created_at', '')
+            
+            # Parse date
+            try:
+                if created_at:
+                    date_obj = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                    formatted_date = date_obj.strftime('%d/%m/%Y %H:%M')
+                else:
+                    formatted_date = datetime.now().strftime('%d/%m/%Y %H:%M')
+            except:
+                formatted_date = datetime.now().strftime('%d/%m/%Y %H:%M')
+            
+            # Header
+            p.setFont("Helvetica-Bold", 18)
+            p.drawString(50, height - 50, "RECIBO DE VENTA")
+            
+            # Order info
+            p.setFont("Helvetica", 12)
+            p.drawString(50, height - 80, f"Orden: #{order_id}")
+            p.drawString(50, height - 100, f"Cliente: {cliente}")
+            p.drawString(50, height - 120, f"Fecha: {formatted_date}")
+            
+            # Line separator
+            p.line(50, height - 140, width - 50, height - 140)
+            
+            # Table header
+            y_position = height - 170
+            p.setFont("Helvetica-Bold", 11)
+            p.drawString(50, y_position, "Cant.")
+            p.drawString(120, y_position, "Producto")
+            p.drawString(350, y_position, "Precio")
+            p.drawString(420, y_position, "Subtotal")
+            
+            # Table content
+            p.setFont("Helvetica", 10)
+            y_position -= 25
+            total = 0
+            
+            for item in ventas:
+                qty = item.get('qty') or 0
+                estilo = item.get('estilo', '')[:35]  # Truncate long names
+                precio = item.get('precio') or 0
+                subtotal = item.get('subtotal')
+                
+                # Calculate subtotal if missing
+                if subtotal is None:
+                    subtotal = qty * precio
+                
+                total += subtotal
+                
+                p.drawString(50, y_position, str(qty))
+                p.drawString(120, y_position, estilo)
+                p.drawString(350, y_position, f"${precio}")
+                p.drawString(420, y_position, f"${subtotal}")
+                y_position -= 20
+            
+            # Total line
+            y_position -= 10
+            p.line(350, y_position, width - 50, y_position)
+            y_position -= 20
+            p.setFont("Helvetica-Bold", 14)
+            p.drawString(350, y_position, f"TOTAL: ${total}")
+            
+            # Footer
+            y_position -= 50
+            p.setFont("Helvetica-Oblique", 10)
+            p.drawString(50, y_position, "Gracias por su compra!")
+            
+            p.save()
+            
+            # Get PDF data as base64
+            buffer.seek(0)
+            pdf_data = base64.b64encode(buffer.read()).decode()
+            buffer.close()
+            
+            print(f"PDF generated successfully for order {order_id}", flush=True)
+            
+            return {
+                "success": True,
+                "pdf_data": pdf_data,
+                "filename": f"recibo-orden-{order_id}.pdf",
+                "order_id": order_id,
+                "cliente": cliente,
+                "total": total
+            }
+            
+        except ImportError:
+            print("ReportLab not installed, cannot generate PDF", flush=True)
+            return {
+                "success": False,
+                "error": "PDF generation not available (ReportLab not installed)",
+                "order_id": order_id
+            }
+        except Exception as pdf_error:
+            print(f"Error generating PDF: {str(pdf_error)}", flush=True)
+            return {
+                "success": False,
+                "error": f"Error generating PDF: {str(pdf_error)}",
+                "order_id": order_id
+            }
+            
+    except Exception as e:
+        print(f"Error in PDF generation endpoint: {str(e)}", flush=True)
+        raise HTTPException(status_code=500, detail=f"Error generating PDF: {str(e)}")
+    
+
+# Entrada Mercancia Endpoints
+@app.get("/entradamercancia", response_class=HTMLResponse)
+async def get_entrada_mercancia_form(request: Request):
+    """Render the merchandise entry form"""
+    try:
+        print("Loading entrada mercancia form", flush=True)
+        
+        return templates.TemplateResponse("entrada_mercancia.html", {
+            "request": request
+        })
+        
+    except Exception as e:
+        print(f"Error loading entrada mercancia form: {str(e)}", flush=True)
+        raise HTTPException(status_code=500, detail=f"Error loading form: {str(e)}")
+
+@app.post("/entradamercancia")
+async def process_entrada_mercancia(
+    request: Request,
+    qty: int = Form(...),
+    barcode: str = Form(...)
+):
+    """Process merchandise entry form and save to entrada_mercancia"""
+    try:
+        print(f"Processing entrada mercancia: qty={qty}, barcode={barcode}", flush=True)
+        
+        # Validate inputs
+        if qty <= 0:
+            raise HTTPException(status_code=400, detail="La cantidad debe ser mayor a 0")
+        
+        if not barcode or barcode.strip() == "":
+            raise HTTPException(status_code=400, detail="El código de barras es requerido")
+        
+        barcode = barcode.strip()
+        
+        # Convert barcode to integer if possible
+        try:
+            barcode_int = int(barcode)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="El código de barras debe ser numérico")
+        
+        # Try to get product info from inventario1 table using barcode
+        product_info = None
+        try:
+            product_response = await supabase_request(
+                method="GET",
+                endpoint="/rest/v1/inventario1",
+                params={
+                    "select": "name,estilo_id,marca",
+                    "barcode": f"eq.{barcode}",
+                    "limit": "1"
+                }
+            )
+            
+            if product_response and len(product_response) > 0:
+                product_info = product_response[0]
+                print(f"Found product info: {product_info}", flush=True)
+            else:
+                print(f"No product found with barcode {barcode}", flush=True)
+                
+        except Exception as product_error:
+            print(f"Error fetching product info: {str(product_error)}", flush=True)
+            # Continue without product info
+        
+        # Prepare data for entrada_mercancia table
+        entrada_data = {
+            "qty": qty,
+            "barcode": barcode_int,  # Use integer barcode
+        }
+        
+        # Add product info if found
+        if product_info:
+            if product_info.get("name"):
+                entrada_data["estilo"] = product_info.get("name", "")  # Use 'estilo' field for name
+            if product_info.get("estilo_id"):
+                entrada_data["estilo_id"] = product_info.get("estilo_id")
+        
+        print(f"Inserting entrada data: {entrada_data}", flush=True)
+        
+        # Insert into entrada_mercancia table with error handling
+        try:
+            response = await supabase_request(
+                method="POST",
+                endpoint="/rest/v1/entrada_mercancia",
+                json_data=entrada_data
+            )
+            
+            print(f"Entrada mercancia insert response: {response}", flush=True)
+            
+        except Exception as insert_error:
+            print(f"Insert error details: {str(insert_error)}", flush=True)
+            
+            # Try with minimal data if full insert fails
+            try:
+                minimal_data = {
+                    "qty": qty,
+                    "barcode": barcode_int
+                }
+                print(f"Trying minimal insert: {minimal_data}", flush=True)
+                
+                response = await supabase_request(
+                    method="POST",
+                    endpoint="/rest/v1/entrada_mercancia",
+                    json_data=minimal_data
+                )
+                
+                print(f"Minimal insert successful: {response}", flush=True)
+                
+            except Exception as minimal_error:
+                print(f"Minimal insert also failed: {str(minimal_error)}", flush=True)
+                raise HTTPException(status_code=500, detail=f"Database error: {str(minimal_error)}")
+        
+        if response:
+            return {
+                "success": True,
+                "message": f"Entrada registrada exitosamente",
+                "qty": qty,
+                "barcode": barcode,  # Return original barcode string for display
+                "product_name": product_info.get("name", "Producto no identificado") if product_info else "Producto no identificado"
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to insert entrada")
+            
+    except Exception as e:
+        print(f"Error in entrada mercancia: {str(e)}", flush=True)
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error processing entrada: {str(e)}")
+
+# Get recent entries endpoint
+@app.get("/entradamercancia/recientes")
+async def get_recent_entries():
+    """Get recent merchandise entries"""
+    try:
+        print("Fetching recent entrada mercancia records", flush=True)
+        
+        # Get last 20 entries
+        entries = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/entrada_mercancia",
+            params={
+                "select": "*",
+                "order": "created_at.desc",
+                "limit": "20"
+            }
+        )
+        
+        print(f"Retrieved {len(entries)} recent entries", flush=True)
+        
+        return {
+            "success": True,
+            "entries": entries
+        }
+        
+    except Exception as e:
+        print(f"Error fetching recent entries: {str(e)}", flush=True)
+        return {
+            "success": False,
+            "error": str(e),
+            "entries": []
+        }
+
 
 if __name__ == "__main__":
     import uvicorn

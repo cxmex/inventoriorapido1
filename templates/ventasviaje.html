@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ventas de Viaje</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        // Initialize with one item
+        document.addEventListener('DOMContentLoaded', function() {
+            addItem();
+        });
+        .container {
+            padding: 20px 0;
+        }
+        .card {
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            border: none;
+            backdrop-filter: blur(10px);
+            background: rgba(255, 255, 255, 0.9);
+        }
+        .card-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 15px 15px 0 0 !important;
+            padding: 20px;
+        }
+        .form-control, .form-select {
+            border-radius: 10px;
+            border: 2px solid #e9ecef;
+            transition: all 0.3s ease;
+        }
+        .form-control:focus, .form-select:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            border-radius: 10px;
+            padding: 12px 30px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        .btn-success {
+            background: linear-gradient(135deg, #56ab2f 0%, #a8e6cf 100%);
+            border: none;
+            border-radius: 10px;
+            padding: 8px 20px;
+        }
+        .btn-danger {
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%);
+            border: none;
+            border-radius: 10px;
+            padding: 8px 20px;
+        }
+        .item-row {
+            background: rgba(255, 255, 255, 0.7);
+            border-radius: 10px;
+            margin-bottom: 15px;
+            padding: 15px;
+            border: 2px solid transparent;
+            transition: all 0.3s ease;
+        }
+        .item-row:hover {
+            border-color: #667eea;
+            background: rgba(255, 255, 255, 0.9);
+        }
+        .total-display {
+            background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+            color: white;
+            border-radius: 10px;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        .loading {
+            display: none;
+        }
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+            .item-row {
+                padding: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-lg-10">
+                <div class="card">
+                    <div class="card-header text-center">
+                        <h2 class="mb-0">
+                            <i class="fas fa-shopping-cart me-2"></i>
+                            Registro de Ventas de Viaje
+                        </h2>
+                    </div>
+                    <div class="card-body">
+                        <form id="ventasForm" method="POST" action="/ventasviaje">
+                            <!-- Cliente Input Section -->
+                            <div class="row mb-4">
+                                <div class="col-12">
+                                    <div class="card bg-light">
+                                        <div class="card-body">
+                                            <label for="clienteInput" class="form-label fw-bold">
+                                                <i class="fas fa-user me-2"></i>Cliente
+                                            </label>
+                                            <input type="text" 
+                                                   class="form-control form-control-lg" 
+                                                   id="clienteInput"
+                                                   name="cliente" 
+                                                   placeholder="Ingrese el nombre del cliente..."
+                                                   required>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div id="itemsContainer">
+                                <!-- Items will be dynamically added here -->
+                            </div>
+                            
+                            <div class="row mb-4">
+                                <div class="col-md-6">
+                                    <button type="button" class="btn btn-success w-100" onclick="addItem()">
+                                        <i class="fas fa-plus me-2"></i>Agregar Item
+                                    </button>
+                                </div>
+                                <div class="col-md-6">
+                                    <button type="button" class="btn btn-danger w-100" onclick="clearAll()">
+                                        <i class="fas fa-trash me-2"></i>Limpiar Todo
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="total-display text-center">
+                                <h4 class="mb-0">
+                                    <i class="fas fa-calculator me-2"></i>
+                                    Total: $<span id="totalAmount">0</span>
+                                </h4>
+                            </div>
+
+                            <div class="text-center">
+                                <button type="submit" class="btn btn-primary btn-lg">
+                                    <i class="fas fa-save me-2"></i>
+                                    <span class="btn-text">Guardar Ventas</span>
+                                    <span class="loading">
+                                        <i class="fas fa-spinner fa-spin me-2"></i>Guardando...
+                                    </span>
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Success/Error Messages -->
+    <div class="position-fixed top-0 end-0 p-3" style="z-index: 1050">
+        <div id="alertContainer"></div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let itemCounter = 0;
+        let estilos = {{ estilos_json | safe }};
+
+        function addItem() {
+            itemCounter++;
+            const itemsContainer = document.getElementById('itemsContainer');
+            
+            const itemRow = document.createElement('div');
+            itemRow.classList.add('item-row');
+            itemRow.id = `item-${itemCounter}`;
+            
+            itemRow.innerHTML = `
+                <div class="row align-items-center">
+                    <div class="col-md-3 mb-2">
+                        <label class="form-label">Cantidad</label>
+                        <input type="number" 
+                               class="form-control qty-input" 
+                               name="quantities" 
+                               min="0" 
+                               value="0" 
+                               onchange="calculateTotal()" 
+                               placeholder="0">
+                    </div>
+                    <div class="col-md-4 mb-2">
+                        <label class="form-label">Estilo</label>
+                        <select class="form-select style-select" 
+                                name="style_ids" 
+                                onchange="updatePrice(this); calculateTotal()" 
+                                required>
+                            <option value="">Seleccionar estilo...</option>
+                            ${estilos.map(estilo => 
+                                `<option value="${estilo.id}" data-price="${estilo.precio}">
+                                    ${estilo.nombre}
+                                </option>`
+                            ).join('')}
+                        </select>
+                    </div>
+                    <div class="col-md-3 mb-2">
+                        <label class="form-label">Precio</label>
+                        <input type="number" 
+                               class="form-control price-input" 
+                               name="prices" 
+                               step="1" 
+                               onchange="calculateTotal()"
+                               placeholder="0">
+                    </div>
+                    <div class="col-md-2 mb-2">
+                        <label class="form-label d-block">&nbsp;</label>
+                        <button type="button" 
+                                class="btn btn-danger w-100" 
+                                onclick="removeItem(${itemCounter})">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-12">
+                        <small class="text-muted">
+                            Subtotal: $<span class="subtotal">0.00</span>
+                        </small>
+                    </div>
+                </div>
+            `;
+            
+            itemsContainer.appendChild(itemRow);
+        }
+
+        function removeItem(itemId) {
+            const item = document.getElementById(`item-${itemId}`);
+            if (item) {
+                item.remove();
+                calculateTotal();
+            }
+        }
+
+        function updatePrice(selectElement) {
+            const selectedOption = selectElement.options[selectElement.selectedIndex];
+            const priceInput = selectElement.closest('.item-row').querySelector('.price-input');
+            
+            if (selectedOption.value) {
+                const price = selectedOption.getAttribute('data-price');
+                priceInput.value = parseFloat(price).toFixed(0); // Remove decimals for integer display
+            } else {
+                priceInput.value = '';
+            }
+            calculateTotal(); // Recalculate when price changes
+        }
+
+        function calculateTotal() {
+            let total = 0;
+            const itemRows = document.querySelectorAll('.item-row');
+            
+            itemRows.forEach(row => {
+                const qty = parseInt(row.querySelector('.qty-input').value) || 0;
+                const price = parseInt(row.querySelector('.price-input').value) || 0;
+                const subtotal = qty * price;
+                
+                row.querySelector('.subtotal').textContent = subtotal.toFixed(0); // Show as integer
+                total += subtotal;
+            });
+            
+            document.getElementById('totalAmount').textContent = total.toFixed(0); // Show as integer
+        }
+
+        function clearAll() {
+            if (confirm('¿Está seguro de que desea limpiar todos los items?')) {
+                document.getElementById('itemsContainer').innerHTML = '';
+                calculateTotal();
+                itemCounter = 0;
+            }
+        }
+
+        function showAlert(message, type = 'success') {
+            const alertContainer = document.getElementById('alertContainer');
+            const alert = document.createElement('div');
+            alert.className = `alert alert-${type} alert-dismissible fade show`;
+            alert.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            alertContainer.appendChild(alert);
+            
+            setTimeout(() => {
+                alert.remove();
+            }, 5000);
+        }
+
+        // Form submission handling
+        document.getElementById('ventasForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const submitBtn = this.querySelector('button[type="submit"]');
+            const btnText = submitBtn.querySelector('.btn-text');
+            const loading = submitBtn.querySelector('.loading');
+            
+            // Show loading state
+            btnText.style.display = 'none';
+            loading.style.display = 'inline';
+            submitBtn.disabled = true;
+            
+            fetch('/ventasviaje', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showAlert(`¡Éxito! Se registraron ${data.items_recorded} items por un total de ${data.total_amount.toFixed(0)}`, 'success');
+                    clearAll();
+                    document.getElementById('clienteInput').value = ''; // Clear cliente input
+                } else {
+                    showAlert(`Error: ${data.message}`, 'danger');
+                }
+            })
+            .catch(error => {
+                showAlert(`Error de conexión: ${error.message}`, 'danger');
+            })
+            .finally(() => {
+                // Reset button state
+                btnText.style.display = 'inline';
+                loading.style.display = 'none';
+                submitBtn.disabled = false;
+            });
+        });
+
+        // Simple direct WhatsApp function
+        function openWhatsAppDirect(orderId, cliente, total, ventasData) {
+            console.log('Opening WhatsApp directly with:', {orderId, cliente, total, ventasData});
+            
+            try {
+                // Create WhatsApp message
+                let message = `🧾 *RECIBO DE VENTA*\n\n`;
+                message += `📋 Orden: #${orderId}\n`;
+                message += `👤 Cliente: ${cliente}\n`;
+                message += `📅 Fecha: ${new Date().toLocaleDateString('es-ES')}\n\n`;
+                message += `📦 *PRODUCTOS:*\n`;
+                
+                if (ventasData && Array.isArray(ventasData)) {
+                    ventasData.forEach(item => {
+                        message += `• ${item.qty}x ${item.estilo} - ${item.precio} = ${item.subtotal}\n`;
+                    });
+                } else {
+                    message += `• Detalles en el sistema\n`;
+                }
+                
+                message += `\n💰 *TOTAL: ${total}*\n\n`;
+                message += `Gracias por su compra! 🙏`;
+                
+                // Encode message for URL
+                const encodedMessage = encodeURIComponent(message);
+                const whatsappUrl = `https://wa.me/?text=${encodedMessage}`;
+                
+                console.log('WhatsApp URL:', whatsappUrl);
+                
+                // Open WhatsApp
+                window.open(whatsappUrl, '_blank');
+                
+                showAlert('Abriendo WhatsApp...', 'info');
+                
+            } catch (error) {
+                console.error('Error opening WhatsApp:', error);
+                showAlert('Error al abrir WhatsApp', 'danger');
+            }
+        }
+
+        function showSharingOptions(data) {
+            // Create sharing modal
+            const modalHtml = `
+                <div class="modal fade" id="sharingModal" tabindex="-1">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title">
+                                    <i class="fas fa-share-alt me-2"></i>Compartir Recibo
+                                </h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                            </div>
+                            <div class="modal-body text-center">
+                                <div class="mb-3">
+                                    <h6>Orden #${data.order_id} - ${data.cliente}</h6>
+                                    <p class="text-muted">Total: ${data.total_amount}</p>
+                                </div>
+                                
+                                <div class="d-grid gap-2">
+                                    ${data.pdf_data ? `
+                                    <button type="button" class="btn btn-primary" onclick="downloadPDF('${data.pdf_data}', 'recibo-${data.order_id}.pdf')">
+                                        <i class="fas fa-download me-2"></i>Descargar PDF
+                                    </button>
+                                    ` : ''}
+                                    
+                                    <button type="button" class="btn btn-success" onclick="shareWhatsApp(${JSON.stringify(data).replace(/"/g, '&quot;')})">
+                                        <i class="fab fa-whatsapp me-2"></i>Enviar por WhatsApp
+                                    </button>
+                                    
+                                    <button type="button" class="btn btn-info" onclick="copyToClipboard(${JSON.stringify(data).replace(/"/g, '&quot;')})">
+                                        <i class="fas fa-copy me-2"></i>Copiar Texto
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Remove existing modal if any
+            const existingModal = document.getElementById('sharingModal');
+            if (existingModal) {
+                existingModal.remove();
+            }
+            
+            // Add modal to body
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+            
+            // Show modal
+            const modal = new bootstrap.Modal(document.getElementById('sharingModal'));
+            modal.show();
+        }
+
+        function downloadPDF(pdfData, filename) {
+            try {
+                const byteCharacters = atob(pdfData);
+                const byteNumbers = new Array(byteCharacters.length);
+                for (let i = 0; i < byteCharacters.length; i++) {
+                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                const blob = new Blob([byteArray], { type: 'application/pdf' });
+                
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+                
+                showAlert('PDF descargado exitosamente', 'success');
+            } catch (error) {
+                showAlert('Error al descargar PDF', 'danger');
+            }
+        }
+
+        function shareWhatsApp(data) {
+            // Create WhatsApp message
+            let message = `🧾 *RECIBO DE VENTA*\n\n`;
+            message += `📋 Orden: #${data.order_id}\n`;
+            message += `👤 Cliente: ${data.cliente}\n`;
+            message += `📅 Fecha: ${new Date().toLocaleDateString('es-ES')}\n\n`;
+            message += `📦 *PRODUCTOS:*\n`;
+            
+            data.ventas_data.forEach(item => {
+                message += `• ${item.qty}x ${item.estilo} - ${item.precio} = ${item.subtotal}\n`;
+            });
+            
+            message += `\n💰 *TOTAL: ${data.total_amount}*\n\n`;
+            message += `Gracias por su compra! 🙏`;
+            
+            // Open WhatsApp with the message
+            const encodedMessage = encodeURIComponent(message);
+            const whatsappUrl = `https://wa.me/?text=${encodedMessage}`;
+            
+            window.open(whatsappUrl, '_blank');
+        }
+
+        function copyToClipboard(data) {
+            // Create text version
+            let text = `RECIBO DE VENTA\n\n`;
+            text += `Orden: #${data.order_id}\n`;
+            text += `Cliente: ${data.cliente}\n`;
+            text += `Fecha: ${new Date().toLocaleDateString('es-ES')}\n\n`;
+            text += `PRODUCTOS:\n`;
+            
+            data.ventas_data.forEach(item => {
+                text += `${item.qty}x ${item.estilo} - ${item.precio} = ${item.subtotal}\n`;
+            });
+            
+            text += `\nTOTAL: ${data.total_amount}`;
+            
+            // Copy to clipboard
+            navigator.clipboard.writeText(text).then(() => {
+                showAlert('Texto copiado al portapapeles', 'success');
+            }).catch(() => {
+                showAlert('Error al copiar texto', 'danger');
+            });
+        }
+    </script>
+</body>
+</html>

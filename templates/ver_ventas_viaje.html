@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ver Ventas de Viaje</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .card {
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            border: none;
+            background: white;
+            margin: 20px;
+        }
+        .card-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 15px 15px 0 0;
+            padding: 20px;
+        }
+        .order-card {
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            margin: 15px 0;
+            background: white;
+        }
+        .order-header {
+            background: #f8f9fa;
+            padding: 15px;
+            border-bottom: 1px solid #dee2e6;
+            font-weight: bold;
+        }
+        .btn-whatsapp {
+            background: #25d366;
+            border: none;
+            color: white;
+            margin: 5px;
+            border-radius: 5px;
+            padding: 8px 15px;
+        }
+        .btn-pdf {
+            background: #dc3545;
+            border: none;
+            color: white;
+            margin: 5px;
+            border-radius: 5px;
+            padding: 8px 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <div class="card-header text-center">
+                <h2><i class="fas fa-receipt me-2"></i>Ventas de Viaje</h2>
+            </div>
+            <div class="card-body">
+                {% if orders %}
+                    {% for order in orders %}
+                    <div class="order-card">
+                        <div class="order-header">
+                            <div class="row">
+                                <div class="col-md-8">
+                                    <h5>Orden #{{ order.order_id }} - {{ order.cliente }}</h5>
+                                    <small class="text-muted">{{ order.created_at[:16] if order.created_at else '' }}</small>
+                                </div>
+                                <div class="col-md-4 text-end">
+                                    <button class="btn btn-whatsapp btn-sm" onclick="shareWhatsApp({{ order.order_id }})">
+                                        <i class="fab fa-whatsapp"></i> WhatsApp
+                                    </button>
+                                    <button class="btn btn-pdf btn-sm" onclick="generatePDF({{ order.order_id }})">
+                                        <i class="fas fa-file-pdf"></i> PDF
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="p-3">
+                            {% for producto in order.productos %}
+                            <div class="row mb-2">
+                                <div class="col-8">
+                                    <strong>{{ producto.qty }}x</strong> {{ producto.estilo }}
+                                </div>
+                                <div class="col-4 text-end">
+                                    ${{ producto.precio }} × {{ producto.qty }} = <strong>${{ producto.subtotal }}</strong>
+                                </div>
+                            </div>
+                            {% endfor %}
+                            <hr>
+                            <div class="row">
+                                <div class="col-8"><strong>TOTAL:</strong></div>
+                                <div class="col-4 text-end"><h5>${{ order.total }}</h5></div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="text-center p-5">
+                        <i class="fas fa-inbox fa-3x mb-3 text-muted"></i>
+                        <h4>No hay ventas registradas</h4>
+                        <a href="/ventasviaje" class="btn btn-primary">Registrar Nueva Venta</a>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+    <script>
+        function shareWhatsApp(orderId) {
+            fetch(`/verventasviaje/whatsapp/${orderId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        window.open(data.whatsapp_url, '_blank');
+                        alert('WhatsApp abierto!');
+                    } else {
+                        alert('Error: ' + (data.error || 'Error desconocido'));
+                    }
+                })
+                .catch(error => alert('Error de conexión'));
+        }
+        
+        function generatePDF(orderId) {
+            fetch(`/verventasviaje/pdf/${orderId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success && data.pdf_data) {
+                        const byteCharacters = atob(data.pdf_data);
+                        const byteNumbers = new Array(byteCharacters.length);
+                        for (let i = 0; i < byteCharacters.length; i++) {
+                            byteNumbers[i] = byteCharacters.charCodeAt(i);
+                        }
+                        const byteArray = new Uint8Array(byteNumbers);
+                        const blob = new Blob([byteArray], { type: 'application/pdf' });
+                        
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `recibo-${orderId}.pdf`;
+                        a.click();
+                        window.URL.revokeObjectURL(url);
+                        alert('PDF descargado!');
+                    } else {
+                        alert('Error al generar PDF: ' + (data.error || 'PDF no disponible'));
+                    }
+                })
+                .catch(error => alert('Error de conexión'));
+        }
+    </script>
+</body>
+</html>

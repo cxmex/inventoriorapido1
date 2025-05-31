@@ -18,10 +18,10 @@
     <!-- Chart -->
     <div class="card shadow-sm mb-4">
         <div class="card-header bg-light">
-            <h5 class="mb-0">Gráfico de Ventas</h5>
+            <h5 class="mb-0">Gráfico de Ventas por Estilo</h5>
         </div>
         <div class="card-body">
-            {% if chart_data and chart_data|length > 0 %}
+            {% if chart_data and chart_data.labels and chart_data.labels|length > 0 %}
                 <div class="chart-container" style="position: relative; height:400px;">
                     <canvas id="salesChart"></canvas>
                 </div>
@@ -29,6 +29,7 @@
                     <div class="btn-group" role="group">
                         <button type="button" class="btn btn-outline-primary active" id="barChartBtn">Barras</button>
                         <button type="button" class="btn btn-outline-primary" id="lineChartBtn">Línea</button>
+                        <button type="button" class="btn btn-outline-secondary" id="stackedBarBtn">Barras Apiladas</button>
                     </div>
                 </div>
             {% else %}
@@ -42,7 +43,7 @@
     <!-- Data Table -->
     <div class="card shadow-sm mb-4">
         <div class="card-header bg-light">
-            <h5 class="mb-0">Tabla de Ventas</h5>
+            <h5 class="mb-0">Tabla de Ventas Totales</h5>
         </div>
         <div class="card-body">
             {% if week_totals and week_totals|length > 0 %}
@@ -124,6 +125,22 @@
                         </div>
                     </div>
                 </div>
+                
+                <!-- Estilo Legend -->
+                {% if chart_data and chart_data.datasets %}
+                <div class="row mt-3">
+                    <div class="col-12">
+                        <h6>Estilos:</h6>
+                        <div class="d-flex flex-wrap gap-2">
+                            {% for dataset in chart_data.datasets %}
+                            <span class="badge" style="background-color: {{ dataset.borderColor }}; color: white;">
+                                {{ dataset.label }}
+                            </span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
             </div>
         </div>
     {% endif %}
@@ -132,50 +149,28 @@
 <!-- Chart.js -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
 <script>
+
 document.addEventListener('DOMContentLoaded', function() {
     // Check if we have chart data
     const chartData = {{ chart_data|tojson }};
-    if (chartData && chartData.length > 0) {
+    
+    if (chartData && chartData.labels && chartData.labels.length > 0) {
+        console.log('Chart data loaded:', chartData); // Debug log
+        
         // Get the chart canvas
         const ctx = document.getElementById('salesChart').getContext('2d');
         
-        // Gradient background for the line chart
-        const gradientFill = ctx.createLinearGradient(0, 0, 0, 400);
-        gradientFill.addColorStop(0, 'rgba(54, 162, 235, 0.8)');
-        gradientFill.addColorStop(1, 'rgba(54, 162, 235, 0.1)');
-        
-        // Define colors for the bars
-        const barColors = [
-            { bg: 'rgba(255, 99, 132, 0.7)', border: 'rgba(255, 99, 132, 1)' },
-            { bg: 'rgba(54, 162, 235, 0.7)', border: 'rgba(54, 162, 235, 1)' },
-            { bg: 'rgba(255, 206, 86, 0.7)', border: 'rgba(255, 206, 86, 1)' },
-            { bg: 'rgba(75, 192, 192, 0.7)', border: 'rgba(75, 192, 192, 1)' },
-            { bg: 'rgba(153, 102, 255, 0.7)', border: 'rgba(153, 102, 255, 1)' },
-            { bg: 'rgba(255, 159, 64, 0.7)', border: 'rgba(255, 159, 64, 1)' }
-        ];
-        
-        // Create arrays for bar chart colors
-        const backgroundColors = [];
-        const borderColors = [];
-        
-        // Assign colors to the bars
-        for (let i = 0; i < chartData.length; i++) {
-            const colorIndex = i % barColors.length;
-            backgroundColors.push(barColors[colorIndex].bg);
-            borderColors.push(barColors[colorIndex].border);
-        }
-        
-        // Chart configuration
+        // Chart configuration with legend disabled
         const chartOptions = {
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
                 legend: {
-                    position: 'top',
+                    display: false  // Hide the legend completely
                 },
                 title: {
                     display: true,
-                    text: 'Ventas Semanales (últimas 6 semanas)',
+                    text: 'Ventas Semanales por Estilo (últimas 15 semanas)',
                     font: {
                         size: 16,
                         weight: 'bold'
@@ -185,9 +180,27 @@ document.addEventListener('DOMContentLoaded', function() {
                     backgroundColor: 'rgba(0, 0, 0, 0.8)',
                     titleFont: { size: 14 },
                     bodyFont: { size: 14 },
+                    filter: function(tooltipItem) {
+                        // Only show tooltip if value is greater than 0
+                        return tooltipItem.raw > 0;
+                    },
                     callbacks: {
                         label: function(context) {
-                            return '$' + context.raw.toFixed(2);
+                            // Show dataset label (style name) and value for positive values
+                            if (context.raw > 0) {
+                                return context.dataset.label + ': $' + context.raw.toFixed(2);
+                            }
+                            return null;
+                        },
+                        afterBody: function(context) {
+                            // Calculate total for this week (only positive values)
+                            let total = 0;
+                            context.forEach(function(tooltipItem) {
+                                if (tooltipItem.raw > 0) {
+                                    total += tooltipItem.raw;
+                                }
+                            });
+                            return total > 0 ? 'Total: $' + total.toFixed(2) : '';
                         }
                     }
                 }
@@ -217,33 +230,26 @@ document.addEventListener('DOMContentLoaded', function() {
                         font: { size: 14, weight: 'bold' }
                     }
                 }
+            },
+            interaction: {
+                mode: 'index',
+                intersect: false
             }
         };
-        
-        // Common chart data
-        const labels = chartData.map(item => item.week);
-        const values = chartData.map(item => item.total);
         
         // Create the bar chart by default
         let salesChart = new Chart(ctx, {
             type: 'bar',
-            data: {
-                labels: labels,
-                datasets: [{
-                    label: 'Ventas Semanales ($)',
-                    data: values,
-                    backgroundColor: backgroundColors,
-                    borderColor: borderColors,
-                    borderWidth: 1
-                }]
-            },
+            data: chartData,
             options: chartOptions
         });
+        
+        console.log('Chart created successfully'); // Debug log
         
         // Function to switch to bar chart
         document.getElementById('barChartBtn').addEventListener('click', function() {
             // Update active button
-            document.getElementById('lineChartBtn').classList.remove('active');
+            document.querySelectorAll('.btn-group .btn').forEach(btn => btn.classList.remove('active'));
             this.classList.add('active');
             
             // Destroy current chart
@@ -252,52 +258,103 @@ document.addEventListener('DOMContentLoaded', function() {
             // Create bar chart
             salesChart = new Chart(ctx, {
                 type: 'bar',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: 'Ventas Semanales ($)',
-                        data: values,
-                        backgroundColor: backgroundColors,
-                        borderColor: borderColors,
-                        borderWidth: 1
-                    }]
-                },
-                options: chartOptions
+                data: chartData,
+                options: {
+                    ...chartOptions,
+                    scales: {
+                        ...chartOptions.scales,
+                        x: {
+                            ...chartOptions.scales.x,
+                            stacked: false
+                        },
+                        y: {
+                            ...chartOptions.scales.y,
+                            stacked: false
+                        }
+                    }
+                }
+            });
+        });
+        
+        // Function to switch to stacked bar chart
+        document.getElementById('stackedBarBtn').addEventListener('click', function() {
+            // Update active button
+            document.querySelectorAll('.btn-group .btn').forEach(btn => btn.classList.remove('active'));
+            this.classList.add('active');
+            
+            // Destroy current chart
+            salesChart.destroy();
+            
+            // Create stacked bar chart
+            salesChart = new Chart(ctx, {
+                type: 'bar',
+                data: chartData,
+                options: {
+                    ...chartOptions,
+                    scales: {
+                        ...chartOptions.scales,
+                        x: {
+                            ...chartOptions.scales.x,
+                            stacked: true
+                        },
+                        y: {
+                            ...chartOptions.scales.y,
+                            stacked: true
+                        }
+                    }
+                }
             });
         });
         
         // Function to switch to line chart
         document.getElementById('lineChartBtn').addEventListener('click', function() {
             // Update active button
-            document.getElementById('barChartBtn').classList.remove('active');
+            document.querySelectorAll('.btn-group .btn').forEach(btn => btn.classList.remove('active'));
             this.classList.add('active');
             
             // Destroy current chart
             salesChart.destroy();
             
+            // Modify data for line chart (add tension and point styles)
+            const lineChartData = {
+                ...chartData,
+                datasets: chartData.datasets.map(dataset => ({
+                    ...dataset,
+                    fill: false,
+                    borderWidth: 2,
+                    pointBackgroundColor: dataset.borderColor,
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2,
+                    pointRadius: 5,
+                    tension: 0.4
+                }))
+            };
+            
             // Create line chart
             salesChart = new Chart(ctx, {
                 type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: 'Ventas Semanales ($)',
-                        data: values,
-                        fill: true,
-                        backgroundColor: gradientFill,
-                        borderColor: 'rgba(54, 162, 235, 1)',
-                        borderWidth: 2,
-                        pointBackgroundColor: 'rgba(54, 162, 235, 1)',
-                        pointBorderColor: '#fff',
-                        pointBorderWidth: 2,
-                        pointRadius: 5,
-                        tension: 0.4  // Smooth curve
-                    }]
-                },
-                options: chartOptions
+                data: lineChartData,
+                options: {
+                    ...chartOptions,
+                    scales: {
+                        ...chartOptions.scales,
+                        x: {
+                            ...chartOptions.scales.x,
+                            stacked: false
+                        },
+                        y: {
+                            ...chartOptions.scales.y,
+                            stacked: false
+                        }
+                    }
+                }
             });
         });
+    } else {
+        console.error('No chart data available or chart data is invalid');
     }
 });
+
+
 </script>
 {% endblock %}

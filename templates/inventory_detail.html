@@ -48,8 +48,22 @@
             background-color: #f5f5f5;
         }
         .negative-value {
-            color: #F44336;
+            color: #F44336 !important;
+            font-weight: bold !important;
+            background-color: #ffebee !important;
+            padding: 4px 8px !important;
+            border-radius: 4px !important;
+        }
+        .zero-value {
+            color: #FF9800;
             font-weight: bold;
+            background-color: #fff3e0;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+        .positive-value {
+            color: #4CAF50;
+            font-weight: 500;
         }
         .terex1-input {
             width: 80px;
@@ -65,6 +79,11 @@
             border-radius: 4px;
             margin-right: 5px;
             font-weight: 500;
+        }
+        .current-value.negative {
+            background-color: #ffebee;
+            color: #F44336;
+            border-color: #F44336;
         }
         .success-alert {
             background-color: #4CAF50;
@@ -134,15 +153,22 @@
                 </thead>
                 <tbody>
                     {% for item in inventory_items %}
+                    {% set stock_value = item.terex1|int if item.terex1 is not none else 0 %}
                     <tr class="inventory-item" 
                         data-name="{{ item.name|lower }}" 
                         data-brand="{{ item.marca|upper if item.marca else '' }}"
-                        data-stock="{{ item.terex1 if item.terex1 is not none else 0 }}">
+                        data-stock="{{ stock_value }}">
                         <td>{{ item.barcode }}</td>
                         <td>{{ item.name }}</td>
                         <td>{{ item.marca }}</td>
-                        <td class="{% if item.terex1 is not none and item.terex1 < 0 %}negative-value{% endif %}">
-                            {{ item.terex1 if item.terex1 is not none else 0 }}
+                        <td>
+                            {% if stock_value < 0 %}
+                                <span class="negative-value">{{ stock_value }}</span>
+                            {% elif stock_value == 0 %}
+                                <span class="zero-value">{{ stock_value }}</span>
+                            {% else %}
+                                <span class="positive-value">{{ stock_value }}</span>
+                            {% endif %}
                         </td>
                         <td>
                             <form method="POST" action="/update-terex1" id="update-form-{{ item.barcode }}">
@@ -153,14 +179,14 @@
                                 <div class="form-group">
                                     <div class="input-group">
                                         <!-- Current value display -->
-                                        <span class="current-value">{{ item.terex1 if item.terex1 is not none else 0 }}</span>
+                                        <span class="current-value {% if stock_value < 0 %}negative{% endif %}">{{ stock_value }}</span>
                                         
                                         <!-- Input for new value -->
                                         <input 
                                             type="number" 
                                             name="new_value" 
                                             class="form-control terex1-input" 
-                                            value="{{ item.terex1 if item.terex1 is not none else 0 }}" 
+                                            value="{{ stock_value }}" 
                                             required
                                         >
                                         
@@ -237,6 +263,16 @@
             document.getElementById('name-filter').addEventListener('input', applyFilters);
             document.getElementById('brand-filter').addEventListener('change', applyFilters);
             document.getElementById('stock-filter').addEventListener('change', applyFilters);
+            
+            // Debug: Log all stock values to console to check for negatives
+            console.log('Stock values found:');
+            document.querySelectorAll('.inventory-item').forEach(function(item) {
+                const stock = parseInt(item.getAttribute('data-stock'));
+                const name = item.querySelector('td:nth-child(2)').textContent;
+                if (stock < 0) {
+                    console.log(`NEGATIVE: ${name} = ${stock}`);
+                }
+            });
         });
     </script>
 </body>
