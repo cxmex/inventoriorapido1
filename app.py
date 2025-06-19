@@ -876,6 +876,140 @@ async def test_sql_update(barcode: str, new_value: int):
             "traceback": traceback.format_exc()
         }
 
+@app.get("/verventasxdia", response_class=HTMLResponse)
+async def ver_ventas_por_dia(request: Request):
+    try:
+        import traceback
+        
+        print(f"Fetching daily sales data for the last 14 days", flush=True)
+        
+        try:
+            # Call both Supabase functions
+            async with httpx.AsyncClient() as client:
+                # Get data by estilo
+                response_by_estilo = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_daily_sales_by_estilo",
+                    headers=HEADERS,
+                    params={"days_back": 14}
+                )
+                
+                # Get total data (for the table)
+                response_total = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_daily_sales_total",
+                    headers=HEADERS,
+                    params={"days_back": 14}
+                )
+                
+                if response_by_estilo.status_code >= 400:
+                    print(f"Function call error (by estilo): {response_by_estilo.text}", flush=True)
+                    raise Exception(f"Function call failed: {response_by_estilo.status_code}")
+                
+                if response_total.status_code >= 400:
+                    print(f"Function call error (total): {response_total.text}", flush=True)
+                    raise Exception(f"Function call failed: {response_total.status_code}")
+                
+                daily_results_by_estilo = response_by_estilo.json()
+                daily_results_total = response_total.json()
+                
+                print(f"Retrieved daily sales data for {len(daily_results_by_estilo)} records by estilo", flush=True)
+            
+            # Process total results for the table
+            day_totals = {}
+            for row in daily_results_total:
+                day_key = row.get('day_date')
+                total = float(row.get('total_revenue', 0) or 0)
+                day_totals[day_key] = total
+            
+            # Process results by estilo for the chart
+            chart_data_by_estilo = {}
+            all_days = set()
+            all_estilos = set()
+            
+            for row in daily_results_by_estilo:
+                day_key = row.get('day_date')
+                estilo = row.get('estilo')
+                total = float(row.get('total_revenue', 0) or 0)
+                
+                # Simplify date format for chart (keep DD/MM format)
+                simple_date = datetime.strptime(day_key, "%d/%m/%Y").strftime("%d/%m")
+                
+                if estilo not in chart_data_by_estilo:
+                    chart_data_by_estilo[estilo] = {}
+                
+                chart_data_by_estilo[estilo][simple_date] = round(total, 2)
+                all_days.add(simple_date)
+                all_estilos.add(estilo)
+            
+            # Prepare chart data structure
+            chart_data = {
+                'labels': sorted(list(all_days), key=lambda x: datetime.strptime(x, "%d/%m")),
+                'datasets': []
+            }
+            
+            # Define colors for different estilos
+            colors = [
+                {'bg': 'rgba(255, 99, 132, 0.7)', 'border': 'rgba(255, 99, 132, 1)'},
+                {'bg': 'rgba(54, 162, 235, 0.7)', 'border': 'rgba(54, 162, 235, 1)'},
+                {'bg': 'rgba(255, 206, 86, 0.7)', 'border': 'rgba(255, 206, 86, 1)'},
+                {'bg': 'rgba(75, 192, 192, 0.7)', 'border': 'rgba(75, 192, 192, 1)'},
+                {'bg': 'rgba(153, 102, 255, 0.7)', 'border': 'rgba(153, 102, 255, 1)'},
+                {'bg': 'rgba(255, 159, 64, 0.7)', 'border': 'rgba(255, 159, 64, 1)'},
+                {'bg': 'rgba(199, 199, 199, 0.7)', 'border': 'rgba(199, 199, 199, 1)'},
+                {'bg': 'rgba(83, 102, 255, 0.7)', 'border': 'rgba(83, 102, 255, 1)'}
+            ]
+            
+            # Create dataset for each estilo
+            for i, estilo in enumerate(sorted(all_estilos)):
+                color = colors[i % len(colors)]
+                data = []
+                
+                for day in chart_data['labels']:
+                    value = chart_data_by_estilo.get(estilo, {}).get(day, 0)
+                    data.append(value)
+                
+                chart_data['datasets'].append({
+                    'label': estilo,
+                    'data': data,
+                    'backgroundColor': color['bg'],
+                    'borderColor': color['border'],
+                    'borderWidth': 1
+                })
+            
+            print(f"Daily totals: {day_totals}", flush=True)
+            
+            return templates.TemplateResponse(
+                "ventas_por_dia.html",
+                {
+                    "request": request,
+                    "day_totals": day_totals,
+                    "chart_data": chart_data,
+                    "chart_data_by_estilo": True  # Flag to indicate we have estilo data
+                }
+            )
+            
+        except Exception as fetch_error:
+            print(f"Error fetching data: {str(fetch_error)}", flush=True)
+            traceback.print_exc()
+            return templates.TemplateResponse(
+                "ventas_por_dia.html",
+                {
+                    "request": request,
+                    "day_totals": {},
+                    "chart_data": {'labels': [], 'datasets': []},
+                    "chart_data_by_estilo": False
+                }
+            )
+            
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return templates.TemplateResponse(
+            "error.html",
+            {
+                "request": request,
+                "error_message": f"Error loading daily sales: {str(e)}"
+            }
+        )
 
 @app.get("/verventasxsemana", response_class=HTMLResponse)
 async def ver_ventas_por_semana(request: Request):
@@ -1917,12 +2051,13 @@ async def process_entrada_mercancia(
         
         # Try to get product info from inventario1 table using barcode
         product_info = None
+        current_terex1 = 0
         try:
             product_response = await supabase_request(
                 method="GET",
                 endpoint="/rest/v1/inventario1",
                 params={
-                    "select": "name,estilo_id,marca",
+                    "select": "name,estilo_id,marca,terex1",
                     "barcode": f"eq.{barcode}",
                     "limit": "1"
                 }
@@ -1930,7 +2065,8 @@ async def process_entrada_mercancia(
             
             if product_response and len(product_response) > 0:
                 product_info = product_response[0]
-                print(f"Found product info: {product_info}", flush=True)
+                current_terex1 = product_info.get("terex1", 0) or 0  # Handle None values
+                print(f"Found product info: {product_info}, current terex1: {current_terex1}", flush=True)
             else:
                 print(f"No product found with barcode {barcode}", flush=True)
                 
@@ -1954,6 +2090,7 @@ async def process_entrada_mercancia(
         print(f"Inserting entrada data: {entrada_data}", flush=True)
         
         # Insert into entrada_mercancia table with error handling
+        entrada_success = False
         try:
             response = await supabase_request(
                 method="POST",
@@ -1962,6 +2099,7 @@ async def process_entrada_mercancia(
             )
             
             print(f"Entrada mercancia insert response: {response}", flush=True)
+            entrada_success = True
             
         except Exception as insert_error:
             print(f"Insert error details: {str(insert_error)}", flush=True)
@@ -1981,18 +2119,44 @@ async def process_entrada_mercancia(
                 )
                 
                 print(f"Minimal insert successful: {response}", flush=True)
+                entrada_success = True
                 
             except Exception as minimal_error:
                 print(f"Minimal insert also failed: {str(minimal_error)}", flush=True)
                 raise HTTPException(status_code=500, detail=f"Database error: {str(minimal_error)}")
         
-        if response:
+        # Update inventario1 terex1 column if entrada was successful and product exists
+        if entrada_success and product_info:
+            try:
+                new_terex1 = current_terex1 + qty
+                print(f"Updating terex1 from {current_terex1} to {new_terex1} for barcode {barcode}", flush=True)
+                
+                # Use the correct format for the PATCH request
+                update_response = await supabase_request(
+                    method="PATCH",
+                    endpoint=f"/rest/v1/inventario1?barcode=eq.{barcode_int}",
+                    json_data={
+                        "terex1": new_terex1
+                    }
+                )
+                
+                print(f"Inventario1 terex1 update response: {update_response}", flush=True)
+                
+            except Exception as update_error:
+                print(f"Error updating terex1 in inventario1: {str(update_error)}", flush=True)
+                import traceback
+                print(f"Update error traceback: {traceback.format_exc()}", flush=True)
+                # Don't fail the entire operation if terex1 update fails
+                # Log the error but continue
+        
+        if entrada_success:
             return {
                 "success": True,
                 "message": f"Entrada registrada exitosamente",
                 "qty": qty,
                 "barcode": barcode,  # Return original barcode string for display
-                "product_name": product_info.get("name", "Producto no identificado") if product_info else "Producto no identificado"
+                "product_name": product_info.get("name", "Producto no identificado") if product_info else "Producto no identificado",
+                "terex1_updated": product_info is not None  # Indicate if terex1 was updated
             }
         else:
             raise HTTPException(status_code=500, detail="Failed to insert entrada")
