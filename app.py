@@ -1,6 +1,6 @@
 # app.py - FastAPI with templates for inventory management
 
-from fastapi import FastAPI, HTTPException, Request, Form, Depends
+from fastapi import FastAPI, HTTPException, Request, Form, Depends,UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -13,7 +13,16 @@ from datetime import datetime, timedelta
 import os
 import shutil
 import traceback
-import os
+import asyncio
+import aiofiles
+import uuid
+from PIL import Image
+import io
+import json
+from supabase import create_client, Client
+
+
+
 print(f"Templates directory exists: {os.path.exists('templates')}", flush=True)
 print(f"Templates directory contents: {os.listdir('templates')}", flush=True)
 
@@ -32,6 +41,9 @@ templates = Jinja2Templates(directory="templates")
 # Supabase configuration
 SUPABASE_URL = "https://gbkhkbfbarsnpbdkxzii.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdia2hrYmZiYXJzbnBiZGt4emlpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQzODAzNzMsImV4cCI6MjA0OTk1NjM3M30.mcOcC2GVEu_wD3xNBzSCC3MwDck3CIdmz4D8adU-bpI"
+
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Supabase client headers
 HEADERS = {
@@ -2199,6 +2211,273 @@ async def get_recent_entries():
             "error": str(e),
             "entries": []
         }
+
+ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'gif', 'webp'}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+IMAGE_BUCKET = 'image-fundas'
+
+class ImageService:
+    @staticmethod
+    def validate_image(file: UploadFile) -> bool:
+        """Validate uploaded image file"""
+        if not file.filename:
+            return False
+        
+        extension = file.filename.split('.')[-1].lower()
+        if extension not in ALLOWED_EXTENSIONS:
+            return False
+        
+        return True
+    
+    @staticmethod
+    def get_content_type(filename: str) -> str:
+        """Get content type based on file extension"""
+        extension = filename.split('.')[-1].lower()
+        content_types = {
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'png': 'image/png',
+            'gif': 'image/gif',
+            'webp': 'image/webp'
+        }
+        return content_types.get(extension, 'image/unknown')
+    
+    @staticmethod
+    async def compress_image(file_content: bytes, quality: int = 85) -> bytes:
+        """Compress image to reduce file size"""
+        try:
+            image = Image.open(io.BytesIO(file_content))
+            
+            # Convert RGBA to RGB if necessary
+            if image.mode == 'RGBA':
+                image = image.convert('RGB')
+            
+            # Resize if too large
+            max_size = (1800, 1800)
+            if image.size[0] > max_size[0] or image.size[1] > max_size[1]:
+                image.thumbnail(max_size, Image.Resampling.LANCZOS)
+            
+            # Compress
+            output = io.BytesIO()
+            image.save(output, format='JPEG', quality=quality, optimize=True)
+            return output.getvalue()
+        except Exception:
+            return file_content
+
+@app.get("/verimages", response_class=HTMLResponse)
+async def verimages_page(request: Request):
+    """Render the image management page"""
+    try:
+        # Fetch estilos with prioridad=1
+        estilos_response = supabase.table('inventario_estilos').select('id, nombre').eq('prioridad', 1).order('nombre').execute()
+        estilos = estilos_response.data if estilos_response.data else []
+        
+        return templates.TemplateResponse("addimages.html", {
+            "request": request,
+            "estilos": estilos,
+            "title": "Image Management"
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error loading page: {str(e)}")
+
+@app.get("/api/colores/{estilo_id}")
+async def get_colores(estilo_id: int):
+    """Get available colors for a specific estilo"""
+    try:
+        # Query inventario1 table for items with the specific estilo_id and terex1 > 0
+        inventario_response = supabase.table('inventario1').select('color_id, terex1').eq('estilo_id', estilo_id).gt('terex1', 0).execute()
+        
+        if not inventario_response.data:
+            return JSONResponse(content={"colores": []})
+        
+        # Get unique color_ids and calculate stats
+        color_stats = {}
+        for item in inventario_response.data:
+            color_id = item['color_id']
+            terex1 = item['terex1'] or 0
+            
+            if color_id not in color_stats:
+                color_stats[color_id] = {
+                    'count': 1,
+                    'terex1_total': terex1,
+                    'terex1_avg': terex1
+                }
+            else:
+                color_stats[color_id]['count'] += 1
+                color_stats[color_id]['terex1_total'] += terex1
+                color_stats[color_id]['terex1_avg'] = color_stats[color_id]['terex1_total'] / color_stats[color_id]['count']
+        
+        if not color_stats:
+            return JSONResponse(content={"colores": []})
+        
+        # Get color details
+        color_ids = list(color_stats.keys())
+        color_details_response = supabase.table('inventario_colores').select('id, color').in_('id', color_ids).execute()
+        
+        # Combine data
+        colores = []
+        for color in color_details_response.data:
+            color_id = color['id']
+            if color_id in color_stats:
+                colores.append({
+                    'id': color_id,
+                    'color': color['color'],
+                    'count': color_stats[color_id]['count'],
+                    'terex1': round(color_stats[color_id]['terex1_avg'], 1)
+                })
+        
+        # Sort by color name
+        colores.sort(key=lambda x: x['color'])
+        
+        return JSONResponse(content={"colores": colores})
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching colors: {str(e)}")
+
+@app.get("/api/images/{estilo_id}/{color_id}")
+async def get_images(estilo_id: int, color_id: int):
+    """Get existing images for estilo and color combination"""
+    try:
+        response = supabase.table('image_uploads').select('*').eq('estilo_id', estilo_id).eq('color_id', color_id).order('created_at', desc=True).execute()
+        
+        images = response.data if response.data else []
+        return JSONResponse(content={"images": images})
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching images: {str(e)}")
+
+@app.post("/api/upload-image")
+async def upload_image(
+    estilo_id: int = Form(...),
+    color_id: int = Form(...),
+    description: Optional[str] = Form(None),
+    file: UploadFile = File(...)
+):
+    """Upload an image file"""
+    try:
+        # Validate file
+        if not ImageService.validate_image(file):
+            raise HTTPException(status_code=400, detail="Invalid image file type")
+        
+        # Read file content
+        file_content = await file.read()
+        
+        # Check file size
+        if len(file_content) > MAX_FILE_SIZE:
+            raise HTTPException(status_code=400, detail="File too large")
+        
+        # Compress image
+        compressed_content = await ImageService.compress_image(file_content)
+        
+        # Generate unique filename
+        timestamp = int(datetime.now().timestamp() * 1000)
+        file_extension = file.filename.split('.')[-1].lower()
+        unique_filename = f"image_{timestamp}.{file_extension}"
+        file_path = f"estilo_{estilo_id}/color_{color_id}/{unique_filename}"
+        
+        # Upload to Supabase Storage
+        upload_response = supabase.storage.from_(IMAGE_BUCKET).upload(
+            file_path,
+            compressed_content,
+            file_options={"content-type": ImageService.get_content_type(file.filename)}
+        )
+        
+        if upload_response.get('error'):
+            raise HTTPException(status_code=500, detail=f"Storage upload failed: {upload_response['error']}")
+        
+        # Get public URL
+        public_url = supabase.storage.from_(IMAGE_BUCKET).get_public_url(file_path)
+        
+        # Save record to database
+        db_response = supabase.table('image_uploads').insert({
+            'estilo_id': estilo_id,
+            'color_id': color_id,
+            'file_name': file.filename,
+            'file_path': file_path,
+            'public_url': public_url,
+            'description': description.strip() if description else None,
+            'content_type': ImageService.get_content_type(file.filename),
+            'file_size': len(compressed_content),
+        }).execute()
+        
+        if db_response.data:
+            return JSONResponse(content={
+                "success": True,
+                "message": "Image uploaded successfully",
+                "image": db_response.data[0]
+            })
+        else:
+            raise HTTPException(status_code=500, detail="Database insert failed")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+@app.delete("/api/delete-image/{image_id}")
+async def delete_image(image_id: int):
+    """Delete an image"""
+    try:
+        # Get image record first
+        image_response = supabase.table('image_uploads').select('*').eq('id', image_id).execute()
+        
+        if not image_response.data:
+            raise HTTPException(status_code=404, detail="Image not found")
+        
+        image_record = image_response.data[0]
+        file_path = image_record['file_path']
+        
+        # Delete from storage
+        storage_response = supabase.storage.from_(IMAGE_BUCKET).remove([file_path])
+        
+        # Delete from database (even if storage deletion fails)
+        db_response = supabase.table('image_uploads').delete().eq('id', image_id).execute()
+        
+        if db_response.data:
+            return JSONResponse(content={
+                "success": True,
+                "message": "Image deleted successfully"
+            })
+        else:
+            raise HTTPException(status_code=500, detail="Database deletion failed")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+
+@app.get("/api/estilo/{estilo_id}")
+async def get_estilo(estilo_id: int):
+    """Get estilo details"""
+    try:
+        response = supabase.table('inventario_estilos').select('id, nombre').eq('id', estilo_id).execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Estilo not found")
+        
+        return JSONResponse(content={"estilo": response.data[0]})
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching estilo: {str(e)}")
+
+@app.get("/api/color/{color_id}")
+async def get_color(color_id: int):
+    """Get color details"""
+    try:
+        response = supabase.table('inventario_colores').select('id, color').eq('id', color_id).execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Color not found")
+        
+        return JSONResponse(content={"color": response.data[0]})
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching color: {str(e)}")
+
 
 
 if __name__ == "__main__":
