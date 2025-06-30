@@ -1,1 +1,2 @@
 # inventoriorapido1
+# redeploy
