@@ -5,3 +5,8 @@ httpx
 supabase
 python-multipart
 reportlab
+aiofiles
+reportlab
+qrcode[pil]
+pillow
+google-auth

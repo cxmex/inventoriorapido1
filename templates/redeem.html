@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Redeem - Programa de Recompensas</title>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            text-align: center;
+        }
+        .logo {
+            font-size: 2em;
+            color: #667eea;
+            margin-bottom: 20px;
+            font-weight: bold;
+        }
+        .loading, .error, .success {
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            display: none;
+        }
+        .loading { color: #666; }
+        .error { color: #e74c3c; background: #fdf2f2; }
+        .success { color: #27ae60; background: #f0f9f4; }
+        .order-details {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            display: none;
+        }
+        .reward-amount {
+            font-size: 1.5em;
+            color: #27ae60;
+            font-weight: bold;
+        }
+        .dashboard-link {
+            background: #667eea;
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 8px;
+            text-decoration: none;
+            display: inline-block;
+            margin: 20px 0;
+        }
+        .dashboard-link:hover {
+            background: #5a6fd8;
+        }
+        #g_id_onload, .g_id_signin {
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">🎁 Programa de Recompensas</div>
+        
+        <div id="step1">
+            <h2>¡Bienvenido!</h2>
+            <p>Inicia sesión con tu cuenta de Google para obtener tu recompensa del 1% y acceder a tu dashboard</p>
+            
+            <div id="g_id_onload"
+                 data-client_id="617408497340-ud30tuhg633pbssdlfgm35chhuiggq24.apps.googleusercontent.com"
+                 data-context="signin"
+                 data-ux_mode="popup"
+                 data-callback="handleCredentialResponse"
+                 data-auto_prompt="false">
+            </div>
+            
+            <div class="g_id_signin"
+                 data-type="standard"
+                 data-shape="rectangular"
+                 data-theme="outline"
+                 data-text="signin_with"
+                 data-size="large"
+                 data-logo_alignment="left">
+            </div>
+            
+            <hr style="margin: 30px 0;">
+            <p><small>¿No quieres crear una cuenta? <a href="#" onclick="showSimpleRedeem()">Continuar sin registro</a></small></p>
+        </div>
+
+        <div id="simpleRedeem" style="display: none;">
+            <h3>Redeem sin registro</h3>
+            <p>Solo ingresa tu email para obtener la recompensa (no se guardará en tu cuenta)</p>
+            <input type="email" id="emailInput" class="email-input" placeholder="tu@email.com" style="width: 100%; padding: 12px; margin: 10px 0; border: 2px solid #ddd; border-radius: 8px; font-size: 16px;">
+            <br>
+            <button onclick="simpleRedeem()" style="background: #667eea; color: white; padding: 12px 30px; border: none; border-radius: 8px; font-size: 16px; cursor: pointer;">Obtener Recompensa</button>
+            <br>
+            <a href="#" onclick="showGoogleLogin()" style="color: #667eea; text-decoration: none; font-size: 14px;">Volver al login con Google</a>
+        </div>
+
+        <div class="loading" id="loading">
+            <p>Procesando tu recompensa...</p>
+        </div>
+
+        <div class="error" id="error"></div>
+
+        <div class="order-details" id="orderDetails">
+            <h3>¡Recompensa Activada!</h3>
+            <div id="userInfo" style="display: none;">
+                <p><strong>Usuario:</strong> <span id="userName"></span></p>
+                <p><strong>Email:</strong> <span id="userEmail"></span></p>
+            </div>
+            <p><strong>Orden #:</strong> <span id="orderNumber"></span></p>
+            <p><strong>Total de Compra:</strong> $<span id="orderTotal"></span></p>
+            <p><strong>Tu Recompensa:</strong> <span class="reward-amount">$<span id="rewardAmount"></span></span></p>
+            
+            <div id="authenticatedSuccess" style="display: none;">
+                <p>Tu recompensa ha sido agregada a tu cuenta de usuario.</p>
+                <a href="/dashboard.html" class="dashboard-link">Ver Mi Dashboard</a>
+            </div>
+            
+            <div id="simpleSuccess" style="display: none;">
+                <p>Tu recompensa ha sido registrada con tu email.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Get token from URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const redemptionToken = urlParams.get('token');
+
+        if (!redemptionToken) {
+            showError('Token de redención no válido. Asegúrate de escanear el código QR del ticket.');
+        }
+
+        // Google Sign-In callback
+        function handleCredentialResponse(response) {
+            console.log("Google authentication successful");
+            
+            showLoading();
+            
+            // Use authenticated redemption endpoint
+            authenticatedRedeem(response.credential);
+        }
+
+        async function authenticatedRedeem(googleToken) {
+    try {
+        const response = await fetch('/api/redeem/authenticated', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                google_token: googleToken,
+                redemption_token: redemptionToken
+            })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            // IMPORTANT: Store the session token from the response
+            if (data.session_token) {
+                localStorage.setItem('session_token', data.session_token);
+                console.log('Session token saved:', data.session_token.substring(0, 16) + '...');
+            }
+            
+            showSuccess(data, true); // true = authenticated
+        } else {
+            showError(data.detail || 'Error al procesar la recompensa');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        showError('Error de conexión. Inténtalo de nuevo.');
+    }
+}
+
+        async function simpleRedeem() {
+            const email = document.getElementById('emailInput').value.trim();
+            
+            if (!email || !isValidEmail(email)) {
+                showError('Por favor ingresa un email válido');
+                return;
+            }
+            
+            showLoading();
+            
+            try {
+                const response = await fetch('/api/redeem', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        email: email,
+                        redemption_token: redemptionToken
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showSuccess(data, false); // false = not authenticated
+                } else {
+                    showError(data.detail || 'Error al procesar la recompensa');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showError('Error de conexión. Inténtalo de nuevo.');
+            }
+        }
+
+        function showSuccess(data, isAuthenticated) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('orderDetails').style.display = 'block';
+    
+    // Fill in order details
+    document.getElementById('orderNumber').textContent = data.order_id;
+    document.getElementById('orderTotal').textContent = data.total.toFixed(2);
+    document.getElementById('rewardAmount').textContent = data.reward_amount.toFixed(2);
+    
+    if (isAuthenticated && data.user) {
+        document.getElementById('userInfo').style.display = 'block';
+        document.getElementById('userName').textContent = data.user.name;
+        document.getElementById('userEmail').textContent = data.user.email;
+        document.getElementById('authenticatedSuccess').style.display = 'block';
+        
+        // Update dashboard link - the session token is now in localStorage
+        const dashboardLink = document.querySelector('.dashboard-link');
+        if (dashboardLink) {
+            dashboardLink.href = '/dashboard.html'; // Session will be read from localStorage
+        }
+    } else {
+        document.getElementById('simpleSuccess').style.display = 'block';
+    }
+}
+
+
+        function showLoading() {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('step1').style.display = 'none';
+            document.getElementById('simpleRedeem').style.display = 'none';
+            document.getElementById('error').style.display = 'none';
+        }
+
+        function showError(message) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('step1').style.display = 'block';
+            document.getElementById('error').style.display = 'block';
+            document.getElementById('error').textContent = message;
+        }
+
+        function showSimpleRedeem() {
+            document.getElementById('step1').style.display = 'none';
+            document.getElementById('simpleRedeem').style.display = 'block';
+        }
+
+        function showGoogleLogin() {
+            document.getElementById('simpleRedeem').style.display = 'none';
+            document.getElementById('step1').style.display = 'block';
+        }
+
+        function isValidEmail(email) {
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            return emailRegex.test(email);
+        }
+
+        // Allow Enter key to submit in simple redeem
+        document.addEventListener('DOMContentLoaded', function() {
+            const emailInput = document.getElementById('emailInput');
+            if (emailInput) {
+                emailInput.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        simpleRedeem();
+                    }
+                });
+            }
+        });
+    </script>
+</body>
+</html>

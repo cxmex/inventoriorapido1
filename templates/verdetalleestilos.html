@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ver Detalle Estilos</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.10.0/font/bootstrap-icons.min.css" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chart.js/4.4.0/chart.min.js"></script>
+</head>
+<body>
+    <div class="container-fluid">
+        <!-- Navigation Menu -->
+        <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+            <div class="container-fluid">
+                <a class="navbar-brand" href="/">
+                    <i class="bi bi-house-door"></i> Sistema Inventario
+                </a>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="collapse navbar-collapse" id="navbarNav">
+                    <ul class="navbar-nav me-auto">
+                        <li class="nav-item">
+                            <a class="nav-link" href="/">
+                                <i class="bi bi-house"></i> Inicio
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link active" href="/verdetalleestilos">
+                                <i class="bi bi-list-ul"></i> Ver Detalle Estilos
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="/inventario">
+                                <i class="bi bi-boxes"></i> Inventario
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="/dashboard">
+                                <i class="bi bi-speedometer2"></i> Dashboard
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <div class="container-fluid mt-4">
+            {% if step == "select_estilo" %}
+            <!-- Step 1: Select Estilo -->
+            <div class="row">
+                <div class="col-12">
+                    <h1 class="mb-4">
+                        <i class="bi bi-list-ul"></i> Seleccionar Estilo para Análisis
+                    </h1>
+                    <p class="lead">Selecciona un estilo del inventario para ver su análisis de ventas detallado.</p>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0">Estilos Disponibles (Prioridad = 1, Saldos ≠ 1)</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table table-hover">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>Nombre del Estilo</th>
+                                            <th>Precio</th>
+                                            <th>Costo</th>
+                                            <th>Margen</th>
+                                            <th>Vendidos (30d)</th>
+                                            <th>Saldos</th>
+                                            <th>Acción</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for item in inventario_data %}
+                                        <tr>
+                                            <td>
+                                                <strong>{{ item.nombre }}</strong>
+                                                <br><small class="text-muted">ID: {{ item.id }}</small>
+                                            </td>
+                                            <td>${{ "{:,.0f}".format(item.precio) if item.precio else '0' }}</td>
+                                            <td>${{ "{:,.0f}".format(item.cost) if item.cost else '0' }}</td>
+                                            <td>
+                                                {% if item.precio and item.cost and item.precio > 0 %}
+                                                    {% set margin = ((item.precio - item.cost) / item.precio * 100) %}
+                                                    <span class="badge bg-{% if margin > 30 %}success{% elif margin > 15 %}warning{% else %}danger{% endif %}">
+                                                        {{ "{:.1f}".format(margin) }}%
+                                                    </span>
+                                                {% else %}
+                                                    <span class="badge bg-secondary">N/A</span>
+                                                {% endif %}
+                                            </td>
+                                            <td>
+                                                <span class="badge bg-{% if item.sold30 and item.sold30 > 0 %}success{% else %}secondary{% endif %}">
+                                                    {{ item.sold30 or 0 }}
+                                                </span>
+                                            </td>
+                                            <td>{{ item.saldos or 0 }}</td>
+                                            <td>
+                                                <a href="/verdetalleestilos/analytics?estilo={{ item.nombre|urlencode }}" 
+                                                   class="btn btn-primary btn-sm">
+                                                    <i class="bi bi-graph-up"></i> Analizar Ventas
+                                                </a>
+                                            </td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {% elif step == "analytics" %}
+            <!-- Step 2: Analytics View -->
+            <div class="row">
+                <div class="col-12">
+                    <div class="d-flex justify-content-between align-items-center mb-4">
+                        <h1>
+                            <i class="bi bi-graph-up"></i> Análisis de Ventas: {{ estilo }}
+                        </h1>
+                        <a href="/verdetalleestilos" class="btn btn-outline-secondary">
+                            <i class="bi bi-arrow-left"></i> Volver a Estilos
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Filters Section -->
+            <div class="row mb-4">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0">Filtros de Análisis</h5>
+                        </div>
+                        <div class="card-body">
+                            <form id="filterForm" method="GET" action="/verdetalleestilos/analytics">
+                                <input type="hidden" name="estilo" value="{{ estilo }}">
+                                <div class="row">
+                                    <div class="col-md-4">
+                                        <label class="form-label">Modelos</label>
+                                        <select multiple class="form-select" name="modelos" id="modelosSelect" size="4">
+                                            {% for modelo_info in available_modelos %}
+                                            <option value="{{ modelo_info.modelo }}" 
+                                                    {% if modelo_info.modelo in selected_modelos %}selected{% endif %}>
+                                                {{ modelo_info.modelo }} ({{ modelo_info.total_sales }} ventas)
+                                            </option>
+                                            {% endfor %}
+                                        </select>
+                                        <small class="text-muted">Mantén Ctrl/Cmd para seleccionar múltiples</small>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label">Fecha Inicio</label>
+                                        <input type="date" class="form-control" name="start_date" value="{{ start_date }}">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label">Fecha Fin</label>
+                                        <input type="date" class="form-control" name="end_date" value="{{ end_date }}">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <label class="form-label">&nbsp;</label>
+                                        <div class="d-grid">
+                                            <button type="submit" class="btn btn-primary">
+                                                <i class="bi bi-funnel"></i> Aplicar
+                                            </button>
+                                        </div>
+                                        <div class="d-grid mt-2">
+                                            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="clearFilters()">
+                                                <i class="bi bi-x-circle"></i> Limpiar
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Summary Cards -->
+            <div class="row mb-4">
+                {% for summary in analytics_data.summary_data %}
+                <div class="col-md-3 mb-3">
+                    <div class="card bg-light">
+                        <div class="card-body text-center">
+                            <h5 class="card-title">{{ summary.modelo }}</h5>
+                            <h3 class="text-primary">${{ "{:,.0f}".format(summary.total_revenue) }}</h3>
+                            <p class="mb-1">{{ summary.total_sales }} ventas</p>
+                            <p class="mb-0 text-muted small">{{ summary.total_quantity }} unidades</p>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+
+            <!-- Charts Section -->
+            <div class="row mb-4">
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0">Ingresos por Modelo</h5>
+                        </div>
+                        <div class="card-body">
+                            <canvas id="modeloChart" height="300"></canvas>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0">Tendencia Diaria</h5>
+                        </div>
+                        <div class="card-body">
+                            <canvas id="dailyTrendChart" height="300"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Detailed Data Table -->
+            <div class="row">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0">Detalle de Ventas Diarias</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table table-sm table-striped">
+                                    <thead class="table-dark">
+                                        <tr>
+                                            <th>Fecha</th>
+                                            <th>Modelo</th>
+                                            <th>Ventas</th>
+                                            <th>Cantidad</th>
+                                            <th>Ingresos</th>
+                                            <th>Precio Promedio</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for row in analytics_data.daily_data %}
+                                        <tr>
+                                            <td>{{ row.fecha.strftime('%d/%m/%Y') if row.fecha else 'N/A' }}</td>
+                                            <td><strong>{{ row.modelo }}</strong></td>
+                                            <td>{{ row.daily_sales }}</td>
+                                            <td>{{ row.daily_quantity }}</td>
+                                            <td>${{ "{:,.0f}".format(row.daily_revenue) if row.daily_revenue else '0' }}</td>
+                                            <td>${{ "{:,.0f}".format(row.avg_daily_price) if row.avg_daily_price else '0' }}</td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+    
+    {% if step == "analytics" %}
+    <script>
+        const chartData = {{ chart_data | safe }};
+        
+        // Modelo Totals Chart
+        const modeloCtx = document.getElementById('modeloChart').getContext('2d');
+        const modeloLabels = Object.keys(chartData.modelo_totals || {});
+        const modeloData = modeloLabels.map(modelo => chartData.modelo_totals[modelo]);
+        
+        new Chart(modeloCtx, {
+            type: 'doughnut',
+            data: {
+                labels: modeloLabels,
+                datasets: [{
+                    data: modeloData,
+                    backgroundColor: [
+                        '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40',
+                        '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0'
+                    ]
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom'
+                    }
+                }
+            }
+        });
+
+        // Daily Trend Chart
+        const dailyCtx = document.getElementById('dailyTrendChart').getContext('2d');
+        
+        // Prepare daily trend data
+        const allDates = new Set();
+        const modeloColors = {};
+        const colors = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40'];
+        let colorIndex = 0;
+        
+        // Collect all dates and assign colors
+        Object.keys(chartData.daily_trends || {}).forEach(modelo => {
+            modeloColors[modelo] = colors[colorIndex % colors.length];
+            colorIndex++;
+            Object.keys(chartData.daily_trends[modelo]).forEach(date => {
+                allDates.add(date);
+            });
+        });
+        
+        const sortedDates = Array.from(allDates).sort();
+        
+        // Create datasets
+        const dailyDatasets = Object.keys(chartData.daily_trends || {}).map(modelo => {
+            const data = sortedDates.map(date => 
+                chartData.daily_trends[modelo][date] || 0
+            );
+            
+            return {
+                label: modelo,
+                data: data,
+                borderColor: modeloColors[modelo],
+                backgroundColor: modeloColors[modelo] + '20',
+                fill: false,
+                tension: 0.1
+            };
+        });
+
+        new Chart(dailyCtx, {
+            type: 'line',
+            data: {
+                labels: sortedDates,
+                datasets: dailyDatasets
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom'
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            callback: function(value) {
+                                return '$' + value.toLocaleString();
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Form handling
+        function clearFilters() {
+            document.getElementById('modelosSelect').selectedIndex = -1;
+            document.querySelector('[name="start_date"]').value = '';
+            document.querySelector('[name="end_date"]').value = '';
+        }
+
+        // Multi-select handling
+        document.getElementById('filterForm').addEventListener('submit', function(e) {
+            const selectedOptions = Array.from(document.getElementById('modelosSelect').selectedOptions);
+            const selectedValues = selectedOptions.map(option => option.value);
+            
+            // Create a hidden input with comma-separated values
+            const existingInput = document.querySelector('input[name="modelos"]');
+            if (existingInput) {
+                existingInput.remove();
+            }
+            
+            if (selectedValues.length > 0) {
+                const hiddenInput = document.createElement('input');
+                hiddenInput.type = 'hidden';
+                hiddenInput.name = 'modelos';
+                hiddenInput.value = selectedValues.join(',');
+                this.appendChild(hiddenInput);
+            }
+        });
+    </script>
+    {% endif %}
+</body>
+</html>

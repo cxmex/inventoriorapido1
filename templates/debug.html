@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Session Debug</title>
+</head>
+<body>
+    <h1>Session Debug</h1>
+    <div id="output"></div>
+    
+    <script>
+        const output = document.getElementById('output');
+        
+        // Check localStorage
+        const sessionToken = localStorage.getItem('session_token');
+        output.innerHTML += `<p><strong>localStorage session_token:</strong> ${sessionToken || 'Not found'}</p>`;
+        
+        // Check URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlSession = urlParams.get('session');
+        output.innerHTML += `<p><strong>URL session parameter:</strong> ${urlSession || 'Not found'}</p>`;
+        
+        // Test if session token works
+        if (sessionToken) {
+            fetch(`/api/test/session?session_token=${sessionToken}`)
+                .then(response => response.json())
+                .then(data => {
+                    output.innerHTML += `<p><strong>Session validation:</strong> ${JSON.stringify(data, null, 2)}</p>`;
+                })
+                .catch(error => {
+                    output.innerHTML += `<p><strong>Session test error:</strong> ${error}</p>`;
+                });
+        }
+        
+        // Show active sessions
+        fetch('/api/debug/sessions')
+            .then(response => response.json())
+            .then(data => {
+                output.innerHTML += `<p><strong>Active sessions:</strong> ${JSON.stringify(data, null, 2)}</p>`;
+            })
+            .catch(error => {
+                output.innerHTML += `<p><strong>Sessions debug error:</strong> ${error}</p>`;
+            });
+    </script>
+</body>
+</html>

@@ -1,27 +1,41 @@
 # app.py - FastAPI with templates for inventory management
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token
+import jwt
+import requests
+from fastapi import HTTPException
+from datetime import datetime
+import time
+import hashlib
 
-from fastapi import FastAPI, HTTPException, Request, Form, Depends,UploadFile, File
+import qrcode
+from fastapi import FastAPI, HTTPException, Request, Form, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
-from fastapi.responses import JSONResponse  # Optional for debugging
+from fastapi.responses import JSONResponse,StreamingResponse  # Optional for debugging
 from collections import defaultdict
 import httpx
 from datetime import datetime, timedelta
 import os
 import shutil
 import traceback
-import asyncio
-import aiofiles
-import uuid
-from PIL import Image
 import io
-import json
-from supabase import create_client, Client
+import logging
+from typing import List, Dict, Optional
 
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import mm
+from reportlab.graphics.barcode import code128
+from reportlab.lib import colors
 
+from reportlab.graphics import renderPDF
+from reportlab.graphics.shapes import Drawing
+from reportlab.graphics.barcode.qr import QrCodeWidget
+from reportlab.graphics.barcode import getCodes
+import secrets
 
 print(f"Templates directory exists: {os.path.exists('templates')}", flush=True)
 print(f"Templates directory contents: {os.listdir('templates')}", flush=True)
@@ -42,9 +56,6 @@ templates = Jinja2Templates(directory="templates")
 SUPABASE_URL = "https://gbkhkbfbarsnpbdkxzii.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdia2hrYmZiYXJzbnBiZGt4emlpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQzODAzNzMsImV4cCI6MjA0OTk1NjM3M30.mcOcC2GVEu_wD3xNBzSCC3MwDck3CIdmz4D8adU-bpI"
 
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
 # Supabase client headers
 HEADERS = {
     "apikey": SUPABASE_KEY,
@@ -54,9 +65,39 @@ HEADERS = {
 }
 
 # Data models
+
+class GoogleAuthRequest(BaseModel):
+    google_token: str
+
+class AuthenticatedRedeemRequest(BaseModel):
+    google_token: str
+    redemption_token: str
+
+
+class ProductIn(BaseModel):
+    qty: int = Field(..., ge=1)
+    name: str
+    codigo: str
+    price: float = Field(..., ge=0)
+
+class SavePayload(BaseModel):
+    products: list[ProductIn] = Field(..., min_length=1)
+
+
 class InventarioEstilo(BaseModel):
     id: int
     nombre: str
+
+
+class Product(BaseModel):
+    qty: int
+    name: str
+    codigo: str
+    price: float
+    customer_email: Optional[str] = None  # Add this field
+
+class SavePayload(BaseModel):
+    products: List[Product]
 
 # Helper function for Supabase requests
 async def supabase_request(
@@ -103,6 +144,97 @@ async def supabase_rpc(function_name: str, params: Dict[str, Any] = None) -> Dic
         )
     
     return response.json()
+
+def _now_strs():
+    now = dt.datetime.now()
+    fecha = f"{now.year}-{now.month:02d}-{now.day:02d}"
+    hora = f"{now.hour:02d}:{now.minute:02d}:{now.second:02d}"
+    return now, fecha, hora
+
+def _build_receipt_pdf(items: List[dict], total: float, order_id: int) -> io.BytesIO:
+    # 58mm receipt width
+    width = 58 * mm
+    height = 200 * mm  # generous page; we add more pages if needed
+    margin = 2 * mm
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(width, height))
+
+    def new_page_header():
+        y = height - margin
+        c.setFont("Helvetica-Bold", 10)
+        c.drawCentredString(width/2, y, "TICKET DE VENTA")
+        y -= 12
+        c.setFont("Helvetica-Bold", 9)
+        c.drawCentredString(width/2, y, f"Orden #{order_id}")
+        y -= 10
+        _, fecha, hora = _now_strs()
+        c.setFont("Helvetica", 8)
+        c.drawString(margin, y, f"Fecha: {fecha}")
+        y -= 10
+        c.drawString(margin, y, f"Hora: {hora}")
+        y -= 6
+        c.setStrokeColor(colors.black)
+        c.line(margin, y, width - margin, y)
+        y -= 10
+        # headers
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(margin, y, "Cant")
+        c.drawString(margin + 20, y, "Descripción")
+        c.drawRightString(width - margin, y, "Precio")
+        y -= 10
+        c.setFont("Helvetica", 8)
+        return y
+
+    y = new_page_header()
+
+    for it in items:
+        # line
+        if y < 25 * mm:
+            c.showPage()
+            y = new_page_header()
+
+        qty = str(it["qty"])
+        name = str(it["name"])
+        price = it["price"]
+        subtotal = it["subtotal"]
+
+        c.drawString(margin, y, qty)
+        # wrap/clip description
+        max_desc_chars = 28
+        c.drawString(margin + 20, y, (name[:max_desc_chars] + ("…" if len(name) > max_desc_chars else "")))
+        c.drawRightString(width - margin, y, f"${price:0.2f}")
+        y -= 10
+        c.drawRightString(width - margin, y, f"Subtotal: ${subtotal:0.2f}")
+        y -= 12
+
+    y -= 4
+    c.line(margin, y, width - margin, y)
+    y -= 12
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(margin, y, "TOTAL:")
+    c.drawRightString(width - margin, y, f"${total:0.2f}")
+    y -= 14
+    c.setFont("Helvetica", 8)
+    c.drawCentredString(width/2, y, "¡Gracias por su compra!")
+    y -= 10
+
+    # Barcode
+    try:
+        bc = code128.Code128(f"ORDER-{order_id}", barHeight=12 * mm, barWidth=0.35)
+        x = (width - bc.width) / 2
+        bc.drawOn(c, x, max(margin, y - 16 * mm))
+    except Exception:
+        # If barcode fails for any reason, just ignore and finish
+        pass
+
+    c.showPage()
+    c.save()
+    buf.seek(0)
+    return buf
+
+user_sessions = {}
+
 
 # Home page / Menu
 @app.get("/", response_class=HTMLResponse)
@@ -1580,7 +1712,7 @@ async def process_ventas_viaje(
                 }
             )
             
-            next_order_id = 1  # Default if no records exist
+            next_order_id = await get_next_order_id()  # Default if no records exist
             if max_order_response and len(max_order_response) > 0:
                 max_order_id = max_order_response[0].get('order_id', 0)
                 next_order_id = max_order_id + 1
@@ -2212,274 +2344,2609 @@ async def get_recent_entries():
             "entries": []
         }
 
-ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'gif', 'webp'}
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
-IMAGE_BUCKET = 'image-fundas'
+# Set up logging to see detailed errors
+logger = logging.getLogger(__name__)
 
-class ImageService:
-    @staticmethod
-    def validate_image(file: UploadFile) -> bool:
-        """Validate uploaded image file"""
-        if not file.filename:
-            return False
-        
-        extension = file.filename.split('.')[-1].lower()
-        if extension not in ALLOWED_EXTENSIONS:
-            return False
-        
-        return True
-    
-    @staticmethod
-    def get_content_type(filename: str) -> str:
-        """Get content type based on file extension"""
-        extension = filename.split('.')[-1].lower()
-        content_types = {
-            'jpg': 'image/jpeg',
-            'jpeg': 'image/jpeg',
-            'png': 'image/png',
-            'gif': 'image/gif',
-            'webp': 'image/webp'
-        }
-        return content_types.get(extension, 'image/unknown')
-    
-    @staticmethod
-    async def compress_image(file_content: bytes, quality: int = 85) -> bytes:
-        """Compress image to reduce file size"""
-        try:
-            image = Image.open(io.BytesIO(file_content))
-            
-            # Convert RGBA to RGB if necessary
-            if image.mode == 'RGBA':
-                image = image.convert('RGB')
-            
-            # Resize if too large
-            max_size = (1800, 1800)
-            if image.size[0] > max_size[0] or image.size[1] > max_size[1]:
-                image.thumbnail(max_size, Image.Resampling.LANCZOS)
-            
-            # Compress
-            output = io.BytesIO()
-            image.save(output, format='JPEG', quality=quality, optimize=True)
-            return output.getvalue()
-        except Exception:
-            return file_content
 
-@app.get("/verimages", response_class=HTMLResponse)
-async def verimages_page(request: Request):
-    """Render the image management page"""
+@app.get("/verimagenes", response_class=HTMLResponse)
+async def ver_imagenes(request: Request):
+    """Main page to view images associated with estilos"""
+    return templates.TemplateResponse("verimagenes.html", {"request": request})
+
+@app.get("/api/estilos-with-images")
+async def get_estilos_with_images():
+    """Get estilos with images and sales data"""
     try:
-        # Fetch estilos with prioridad=1
-        estilos_response = supabase.table('inventario_estilos').select('id, nombre').eq('prioridad', 1).order('nombre').execute()
-        estilos = estilos_response.data if estilos_response.data else []
-        
-        return templates.TemplateResponse("addimages.html", {
-            "request": request,
-            "estilos": estilos,
-            "title": "Image Management"
-        })
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error loading page: {str(e)}")
-
-@app.get("/api/colores/{estilo_id}")
-async def get_colores(estilo_id: int):
-    """Get available colors for a specific estilo"""
-    try:
-        # Query inventario1 table for items with the specific estilo_id and terex1 > 0
-        inventario_response = supabase.table('inventario1').select('color_id, terex1').eq('estilo_id', estilo_id).gt('terex1', 0).execute()
-        
-        if not inventario_response.data:
-            return JSONResponse(content={"colores": []})
-        
-        # Get unique color_ids and calculate stats
-        color_stats = {}
-        for item in inventario_response.data:
-            color_id = item['color_id']
-            terex1 = item['terex1'] or 0
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Calculate 3 months ago
+            three_months_ago = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
             
-            if color_id not in color_stats:
-                color_stats[color_id] = {
-                    'count': 1,
-                    'terex1_total': terex1,
-                    'terex1_avg': terex1
-                }
-            else:
-                color_stats[color_id]['count'] += 1
-                color_stats[color_id]['terex1_total'] += terex1
-                color_stats[color_id]['terex1_avg'] = color_stats[color_id]['terex1_total'] / color_stats[color_id]['count']
-        
-        if not color_stats:
-            return JSONResponse(content={"colores": []})
-        
-        # Get color details
-        color_ids = list(color_stats.keys())
-        color_details_response = supabase.table('inventario_colores').select('id, color').in_('id', color_ids).execute()
-        
-        # Combine data
-        colores = []
-        for color in color_details_response.data:
-            color_id = color['id']
-            if color_id in color_stats:
-                colores.append({
-                    'id': color_id,
-                    'color': color['color'],
-                    'count': color_stats[color_id]['count'],
-                    'terex1': round(color_stats[color_id]['terex1_avg'], 1)
+            # Get all estilos with prioridad=1
+            estilos_response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/inventario_estilos",
+                headers=HEADERS,
+                params={"select": "id,nombre", "prioridad": "eq.1", "order": "nombre"}
+            )
+            
+            estilos_data = estilos_response.json()
+            
+            # Get images data
+            images_response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/image_uploads",
+                headers=HEADERS,
+                params={"select": "estilo_id,color_id,public_url,file_name,description"}
+            )
+            
+            # Count images by estilo_id
+            image_counts = {}
+            color_counts = {}
+            sample_images = {}
+            
+            if images_response.status_code == 200:
+                images_data = images_response.json()
+                for image in images_data:
+                    estilo_id = image.get('estilo_id')
+                    color_id = image.get('color_id')
+                    
+                    if estilo_id is not None:
+                        image_counts[estilo_id] = image_counts.get(estilo_id, 0) + 1
+                        
+                        if estilo_id not in color_counts:
+                            color_counts[estilo_id] = set()
+                        if color_id is not None:
+                            color_counts[estilo_id].add(color_id)
+                        
+                        if estilo_id not in sample_images and image.get('public_url'):
+                            sample_images[estilo_id] = {
+                                "public_url": image.get('public_url'),
+                                "file_name": image.get('file_name'),
+                                "description": image.get('description', '')
+                            }
+            
+            # Build response with individual sales queries for each estilo
+            estilos = []
+            for estilo in estilos_data:
+                estilo_id = int(estilo['id'])
+                
+                # Get sales for THIS specific estilo
+                sales_response = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex1",
+                    headers=HEADERS,
+                    params={
+                        "select": "qty",
+                        "estilo_id": f"eq.{estilo_id}",
+                        "fecha": f"gte.{three_months_ago}"
+                    }
+                )
+                
+                sales_total = 0
+                if sales_response.status_code == 200:
+                    sales_data = sales_response.json()
+                    sales_total = sum(record.get('qty', 0) for record in sales_data)
+                
+                estilos.append({
+                    "id": estilo_id,
+                    "nombre": estilo['nombre'],
+                    "total_images": image_counts.get(estilo_id, 0),
+                    "total_colors_with_images": len(color_counts.get(estilo_id, set())),
+                    "sales_last_3_months": sales_total,
+                    "sample_image": sample_images.get(estilo_id, None)
                 })
-        
-        # Sort by color name
-        colores.sort(key=lambda x: x['color'])
-        
-        return JSONResponse(content={"colores": colores})
+            
+            return {"estilos": estilos}
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching colors: {str(e)}")
+        logger.error(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/images/{estilo_id}/{color_id}")
-async def get_images(estilo_id: int, color_id: int):
-    """Get existing images for estilo and color combination"""
+@app.get("/api/estilo/{estilo_id}/colors-with-images")
+async def get_colors_with_images(estilo_id: int):
+    """Get colors and images for specific estilo"""
     try:
-        response = supabase.table('image_uploads').select('*').eq('estilo_id', estilo_id).eq('color_id', color_id).order('created_at', desc=True).execute()
-        
-        images = response.data if response.data else []
-        return JSONResponse(content={"images": images})
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Get estilo info
+            estilo_response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/inventario_estilos",
+                headers=HEADERS,
+                params={"select": "id,nombre", "id": f"eq.{estilo_id}", "prioridad": "eq.1"}
+            )
+            
+            if estilo_response.status_code != 200:
+                raise HTTPException(status_code=500, detail="Could not fetch estilo")
+            
+            estilo_data = estilo_response.json()
+            
+            if not estilo_data:
+                raise HTTPException(status_code=404, detail="Estilo not found")
+            
+            # Get available colors for this estilo (from inventory with terex1 > 0)
+            inventory_response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/inventario1",
+                headers=HEADERS,
+                params={"select": "color_id", "estilo_id": f"eq.{estilo_id}", "terex1": "gt.0"}
+            )
+            
+            if inventory_response.status_code != 200:
+                raise HTTPException(status_code=500, detail="Could not fetch inventory")
+            
+            inventory_data = inventory_response.json()
+            color_ids = list(set([item['color_id'] for item in inventory_data if item['color_id']]))
+            
+            if not color_ids:
+                return {"estilo": estilo_data[0], "colors": []}
+            
+            # Get color details
+            colors_response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/inventario_colores",
+                headers=HEADERS,
+                params={"select": "id,color", "id": f"in.({','.join(map(str, color_ids))})", "order": "color"}
+            )
+            
+            if colors_response.status_code != 200:
+                raise HTTPException(status_code=500, detail="Could not fetch colors")
+            
+            colors_data = colors_response.json()
+            
+            # Get images for this estilo
+            images_response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/image_uploads",
+                headers=HEADERS,
+                params={
+                    "select": "id,color_id,file_name,public_url,description,created_at",
+                    "estilo_id": f"eq.{estilo_id}",
+                    "order": "created_at.desc"
+                }
+            )
+            
+            # Group images by color_id
+            images_by_color = {}
+            if images_response.status_code == 200:
+                for image in images_response.json():
+                    color_id = image['color_id']
+                    if color_id not in images_by_color:
+                        images_by_color[color_id] = []
+                    images_by_color[color_id].append(image)
+            
+            # Build colors with images
+            colors = []
+            for color in colors_data:
+                color_id = color['id']
+                color_images = images_by_color.get(color_id, [])
+                
+                colors.append({
+                    "id": color_id,
+                    "color": color['color'],
+                    "image_count": len(color_images),
+                    "images": color_images
+                })
+            
+            return {"estilo": estilo_data[0], "colors": colors}
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching images: {str(e)}")
+        logger.error(f"Error in get_colors_with_images: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/upload-image")
-async def upload_image(
-    estilo_id: int = Form(...),
-    color_id: int = Form(...),
-    description: Optional[str] = Form(None),
-    file: UploadFile = File(...)
-):
-    """Upload an image file"""
+@app.delete("/api/image/{image_id}")
+async def delete_image(image_id: int):
+    """Delete image from database"""
     try:
-        # Validate file
-        if not ImageService.validate_image(file):
-            raise HTTPException(status_code=400, detail="Invalid image file type")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Check if image exists first
+            check_response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/image_uploads",
+                headers=HEADERS,
+                params={"select": "id", "id": f"eq.{image_id}"}
+            )
+            
+            if check_response.status_code == 200:
+                check_data = check_response.json()
+                if not check_data:
+                    raise HTTPException(status_code=404, detail="Image not found")
+            
+            # Delete the image
+            delete_response = await client.delete(
+                f"{SUPABASE_URL}/rest/v1/image_uploads",
+                headers=HEADERS,
+                params={"id": f"eq.{image_id}"}
+            )
+            
+            if delete_response.status_code not in [200, 204]:
+                raise HTTPException(status_code=500, detail="Failed to delete image")
+            
+            return {"message": "Image deleted successfully"}
+    
+    except Exception as e:
+        logger.error(f"Error deleting image: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/test-estilo/{estilo_id}")
+async def test_specific_estilo(estilo_id: int):
+    """Debug sales for specific estilo"""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            three_months_ago = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
+            
+            # All time sales
+            all_time_response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/ventas_terex1",
+                headers=HEADERS,
+                params={"select": "estilo_id,qty,fecha", "estilo_id": f"eq.{estilo_id}"}
+            )
+            
+            all_time_data = all_time_response.json() if all_time_response.status_code == 200 else []
+            all_time_total = sum(record.get('qty', 0) for record in all_time_data)
+            
+            # Recent sales
+            recent_response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/ventas_terex1",
+                headers=HEADERS,
+                params={
+                    "select": "estilo_id,qty,fecha",
+                    "estilo_id": f"eq.{estilo_id}",
+                    "fecha": f"gte.{three_months_ago}"
+                }
+            )
+            
+            recent_data = recent_response.json() if recent_response.status_code == 200 else []
+            recent_total = sum(record.get('qty', 0) for record in recent_data)
+            
+            return {
+                "estilo_id": estilo_id,
+                "sql_equivalent": f"SELECT SUM(qty) FROM ventas_terex1 WHERE estilo_id={estilo_id} AND fecha>='{three_months_ago}'",
+                "date_filter": three_months_ago,
+                "all_time_sales": {
+                    "total_qty": all_time_total,
+                    "record_count": len(all_time_data),
+                    "sample_records": all_time_data[:5]
+                },
+                "last_3_months_sales": {
+                    "total_qty": recent_total,
+                    "record_count": len(recent_data),
+                    "all_records": recent_data
+                }
+            }
+    
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/api/debug-sales-simple")
+async def debug_sales_simple():
+    """Simple sales debug"""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            three_months_ago = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
+            
+            # Test estilo 9
+            estilo_9_response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/ventas_terex1",
+                headers=HEADERS,
+                params={
+                    "select": "estilo_id,qty,fecha",
+                    "estilo_id": "eq.9",
+                    "fecha": f"gte.{three_months_ago}"
+                }
+            )
+            
+            estilo_9_data = estilo_9_response.json() if estilo_9_response.status_code == 200 else []
+            estilo_9_total = sum(record.get('qty', 0) for record in estilo_9_data)
+            
+            # Test estilo 139
+            estilo_139_response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/ventas_terex1",
+                headers=HEADERS,
+                params={
+                    "select": "estilo_id,qty,fecha",
+                    "estilo_id": "eq.139",
+                    "fecha": f"gte.{three_months_ago}"
+                }
+            )
+            
+            estilo_139_data = estilo_139_response.json() if estilo_139_response.status_code == 200 else []
+            estilo_139_total = sum(record.get('qty', 0) for record in estilo_139_data)
+            
+            # Get all recent sales
+            all_recent_response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/ventas_terex1",
+                headers=HEADERS,
+                params={
+                    "select": "estilo_id,qty,fecha",
+                    "fecha": f"gte.{three_months_ago}",
+                    "limit": "100"
+                }
+            )
+            
+            all_recent_data = all_recent_response.json() if all_recent_response.status_code == 200 else []
+            
+            # Group by estilo_id
+            totals_by_estilo = {}
+            for record in all_recent_data:
+                estilo_id = record.get('estilo_id')
+                qty = record.get('qty', 0)
+                if estilo_id is not None and qty is not None:
+                    totals_by_estilo[estilo_id] = totals_by_estilo.get(estilo_id, 0) + qty
+            
+            return {
+                "date_filter": three_months_ago,
+                "estilo_9": {
+                    "total_qty": estilo_9_total,
+                    "records": estilo_9_data
+                },
+                "estilo_139": {
+                    "total_qty": estilo_139_total,
+                    "records": estilo_139_data
+                },
+                "all_sales_summary": {
+                    "total_records": len(all_recent_data),
+                    "totals_by_estilo": totals_by_estilo
+                }
+            }
+    
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/api/debug-main-endpoint")
+async def debug_main_endpoint():
+    """Debug the main estilos endpoint to see why sales aren't showing"""
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            three_months_ago = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
+            
+            # Get estilos
+            estilos_response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/inventario_estilos",
+                headers=HEADERS,
+                params={"select": "id,nombre", "prioridad": "eq.1", "order": "nombre"}
+            )
+            estilos_data = estilos_response.json()
+            
+            # Get sales
+            sales_response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/ventas_terex1",
+                headers=HEADERS,
+                params={
+                    "select": "estilo_id,qty",
+                    "fecha": f"gte.{three_months_ago}"
+                }
+            )
+            
+            sales_data = sales_response.json() if sales_response.status_code == 200 else []
+            
+            # Process sales
+            sales_totals = {}
+            for sale in sales_data:
+                estilo_id = sale.get('estilo_id')
+                qty = sale.get('qty', 0)
+                if estilo_id is not None and qty is not None:
+                    estilo_id = int(estilo_id)
+                    sales_totals[estilo_id] = sales_totals.get(estilo_id, 0) + qty
+            
+            # Check specific estilos
+            estilo_139_data = None
+            estilo_9_data = None
+            
+            for estilo in estilos_data:
+                estilo_id = int(estilo['id'])
+                if estilo_id == 139:
+                    estilo_139_data = {
+                        "id": estilo_id,
+                        "nombre": estilo['nombre'],
+                        "sales_from_totals": sales_totals.get(estilo_id, 0)
+                    }
+                elif estilo_id == 9:
+                    estilo_9_data = {
+                        "id": estilo_id,
+                        "nombre": estilo['nombre'],
+                        "sales_from_totals": sales_totals.get(estilo_id, 0)
+                    }
+            
+            return {
+                "debug_info": {
+                    "date_filter": three_months_ago,
+                    "total_sales_records": len(sales_data),
+                    "total_estilos": len(estilos_data),
+                    "sales_totals_keys": list(sales_totals.keys()),
+                    "sales_totals_sample": dict(list(sales_totals.items())[:5])
+                },
+                "estilo_139": estilo_139_data,
+                "estilo_9": estilo_9_data,
+                "sales_for_139": sales_totals.get(139, "NOT FOUND"),
+                "sales_for_9": sales_totals.get(9, "NOT FOUND")
+            }
+    
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/api/test-table-access")
+async def test_table_access():
+    """Test basic table access"""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Test ventas_terex1
+            ventas_response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/ventas_terex1",
+                headers=HEADERS,
+                params={"select": "*", "limit": "1"}
+            )
+            
+            result = {
+                "ventas_terex1": {
+                    "accessible": ventas_response.status_code == 200,
+                    "status_code": ventas_response.status_code,
+                }
+            }
+            
+            if ventas_response.status_code == 200:
+                data = ventas_response.json()
+                result["ventas_terex1"]["sample_data"] = data
+                result["ventas_terex1"]["columns"] = list(data[0].keys()) if data else []
+            else:
+                result["ventas_terex1"]["error"] = ventas_response.text[:500]
+            
+            return result
+            
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/api/compare-queries")
+async def compare_queries():
+    """Compare individual vs bulk sales queries for estilo 139"""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            three_months_ago = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
+            
+            # Method 1: Individual query for estilo 139 (this works)
+            individual_response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/ventas_terex1",
+                headers=HEADERS,
+                params={
+                    "select": "estilo_id,qty,fecha",
+                    "estilo_id": "eq.139",
+                    "fecha": f"gte.{three_months_ago}"
+                }
+            )
+            
+            individual_data = individual_response.json() if individual_response.status_code == 200 else []
+            individual_total = sum(record.get('qty', 0) for record in individual_data)
+            
+            # Method 2: Bulk query with same date filter (this doesn't include 139)
+            bulk_response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/ventas_terex1",
+                headers=HEADERS,
+                params={
+                    "select": "estilo_id,qty,fecha",
+                    "fecha": f"gte.{three_months_ago}"
+                }
+            )
+            
+            bulk_data = bulk_response.json() if bulk_response.status_code == 200 else []
+            
+            # Check if estilo 139 exists in bulk data
+            estilo_139_in_bulk = [record for record in bulk_data if record.get('estilo_id') == 139]
+            
+            # Count unique estilo_ids in bulk
+            unique_estilos_in_bulk = set(record.get('estilo_id') for record in bulk_data if record.get('estilo_id'))
+            
+            return {
+                "date_filter": three_months_ago,
+                "individual_query": {
+                    "status_code": individual_response.status_code,
+                    "total_records": len(individual_data),
+                    "total_qty": individual_total,
+                    "sample_dates": [r.get('fecha') for r in individual_data[:5]]
+                },
+                "bulk_query": {
+                    "status_code": bulk_response.status_code,
+                    "total_records": len(bulk_data),
+                    "estilo_139_records_found": len(estilo_139_in_bulk),
+                    "estilo_139_sample": estilo_139_in_bulk[:3],
+                    "unique_estilos_count": len(unique_estilos_in_bulk),
+                    "has_estilo_139": 139 in unique_estilos_in_bulk
+                },
+                "conclusion": "individual works, bulk doesn't include 139" if individual_total > 0 and len(estilo_139_in_bulk) == 0 else "both queries consistent"
+            }
+    
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/nota", response_class=HTMLResponse)
+async def nota(request: Request):
+    return templates.TemplateResponse("nota.html", {"request": request})
+
+
+
+
+
+def _now_strs():
+    now = datetime.now()
+    fecha = f"{now.year:04d}-{now.month:02d}-{now.day:02d}"
+    hora  = f"{now.hour:02d}:{now.minute:02d}:{now.second:02d}"
+    return now, fecha, hora
+
+def _build_receipt_pdf(items: list[dict], total: float, order_id: int) -> io.BytesIO:
+    width = 58 * mm
+    height = 200 * mm
+    margin = 2 * mm
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(width, height))
+
+    def header():
+        y = height - margin
+        c.setFont("Helvetica-Bold", 10); c.drawCentredString(width/2, y, "TICKET DE VENTA"); y -= 12
+        c.setFont("Helvetica-Bold", 9);  c.drawCentredString(width/2, y, f"Orden #{order_id}"); y -= 10
+        _, fecha, hora = _now_strs()
+        c.setFont("Helvetica", 8); c.drawString(margin, y, f"Fecha: {fecha}"); y -= 10
+        c.drawString(margin, y, f"Hora: {hora}"); y -= 6
+        c.setStrokeColor(colors.black); c.line(margin, y, width - margin, y); y -= 10
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(margin, y, "Cant")
+        c.drawString(margin + 20, y, "Descripción")
+        c.drawRightString(width - margin, y, "Precio")
+        y -= 10
+        c.setFont("Helvetica", 8)
+        return y
+
+    y = header()
+    for it in items:
+        if y < 25 * mm:
+            c.showPage()
+            y = header()
+        qty = str(it["qty"]); name = str(it["name"]); price = it["price"]; sub = it["subtotal"]
+        c.drawString(margin, y, qty)
+        c.drawString(margin + 20, y, (name[:28] + ("…" if len(name) > 28 else "")))
+        c.drawRightString(width - margin, y, f"${price:0.2f}"); y -= 10
+        c.drawRightString(width - margin, y, f"Subtotal: ${sub:0.2f}"); y -= 12
+
+    y -= 4; c.line(margin, y, width - margin, y); y -= 12
+    c.setFont("Helvetica-Bold", 9); c.drawString(margin, y, "TOTAL:"); c.drawRightString(width - margin, y, f"${total:0.2f}"); y -= 14
+    c.setFont("Helvetica", 8); c.drawCentredString(width/2, y, "¡Gracias por su compra!"); y -= 10
+    try:
+        bc = code128.Code128(f"ORDER-{order_id}", barHeight=12 * mm, barWidth=0.35)
+        x = (width - bc.width) / 2
+        bc.drawOn(c, x, max(margin, y - 16 * mm))
+    except Exception:
+        pass
+
+    c.showPage(); c.save(); buf.seek(0); return buf
+
+
+
+
+
+
+
+
+
+# Add these new endpoints to your FastAPI application
+
+@app.get("/api/search_barcode")
+async def api_search_barcode(barcode: str):
+    """Enhanced barcode search that handles both products and loyalty barcodes"""
+    
+    # Check if this is a customer loyalty barcode (starts with 8000)
+    if barcode.startswith('8000') and len(barcode) == 13:
+        return await handle_loyalty_barcode(barcode)
+    
+    # Handle regular product barcode search
+    rows = await supabase_request(
+        method="GET",
+        endpoint="/rest/v1/inventario1",
+        params={"select": "*", "barcode": f"eq.{barcode}", "limit": 1}
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+    row = rows[0]
+    name = row.get("name") or row.get("modelo") or ""
+    price = float(row.get("precio") or 0.0)
+    return {"name": name, "price": price, "codigo": barcode}
+
+
+async def handle_loyalty_barcode(barcode: str):
+    try:
+        print(f"DEBUG: Looking up loyalty barcode: {barcode}", flush=True)
+
+        barcode_result = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/user_barcodes",
+            params={
+                "select": "user_email,status",
+                "barcode": f"eq.{barcode}",
+                "status": "eq.active",
+                "limit": "1"
+            }
+        )
+        print(f"DEBUG: Barcode query returned: {barcode_result}", flush=True)
+
+        if not barcode_result:
+            print(f"DEBUG: Barcode {barcode} not found in database", flush=True)
+            raise HTTPException(status_code=404, detail="Código de cliente no válido - barcode no registrado")
+
+        user_email = barcode_result[0]["user_email"]
+        print(f"DEBUG: Found user email: {user_email}", flush=True)
+
+        rewards_result = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/loyalty_rewards",
+            params={
+                "select": "reward_amount,status,id",
+                "email": f"eq.{user_email}",
+                "status": "eq.active"
+            }
+        )
+        print(f"DEBUG: Found {len(rewards_result)} active rewards for {user_email}", flush=True)
+
+        total_available = sum(float(r["reward_amount"]) for r in rewards_result)
+        print(f"DEBUG: Total available: {total_available}", flush=True)
+
+        if total_available <= 0:
+            return {
+                "name": f"CLIENTE - {user_email} (Sin saldo)",
+                "price": 0.00,
+                "codigo": barcode,
+                "is_loyalty": True,
+                "customer_email": user_email,
+                "available_balance": 0.00
+            }
+
+        return {
+            "name": f"DESCUENTO - {user_email}",
+            "price": -total_available,
+            "codigo": barcode,
+            "is_loyalty": True,
+            "customer_email": user_email,
+            "available_balance": total_available
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ERROR in handle_loyalty_barcode: {str(e)}", flush=True)
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error procesando código de cliente: {str(e)}")
+
+
+@app.post("/api/admin/create-missing-barcodes")
+async def create_missing_barcodes():
+    try:
+        rewards_emails = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/loyalty_rewards",
+            params={
+                "select": "email",
+                "status": "eq.active"
+            }
+        )
+        unique_emails = sorted({(r.get("email") or "").strip().lower() for r in rewards_emails if r.get("email")})
+        created_count = 0
+
+        for email in unique_emails:
+            # ensure creates only if missing
+            barcode, existed = await ensure_user_barcode(email)
+            if not existed:
+                created_count += 1
+                print(f"Created barcode {barcode} for {email}")
+
+        return {
+            "success": True,
+            "message": f"Created {created_count} barcodes for existing customers",
+            "total_emails_checked": len(unique_emails)
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating barcodes: {str(e)}")
+
+
+
+
+@app.get("/api/admin/test-barcode/{email}")
+async def test_barcode_generation(email: str):
+    barcode = generate_user_barcode_from_email(email)
+    return {
+        "email": _normalize_email(email),
+        "generated_barcode": barcode,
+        "explanation": "This barcode would be auto-generated for this email"
+    }
+
+@app.post("/api/loyalty/redeem")
+async def redeem(payload: dict):
+    token = payload.get("token")
+    if not token:
+        raise HTTPException(status_code=400, detail="Token is required")
+
+    # You already have this function in your app — placeholder here:
+    email = await resolve_token_to_email(token)  # <-- implement/keep your logic
+    email = _normalize_email(email)
+
+    # Ensure barcode exists the first time this user redeems
+    await ensure_user_barcode(email)
+
+    # Continue with your reward flow (placeholder)
+    reward = await add_reward_for_email(email, payload)  # <-- your existing logic
+
+    return {"success": True, "email": email, "reward": reward}
+
+
+@app.post("/api/user/get-or-create-barcode")
+async def get_or_create_barcode(request: dict):
+    email = _normalize_email(request.get("email"))
+    barcode, existed = await ensure_user_barcode(email)
+    return {"success": True, "barcode": barcode, "message": "Existing" if existed else "Created"}
+
+
+
+def generate_user_barcode_from_email(email: str) -> str:
+    """Deterministic 13-digit barcode (prefix 8000) from email with EAN-13 check digit."""
+    email_norm = _normalize_email(email)
+    hash_hex = hashlib.md5(email_norm.encode("utf-8")).hexdigest()
+
+    # Collect digits from hex; if fewer than 8, map hex letters to digits (a=10->0, b=11->1, etc.)
+    digits = "".join(filter(str.isdigit, hash_hex))
+    if len(digits) < 8:
+        for ch in hash_hex:
+            if not ch.isdigit():
+                digits += str((ord(ch) - ord("a") + 10) % 10) if ch.isalpha() else str(ord(ch) % 10)
+            if len(digits) >= 8:
+                break
+
+    eight = digits[:8]
+    code = _build_barcode_from_eight(eight)
+    print(f"DEBUG: Generated EAN-13 barcode for {email_norm}: {code}", flush=True)
+    return code
+
+
+async def ensure_user_barcode(email: str) -> tuple[str, bool]:
+    """
+    Ensure there's a row in user_barcodes for this email.
+    Returns (barcode, existed_already).
+    Raises HTTPException on failure with details from Supabase.
+    """
+    email = _normalize_email(email)
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+
+    # 1) Check existing (any status)
+    existing = await supabase_request(
+        method="GET",
+        endpoint="/rest/v1/user_barcodes",
+        params={
+            "select": "barcode,status",
+            "user_email": f"eq.{email}",
+            "limit": "1"
+        }
+    )
+    if isinstance(existing, dict) and existing.get("error"):
+        raise HTTPException(status_code=502, detail=f"Supabase read error: {existing}")
+    if existing:
+        return existing[0]["barcode"], True
+
+    # 2) Generate; collision check
+    new_barcode = generate_user_barcode_from_email(email)
+    collision = await supabase_request(
+        method="GET",
+        endpoint="/rest/v1/user_barcodes",
+        params={"select": "id", "barcode": f"eq.{new_barcode}", "limit": "1"}
+    )
+    if isinstance(collision, dict) and collision.get("error"):
+        raise HTTPException(status_code=502, detail=f"Supabase read error: {collision}")
+    if collision:
+        ts2 = str(int(time.time()))[-2:]
+        base_eight = new_barcode[4:12]              # 8-digit “core”
+        new_eight = f"{base_eight[:6]}{ts2}"
+        new_barcode = _build_barcode_from_eight(new_eight)
+
+    # 3) Insert
+    payload = {
+        "user_email": email,
+        "barcode": new_barcode,
+        "status": "active",
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    result = await supabase_request(
+        method="POST",
+        endpoint="/rest/v1/user_barcodes",
+        json_data=payload,
+        # If your supabase_request supports headers, prefer returning row to see errors quickly:
+        # headers={"Prefer": "return=representation"}
+    )
+
+    # Basic sanity/error surface (adapt to your supabase_request implementation)
+    if isinstance(result, dict) and result.get("error"):
+        # Common causes: RLS policy missing, check constraint failed (validate_barcode_format)
+        raise HTTPException(status_code=400, detail=f"Insert failed: {result}")
+
+    # Some wrappers return [] on return=minimal; re-read to confirm
+    confirm = await supabase_request(
+        method="GET",
+        endpoint="/rest/v1/user_barcodes",
+        params={"select": "barcode", "user_email": f"eq.{email}", "limit": "1"}
+    )
+    if not confirm:
+        raise HTTPException(status_code=500, detail="Insert appeared to succeed, but row not found. Check RLS policies and constraints.")
+    return confirm[0]["barcode"], False
+
+
+
+
+async def create_barcode_for_existing_customer(email: str):
+    try:
+        barcode, _ = await ensure_user_barcode(email)
+        print(f"Created/ensured barcode {barcode} for existing customer {email}", flush=True)
+        return barcode
+    except Exception as e:
+        print(f"Error creating barcode for {email}: {e}", flush=True)
+        return None
+
+
+
+@app.post("/api/save")
+async def api_save(payload: SavePayload):
+    """Enhanced save function that processes loyalty deductions"""
+    if not payload.products:
+        raise HTTPException(status_code=400, detail="No products provided")
+
+    next_order_id = await get_next_order_id()
+    now = datetime.now()
+    fecha = now.strftime("%Y-%m-%d")
+    hora = now.strftime("%H:%M:%S")
+    
+    items_for_ticket = []
+    loyalty_deductions = []  # Track loyalty deductions
+    
+    for p in payload.products:
+        # Check if this is a loyalty barcode (starts with 8000)
+        if p.codigo.startswith('8000') and len(p.codigo) == 13:
+            # Process loyalty deduction
+            loyalty_result = await process_loyalty_deduction(p, next_order_id, fecha, hora)
+            loyalty_deductions.append(loyalty_result)
+            
+            # Add to ticket items
+            items_for_ticket.append({
+                "qty": p.qty,
+                "name": p.name,
+                "price": p.price,
+                "subtotal": p.qty * p.price
+            })
+            continue
         
-        # Read file content
-        file_content = await file.read()
-        
-        # Check file size
-        if len(file_content) > MAX_FILE_SIZE:
-            raise HTTPException(status_code=400, detail="File too large")
-        
-        # Compress image
-        compressed_content = await ImageService.compress_image(file_content)
-        
-        # Generate unique filename
-        timestamp = int(datetime.now().timestamp() * 1000)
-        file_extension = file.filename.split('.')[-1].lower()
-        unique_filename = f"image_{timestamp}.{file_extension}"
-        file_path = f"estilo_{estilo_id}/color_{color_id}/{unique_filename}"
-        
-        # Upload to Supabase Storage
-        upload_response = supabase.storage.from_(IMAGE_BUCKET).upload(
-            file_path,
-            compressed_content,
-            file_options={"content-type": ImageService.get_content_type(file.filename)}
+        # Regular product processing
+        inv_rows = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/inventario1",
+            params={
+                "select": "modelo,modelo_id,estilo,estilo_id,terex1",
+                "barcode": f"eq.{p.codigo}",
+                "limit": "1",
+            },
         )
         
-        if upload_response.get('error'):
-            raise HTTPException(status_code=500, detail=f"Storage upload failed: {upload_response['error']}")
+        if not inv_rows:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Producto con barcode {p.codigo} no existe en inventario1"
+            )
         
-        # Get public URL
-        public_url = supabase.storage.from_(IMAGE_BUCKET).get_public_url(file_path)
+        inv = inv_rows[0]
+
+        # Insert into ventas_terex1
+        record = {
+            "qty": p.qty,
+            "name": p.name,
+            "name_id": p.codigo,
+            "price": p.price,
+            "fecha": fecha,
+            "hora": hora,
+            "order_id": next_order_id,
+            "modelo": inv.get("modelo", ""),
+            "modelo_id": inv.get("modelo_id", ""),
+            "estilo": inv.get("estilo", ""),
+            "estilo_id": inv.get("estilo_id", ""),
+        }
+
+        await supabase_request(
+            method="POST",
+            endpoint="/rest/v1/ventas_terex1",
+            json_data=record,
+        )
+
+        # Update inventory
+        current_qty = int(inv.get("terex1") or 0)
+        new_qty = current_qty - p.qty
         
-        # Save record to database
-        db_response = supabase.table('image_uploads').insert({
-            'estilo_id': estilo_id,
-            'color_id': color_id,
-            'file_name': file.filename,
-            'file_path': file_path,
-            'public_url': public_url,
-            'description': description.strip() if description else None,
-            'content_type': ImageService.get_content_type(file.filename),
-            'file_size': len(compressed_content),
-        }).execute()
+        await supabase_request(
+            method="PATCH",
+            endpoint=f"/rest/v1/inventario1?barcode=eq.{p.codigo}",
+            json_data={"terex1": new_qty},
+        )
+
+        # Add to ticket items
+        items_for_ticket.append({
+            "qty": p.qty,
+            "name": p.name,
+            "price": p.price,
+            "subtotal": p.qty * p.price
+        })
+
+    # Calculate total
+    total = sum(i["subtotal"] for i in items_for_ticket)
+
+    # Generate redemption token and PDF
+    redemption_token = generate_redemption_token()
+    await store_redemption_token(next_order_id, redemption_token, total)
+    
+    # Use your existing QR PDF function, not the loyalty one
+    pdf_buf = _build_receipt_pdf_with_qr(items_for_ticket, total, next_order_id, redemption_token)
+    
+    filename = f"ticket_{next_order_id}_{int(datetime.now().timestamp()*1000)}.pdf"
+    
+    return StreamingResponse(
+        pdf_buf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+async def process_loyalty_deduction(product, order_id: int, fecha: str, hora: str):
+    """Process loyalty points deduction and record in ventas_terex1"""
+    try:
+        barcode = product.codigo
+        deduction_amount = abs(product.price)  # Make sure it's positive
+        customer_email = getattr(product, 'customer_email', 'unknown@email.com')
         
-        if db_response.data:
-            return JSONResponse(content={
-                "success": True,
-                "message": "Image uploaded successfully",
-                "image": db_response.data[0]
-            })
+        # Get user's active rewards using supabase_request
+        active_rewards = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/loyalty_rewards",
+            params={
+                "select": "id,reward_amount",
+                "email": f"eq.{customer_email}",
+                "status": "eq.active",
+                "order": "created_at.asc"  # FIFO order
+            }
+        )
+        
+        if not active_rewards:
+            raise HTTPException(
+                status_code=400, 
+                detail="No hay recompensas disponibles para este cliente"
+            )
+        
+        total_available = sum(float(r["reward_amount"]) for r in active_rewards)
+        
+        if deduction_amount > total_available:
+            deduction_amount = total_available
+        
+        # Process rewards deduction (FIFO) using supabase_request
+        remaining_to_deduct = deduction_amount
+        deducted_reward_ids = []
+        
+        for reward in active_rewards:
+            if remaining_to_deduct <= 0:
+                break
+                
+            reward_amount = float(reward["reward_amount"])
+            reward_id = reward["id"]
+            
+            if reward_amount <= remaining_to_deduct:
+                # Fully deduct this reward
+                await supabase_request(
+                    method="PATCH",
+                    endpoint=f"/rest/v1/loyalty_rewards?id=eq.{reward_id}",
+                    json_data={
+                        "status": "redeemed",
+                        "redeemed_at": datetime.utcnow().isoformat()
+                    }
+                )
+                
+                remaining_to_deduct -= reward_amount
+                deducted_reward_ids.append(reward_id)
+            else:
+                # Partially deduct this reward
+                await supabase_request(
+                    method="PATCH",
+                    endpoint=f"/rest/v1/loyalty_rewards?id=eq.{reward_id}",
+                    json_data={
+                        "reward_amount": reward_amount - remaining_to_deduct,
+                        "updated_at": datetime.utcnow().isoformat()
+                    }
+                )
+                
+                remaining_to_deduct = 0
+        
+        # Record the loyalty deduction in ventas_terex1 using supabase_request
+        loyalty_record = {
+            "qty": product.qty,
+            "name": f"DESCUENTO LEALTAD - {customer_email}",
+            "name_id": barcode,
+            "price": -deduction_amount,  # Negative price for discount
+            "fecha": fecha,
+            "hora": hora,
+            "order_id": order_id,
+            "modelo": "LOYALTY_DEDUCTION",
+            "modelo_id": 0,
+            "estilo": "DISCOUNT",
+            "estilo_id": 0,
+            "cliente": customer_email,
+            "subtotal": -deduction_amount * product.qty,
+        }
+        
+        await supabase_request(
+            method="POST",
+            endpoint="/rest/v1/ventas_terex1",
+            json_data=loyalty_record,
+        )
+        
+        # Log in barcode_redemptions table using supabase_request
+        redemption_log = {
+            "user_email": customer_email,
+            "barcode": barcode,
+            "redeemed_amount": deduction_amount,
+            "purchase_total": 0,  # This is a discount, not a purchase
+            "order_id": order_id,
+            "redeemed_at": datetime.utcnow().isoformat()
+        }
+        
+        await supabase_request(
+            method="POST",
+            endpoint="/rest/v1/barcode_redemptions",
+            json_data=redemption_log
+        )
+        
+        return {
+            "customer_email": customer_email,
+            "deducted_amount": deduction_amount,
+            "remaining_balance": total_available - deduction_amount,
+            "barcode": barcode
+        }
+        
+    except Exception as e:
+        # Add detailed error logging
+        print(f"Error in process_loyalty_deduction: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error procesando descuento de lealtad: {str(e)}"
+        )
+
+
+def _build_receipt_pdf_with_loyalty(items: list[dict], total: float, order_id: int, 
+                                   redemption_token: str, loyalty_deductions: list) -> io.BytesIO:
+    """Enhanced PDF generation that includes loyalty information and QR code"""
+    width = 58 * mm
+    height = 200 * mm
+    margin = 2 * mm
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(width, height))
+
+    def header():
+        y = height - margin
+        c.setFont("Helvetica-Bold", 10)
+        c.drawCentredString(width/2, y, "TICKET DE VENTA")
+        y -= 12
+        
+        c.setFont("Helvetica-Bold", 9)
+        c.drawCentredString(width/2, y, f"Orden #{order_id}")
+        y -= 10
+        
+        now = datetime.now()
+        fecha = f"{now.year:04d}-{now.month:02d}-{now.day:02d}"
+        hora = f"{now.hour:02d}:{now.minute:02d}:{now.second:02d}"
+        c.setFont("Helvetica", 8)
+        c.drawString(margin, y, f"Fecha: {fecha}")
+        y -= 10
+        c.drawString(margin, y, f"Hora: {hora}")
+        y -= 6
+        
+        # Add loyalty information if present
+        if loyalty_deductions:
+            c.setFont("Helvetica-Bold", 8)
+            c.drawString(margin, y, "DESCUENTOS APLICADOS:")
+            y -= 10
+            c.setFont("Helvetica", 7)
+            for deduction in loyalty_deductions:
+                c.drawString(margin, y, f"Cliente: {deduction['customer_email'][:25]}")
+                y -= 8
+                c.drawString(margin, y, f"Descuento: ${deduction['deducted_amount']:.2f}")
+                y -= 10
+        
+        c.setStrokeColor(colors.black)
+        c.line(margin, y, width - margin, y)
+        y -= 10
+        
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(margin, y, "Cant")
+        c.drawString(margin + 20, y, "Descripción")
+        c.drawRightString(width - margin, y, "Precio")
+        y -= 10
+        c.setFont("Helvetica", 8)
+        return y
+
+    y = header()
+    
+    for item in items:
+        if y < 25 * mm:
+            c.showPage()
+            y = header()
+            
+        qty = str(item["qty"])
+        name = str(item["name"])
+        price = item["price"]
+        subtotal = item["subtotal"]
+        
+        c.drawString(margin, y, qty)
+        c.drawString(margin + 20, y, (name[:28] + ("…" if len(name) > 28 else "")))
+        c.drawRightString(width - margin, y, f"${price:0.2f}")
+        y -= 10
+        c.drawRightString(width - margin, y, f"Subtotal: ${subtotal:0.2f}")
+        y -= 12
+
+    y -= 4
+    c.line(margin, y, width - margin, y)
+    y -= 12
+    
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(margin, y, "TOTAL:")
+    c.drawRightString(width - margin, y, f"${total:0.2f}")
+    y -= 14
+    
+    c.setFont("Helvetica", 8)
+    c.drawCentredString(width/2, y, "¡Gracias por su compra!")
+    y -= 10
+    
+    # Add order barcode
+    try:
+        from reportlab.graphics.barcode import code128
+        bc = code128.Code128(f"ORDER-{order_id}", barHeight=12 * mm, barWidth=0.35)
+        x = (width - bc.width) / 2
+        bc.drawOn(c, x, max(margin, y - 16 * mm))
+        y -= 20
+    except Exception as e:
+        print(f"Error generating barcode: {e}")
+        y -= 5
+    
+    # Add QR Code for redemption
+    if redemption_token:
+        try:
+            import qrcode
+            from io import BytesIO as QRBytesIO
+            from PIL import Image
+            
+            # Create QR code
+            qr_data = f"https://teresalocal352.com/redeem?token={redemption_token}"
+            qr = qrcode.QRCode(version=1, box_size=2, border=1)
+            qr.add_data(qr_data)
+            qr.make(fit=True)
+            
+            qr_img = qr.make_image(fill_color="black", back_color="white")
+            
+            # Convert to bytes
+            qr_buffer = QRBytesIO()
+            qr_img.save(qr_buffer, format='PNG')
+            qr_buffer.seek(0)
+            
+            # Add QR code to PDF
+            qr_size = 20 * mm
+            qr_x = (width - qr_size) / 2
+            c.drawImage(qr_buffer, qr_x, max(margin, y - qr_size - 5 * mm), 
+                       width=qr_size, height=qr_size)
+            
+            y -= qr_size + 8 * mm
+            c.setFont("Helvetica", 7)
+            c.drawCentredString(width/2, y, "Escanea para canjear recompensas")
+            
+        except Exception as e:
+            print(f"Error generating QR code: {e}")
+            # Fallback: just show the redemption URL as text
+            c.setFont("Helvetica", 6)
+            c.drawCentredString(width/2, y, f"Token: {redemption_token[:20]}")
+
+    c.showPage()
+    c.save()
+    buf.seek(0)
+    return buf
+
+
+
+
+
+async def get_next_order_id():
+    """
+    Simple fix: Filter out NULL order_id values
+    """
+    try:
+        # Filter out NULL values and get the highest order_id
+        order_response = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/ventas_terex1",
+            params={
+                "select": "order_id",
+                "order_id": "not.is.null",  # This filters out NULL values
+                "order": "order_id.desc",
+                "limit": "1"
+            }
+        )
+        
+        print(f"DEBUG: order_response (filtered): {order_response}")
+        
+        if (order_response and 
+            len(order_response) > 0 and 
+            order_response[0].get('order_id') is not None):
+            
+            current_order_id = order_response[0]['order_id']
+            next_order_id = int(current_order_id) + 1
+            print(f"DEBUG: Found max order_id: {current_order_id}, next: {next_order_id}")
+            return next_order_id
         else:
-            raise HTTPException(status_code=500, detail="Database insert failed")
-    
-    except HTTPException:
-        raise
+            print("DEBUG: No valid order_ids found, starting with 1")
+            return 1
+            
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+        print(f"DEBUG: Exception: {e}")
+        return 1
+# Then in your main function, replace the order_id logic with:
+# next_order_id = await get_next_order_id()
 
-@app.delete("/api/delete-image/{image_id}")
-async def delete_image(image_id: int):
-    """Delete an image"""
+@app.get("/debug/orders")
+async def debug_orders():
     try:
-        # Get image record first
-        image_response = supabase.table('image_uploads').select('*').eq('id', image_id).execute()
+        # Get all order_ids to see what's there
+        all_orders = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/ventas_terex1",
+            params={
+                "select": "order_id,fecha,hora",
+                "order": "order_id.desc",
+                "limit": "10"
+            }
+        )
         
-        if not image_response.data:
-            raise HTTPException(status_code=404, detail="Image not found")
+        # Get max order_id using a different approach
+        max_order = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/ventas_terex1",
+            params={
+                "select": "order_id",
+                "order": "order_id.desc",
+                "limit": "1"
+            }
+        )
         
-        image_record = image_response.data[0]
-        file_path = image_record['file_path']
+        # Get count of records
+        count_result = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/ventas_terex1",
+            params={
+                "select": "count",
+                "head": "true"
+            }
+        )
         
-        # Delete from storage
-        storage_response = supabase.storage.from_(IMAGE_BUCKET).remove([file_path])
+        return {
+            "all_orders": all_orders,
+            "max_order": max_order,
+            "count": count_result,
+            "table_exists": True
+        }
         
-        # Delete from database (even if storage deletion fails)
-        db_response = supabase.table('image_uploads').delete().eq('id', image_id).execute()
+    except Exception as e:
+        return {
+            "error": str(e),
+            "table_exists": False
+        }
+
+
+def generate_redemption_token():
+    """Generate a secure token for the QR code"""
+    return secrets.token_urlsafe(32)
+
+async def store_redemption_token(order_id: int, token: str, total: float):
+    """Store redemption token in database for later redemption"""
+    try:
+        result = await supabase_request(
+            method="POST",
+            endpoint="/rest/v1/order_redemptions",
+            json_data={
+                "order_id": order_id,
+                "redemption_token": token,
+                "email": "",  # Will be filled when user redeems
+                "user_id": None,  # Will be filled when user redeems
+                "purchase_total": total  # Now using the column you added
+            }
+        )
+        print(f"DEBUG: Successfully stored redemption token for order {order_id}")
+        print(f"DEBUG: Stored token: {token[:20]}...")
+        print(f"DEBUG: Result: {result}")
+    except Exception as e:
+        print(f"ERROR storing redemption token: {e}")
+        import traceback
+        print(f"DEBUG: Full traceback: {traceback.format_exc()}")
+
+def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, redemption_token: str) -> io.BytesIO:
+    """Updated PDF generation with QR code - now takes redemption_token as parameter"""
+    width = 58 * mm
+    height = 210 * mm  # Slightly taller for QR code
+    margin = 2 * mm
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(width, height))
+
+    def header():
+        y = height - margin
+        c.setFont("Helvetica-Bold", 10); c.drawCentredString(width/2, y, "TICKET DE VENTA"); y -= 12
+        c.setFont("Helvetica-Bold", 9);  c.drawCentredString(width/2, y, f"Orden #{order_id}"); y -= 10
+        _, fecha, hora = _now_strs()
+        c.setFont("Helvetica", 8); c.drawString(margin, y, f"Fecha: {fecha}"); y -= 10
+        c.drawString(margin, y, f"Hora: {hora}"); y -= 6
+        c.setStrokeColor(colors.black); c.line(margin, y, width - margin, y); y -= 10
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(margin, y, "Cant")
+        c.drawString(margin + 20, y, "Descripción")
+        c.drawRightString(width - margin, y, "Precio")
+        y -= 10
+        c.setFont("Helvetica", 8)
+        return y
+
+    y = header()
+    
+    # Add items
+    for it in items:
+        if y < 40 * mm:  # More space needed for QR
+            c.showPage()
+            y = header()
+        qty = str(it["qty"]); name = str(it["name"]); price = it["price"]; sub = it["subtotal"]
+        c.drawString(margin, y, qty)
+        c.drawString(margin + 20, y, (name[:28] + ("…" if len(name) > 28 else "")))
+        c.drawRightString(width - margin, y, f"${price:0.2f}"); y -= 10
+        c.drawRightString(width - margin, y, f"Subtotal: ${sub:0.2f}"); y -= 12
+
+    y -= 4; c.line(margin, y, width - margin, y); y -= 12
+    c.setFont("Helvetica-Bold", 9); c.drawString(margin, y, "TOTAL:"); c.drawRightString(width - margin, y, f"${total:0.2f}"); y -= 14
+    
+    # Add loyalty program message
+    c.setFont("Helvetica", 7)
+    c.drawCentredString(width/2, y, "¡Obtén 1% de recompensa!")
+    y -= 8
+    c.drawCentredString(width/2, y, "Escanea el código QR:")
+    y -= 12
+
+    # Create QR Code
+    try:
+        # URL that points to your redeem page with the token
+        qr_url = f"https://teresalocal352.com/redeem.html?token={redemption_token}"
         
-        if db_response.data:
-            return JSONResponse(content={
-                "success": True,
-                "message": "Image deleted successfully"
+        # Generate QR code using reportlab
+        qr_widget = QrCodeWidget(qr_url)
+        qr_widget.barWidth = 22 * mm
+        qr_widget.barHeight = 22 * mm
+        
+        # Create drawing and add QR code
+        qr_drawing = Drawing(22 * mm, 22 * mm)
+        qr_drawing.add(qr_widget)
+        
+        # Center the QR code
+        x = (width - 22 * mm) / 2
+        y_qr = max(margin + 10, y - 22 * mm)
+        
+        # Render QR code on PDF
+        renderPDF.draw(qr_drawing, c, x, y_qr)
+        
+        print(f"DEBUG: Generated QR code with URL: {qr_url}")
+        
+    except Exception as e:
+        print(f"Error generating QR code: {e}")
+        # Fallback text
+        c.setFont("Helvetica", 6)
+        c.drawCentredString(width/2, y - 10, f"Token: {redemption_token[:16]}...")
+
+    c.setFont("Helvetica", 6)
+    c.drawCentredString(width/2, margin + 5, "¡Gracias por su compra!")
+
+    c.showPage(); c.save(); buf.seek(0); return buf
+
+async def get_order_total(order_id: int):
+    """Get total amount for an order from ventas_terex1"""
+    order_items = await supabase_request(
+        method="GET",
+        endpoint="/rest/v1/ventas_terex1",
+        params={
+            "select": "qty,price",
+            "order_id": f"eq.{order_id}"
+        }
+    )
+    
+    if not order_items:
+        raise Exception("Orden no encontrada")
+    
+    total = sum(item['qty'] * item['price'] for item in order_items)
+    return float(total)
+
+async def create_simple_loyalty_reward(order_id: int, email: str, 
+                                     purchase_amount: float, reward_amount: float):
+    """Create simple loyalty reward record"""
+    await supabase_request(
+        method="POST",
+        endpoint="/rest/v1/loyalty_rewards",
+        json_data={
+            "order_id": order_id,
+            "email": email,
+            "purchase_amount": purchase_amount,
+            "reward_amount": reward_amount,
+            "status": "active",
+            "user_id": None  # No user authentication for now
+        }
+    )
+
+async def mark_redemption_completed(redemption_token: str, email: str):
+    """Mark redemption as completed"""
+    await supabase_request(
+        method="PATCH",
+        endpoint=f"/rest/v1/order_redemptions?redemption_token=eq.{redemption_token}",
+        json_data={
+            "email": email
+        }
+    )
+
+# Endpoint to check user's total rewards (for testing)
+@app.get("/api/user/rewards/{email}")
+async def get_user_total_rewards(email: str):
+    """Get total available rewards for a user"""
+    try:
+        rewards = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/loyalty_rewards",
+            params={
+                "select": "reward_amount,status,created_at,order_id",
+                "email": f"eq.{email}",
+                "order": "created_at.desc"
+            }
+        )
+        
+        active_rewards = [r for r in rewards if r['status'] == 'active']
+        total_available = sum(r['reward_amount'] for r in active_rewards)
+        
+        return {
+            "email": email,
+            "total_available_rewards": total_available,
+            "active_rewards_count": len(active_rewards),
+            "all_rewards": rewards
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class SimpleRedeemRequest(BaseModel):
+    email: str
+    redemption_token: str
+
+# Add this to serve the redeem.html page
+@app.get("/redeem.html", response_class=HTMLResponse)
+async def redeem_page(request: Request):
+    return templates.TemplateResponse("redeem.html", {"request": request})
+
+
+@app.post("/api/redeem")
+async def simple_redeem_reward(payload: SimpleRedeemRequest):
+    try:
+        print(f"DEBUG: Redemption attempt for token: {payload.redemption_token[:16]}...")
+        print(f"DEBUG: Email: {payload.email}")
+        
+        # 1. Find the order associated with the redemption token
+        redemption_data = await get_simple_redemption_data(payload.redemption_token)
+        print(f"DEBUG: Found redemption data: {redemption_data}")
+        
+        # 2. Get order total from ventas_terex1
+        order_total = await get_order_total(redemption_data['order_id'])
+        print(f"DEBUG: Order total: {order_total}")
+        
+        # 3. Calculate reward (1% of purchase)
+        reward_amount = order_total * 0.01
+        print(f"DEBUG: Reward amount: {reward_amount}")
+        
+        # 4. Create simple loyalty reward record
+        await create_simple_loyalty_reward(
+            order_id=redemption_data['order_id'],
+            email=payload.email,
+            purchase_amount=order_total,
+            reward_amount=reward_amount
+        )
+        
+        # 5. Mark redemption as completed
+        await mark_redemption_completed(payload.redemption_token, payload.email)
+        
+        return {
+            "success": True,
+            "order_id": redemption_data['order_id'],
+            "total": order_total,
+            "reward_amount": reward_amount,
+            "email": payload.email
+        }
+        
+    except Exception as e:
+        print(f"Redeem error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+async def get_simple_redemption_data(redemption_token: str):
+    """Get order data from redemption token"""
+    print(f"DEBUG: Looking for redemption token: {redemption_token}")
+    
+    # First, let's see what tokens exist in the database
+    all_tokens = await supabase_request(
+        method="GET",
+        endpoint="/rest/v1/order_redemptions",
+        params={
+            "select": "redemption_token,order_id,email",
+            "limit": "5"
+        }
+    )
+    print(f"DEBUG: All tokens in database: {all_tokens}")
+    
+    redemption = await supabase_request(
+        method="GET",
+        endpoint="/rest/v1/order_redemptions",
+        params={
+            "select": "order_id,email,purchase_total",
+            "redemption_token": f"eq.{redemption_token}",
+            "limit": "1"
+        }
+    )
+    
+    print(f"DEBUG: Redemption query result: {redemption}")
+    
+    if not redemption:
+        raise Exception("Token de redención no válido o expirado")
+    
+    redemption_data = redemption[0]
+    
+    # Check if already redeemed (has email filled)
+    if redemption_data.get('email') and redemption_data.get('email').strip():
+        raise Exception("Esta recompensa ya ha sido canjeada")
+    
+    return redemption_data
+
+async def get_order_total(order_id: int):
+    """Get total amount for an order from ventas_terex1"""
+    order_items = await supabase_request(
+        method="GET",
+        endpoint="/rest/v1/ventas_terex1",
+        params={
+            "select": "qty,price",
+            "order_id": f"eq.{order_id}"
+        }
+    )
+    
+    if not order_items:
+        raise Exception("Orden no encontrada")
+    
+    total = sum(item['qty'] * item['price'] for item in order_items)
+    return float(total)
+
+async def create_simple_loyalty_reward(order_id: int, email: str, 
+                                     purchase_amount: float, reward_amount: float):
+    """Create simple loyalty reward record"""
+    await supabase_request(
+        method="POST",
+        endpoint="/rest/v1/loyalty_rewards",
+        json_data={
+            "order_id": order_id,
+            "email": email,
+            "purchase_amount": purchase_amount,
+            "reward_amount": reward_amount,
+            "status": "active",
+            "user_id": None  # No user authentication for now
+        }
+    )
+
+async def mark_redemption_completed(redemption_token: str, email: str):
+    """Mark redemption as completed"""
+    await supabase_request(
+        method="PATCH",
+        endpoint=f"/rest/v1/order_redemptions?redemption_token=eq.{redemption_token}",
+        json_data={
+            "email": email
+        }
+    )
+
+@app.get("/api/user/rewards/{email}")
+async def get_user_total_rewards(email: str):
+    """Get total available rewards for a user"""
+    try:
+        rewards = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/loyalty_rewards",
+            params={
+                "select": "reward_amount,status,created_at,order_id",
+                "email": f"eq.{email}",
+                "order": "created_at.desc"
+            }
+        )
+        
+        active_rewards = [r for r in rewards if r['status'] == 'active']
+        total_available = sum(r['reward_amount'] for r in active_rewards)
+        
+        return {
+            "email": email,
+            "total_available_rewards": total_available,
+            "active_rewards_count": len(active_rewards),
+            "all_rewards": rewards
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+
+def generate_session_token():
+    """Generate a session token for authenticated users"""
+    return secrets.token_urlsafe(32)
+
+@app.post("/api/auth/google")
+async def google_auth(payload: GoogleAuthRequest):
+    """Authenticate user with Google and create session"""
+    try:
+        print(f"DEBUG: Google auth attempt")
+        
+        # Verify Google token
+        user_info = await verify_google_token(payload.google_token)
+        print(f"DEBUG: Google user verified: {user_info['email']}")
+        
+        # Create or get user in your system
+        user = await create_or_get_user(user_info)
+        print(f"DEBUG: User created/retrieved: {user['id']}")
+        
+        # Generate session token
+        session_token = generate_session_token()
+        user_sessions[session_token] = {
+            "user_id": user["id"],
+            "email": user["email"],
+            "name": user["name"],
+            "expires_at": datetime.now() + timedelta(hours=24)
+        }
+        
+        print(f"DEBUG: Session created: {session_token[:16]}...")
+        print(f"DEBUG: Total active sessions: {len(user_sessions)}")
+        
+        return {
+            "success": True,
+            "session_token": session_token,
+            "user": {
+                "id": user["id"],
+                "email": user["email"],
+                "name": user["name"]
+            }
+        }
+        
+    except Exception as e:
+        print(f"Auth error: {e}")
+        import traceback
+        print(f"DEBUG: Full traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+async def verify_google_token(token: str):
+    """Verify Google JWT token and extract user info"""
+    try:
+        # Use Google's tokeninfo endpoint (simpler for development)
+        verify_response = requests.get(
+            f"https://oauth2.googleapis.com/tokeninfo?id_token={token}"
+        )
+        
+        if verify_response.status_code != 200:
+            raise Exception("Invalid Google token")
+            
+        user_data = verify_response.json()
+        
+        # Verify the token is for your app (add your Google Client ID here)
+        # if user_data.get("aud") != "YOUR_GOOGLE_CLIENT_ID":
+        #     raise Exception("Token not for this application")
+        
+        return {
+            "google_id": user_data["sub"],
+            "email": user_data["email"],
+            "name": user_data.get("name", ""),
+            "picture": user_data.get("picture", "")
+        }
+        
+    except Exception as e:
+        raise Exception(f"Google token verification failed: {e}")
+
+async def create_or_get_user(user_info: dict):
+    """Create or get user in your local users table"""
+    try:
+        # Check if user already exists
+        existing_user = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/users",
+            params={
+                "select": "*",
+                "email": f"eq.{user_info['email']}",
+                "limit": "1"
+            }
+        )
+        
+        if existing_user:
+            return existing_user[0]
+        
+        # Create new user
+        new_user_data = {
+            "email": user_info["email"],
+            "name": user_info["name"],
+            "google_id": user_info["google_id"],
+            "picture": user_info.get("picture", ""),
+            "created_at": datetime.now().isoformat()
+        }
+        
+        created_user = await supabase_request(
+            method="POST",
+            endpoint="/rest/v1/users",
+            json_data=new_user_data
+        )
+        
+        return created_user[0] if isinstance(created_user, list) else created_user
+        
+    except Exception as e:
+        raise Exception(f"Failed to create/get user: {e}")
+
+def get_current_user(session_token: str):
+    """Get current user from session token"""
+    if not session_token or session_token not in user_sessions:
+        return None
+    
+    session = user_sessions[session_token]
+    
+    # Check if session expired
+    if datetime.now() > session["expires_at"]:
+        del user_sessions[session_token]
+        return None
+    
+    return session
+
+# Updated redeem endpoint with authentication
+@app.post("/api/redeem/authenticated")
+async def authenticated_redeem_reward(payload: AuthenticatedRedeemRequest):
+    """Redeem reward with Google authentication"""
+    try:
+        # Verify Google token and get user info
+        user_info = await verify_google_token(payload.google_token)
+        
+        # Create or get user
+        user = await create_or_get_user(user_info)
+
+        # CREATE SESSION TOKEN HERE (add this section)
+        session_token = generate_session_token()
+        user_sessions[session_token] = {
+        "user_id": user["id"],
+        "email": user["email"],
+        "name": user["name"],
+        "expires_at": datetime.now() + timedelta(hours=24)
+        }
+
+        print(f"DEBUG: Session created in redeem: {session_token[:16]}...")
+        
+        # Get redemption data
+        redemption_data = await get_simple_redemption_data(payload.redemption_token)
+        
+        # Get order total and calculate reward
+        order_total = await get_order_total(redemption_data['order_id'])
+        reward_amount = order_total * 0.01
+        
+        # Create loyalty reward linked to authenticated user
+        await create_authenticated_loyalty_reward(
+            user_id=user["id"],
+            order_id=redemption_data['order_id'],
+            email=user["email"],
+            purchase_amount=order_total,
+            reward_amount=reward_amount
+        )
+        
+        # Mark redemption as completed
+        await mark_redemption_completed(payload.redemption_token, user["email"])
+        
+        return {
+            "success": True,
+            "order_id": redemption_data['order_id'],
+            "total": order_total,
+            "reward_amount": reward_amount,
+            "session_token": session_token,  # Add this line
+            "user": {
+                "name": user["name"],
+                "email": user["email"]
+            }
+
+            
+        }
+        
+    except Exception as e:
+        print(f"Authenticated redeem error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+async def create_authenticated_loyalty_reward(user_id: str, order_id: int, email: str, 
+                                           purchase_amount: float, reward_amount: float):
+    """Create loyalty reward for authenticated user"""
+    await supabase_request(
+        method="POST",
+        endpoint="/rest/v1/loyalty_rewards",
+        json_data={
+            "user_id": user_id,
+            "order_id": order_id,
+            "email": email,
+            "purchase_amount": purchase_amount,
+            "reward_amount": reward_amount,
+            "status": "active"
+        }
+    )
+
+# Dashboard endpoints
+@app.get("/api/user/dashboard")
+async def get_user_dashboard(session_token: str):
+    """Get user dashboard data"""
+    user = get_current_user(session_token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    
+    try:
+        # Get user's rewards
+        rewards = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/loyalty_rewards",
+            params={
+                "select": "*",
+                "user_id": f"eq.{user['user_id']}",
+                "order": "created_at.desc"
+            }
+        )
+        
+        # Calculate totals
+        active_rewards = [r for r in rewards if r['status'] == 'active']
+        total_earned = sum(r['reward_amount'] for r in rewards)
+        total_available = sum(r['reward_amount'] for r in active_rewards)
+        total_redeemed = sum(r['reward_amount'] for r in rewards if r['status'] == 'redeemed')
+        
+        return {
+            "user": {
+                "name": user["name"],
+                "email": user["email"]
+            },
+            "summary": {
+                "total_earned": total_earned,
+                "total_available": total_available,
+                "total_redeemed": total_redeemed,
+                "rewards_count": len(rewards)
+            },
+            "recent_rewards": rewards[:10]  # Last 10 rewards
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/user/logout")
+async def logout_user(session_token: str):
+    """Logout user by invalidating session"""
+    if session_token in user_sessions:
+        del user_sessions[session_token]
+    
+    return {"success": True, "message": "Logged out successfully"}
+
+# Serve the dashboard page
+@app.get("/dashboard.html", response_class=HTMLResponse)
+async def dashboard_page(request: Request):
+    return templates.TemplateResponse("dashboard.html", {"request": request})
+
+
+@app.post("/api/apply/rewards")
+async def apply_rewards(session_token: str, order_total: float):
+    """Apply available rewards to reduce order total"""
+    user = get_current_user(session_token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    
+    try:
+        # Get user's active rewards
+        available_rewards = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/loyalty_rewards",
+            params={
+                "select": "id,reward_amount",
+                "user_id": f"eq.{user['user_id']}",
+                "status": "eq.active"
+            }
+        )
+        
+        total_rewards = sum(r['reward_amount'] for r in available_rewards)
+        discount = min(total_rewards, order_total)  # Can't discount more than order total
+        
+        # Mark rewards as redeemed if applying
+        if discount > 0:
+            applied_amount = 0
+            for reward in available_rewards:
+                if applied_amount >= discount:
+                    break
+                    
+                reward_to_apply = min(reward['reward_amount'], discount - applied_amount)
+                
+                await supabase_request(
+                    method="PATCH",
+                    endpoint=f"/rest/v1/loyalty_rewards?id=eq.{reward['id']}",
+                    json_data={
+                        "status": "redeemed",
+                        "redeemed_at": datetime.now().isoformat()
+                    }
+                )
+                
+                applied_amount += reward_to_apply
+        
+        return {
+            "original_total": order_total,
+            "discount": discount,
+            "new_total": order_total - discount,
+            "rewards_applied": len(available_rewards),
+            "total_rewards_available": total_rewards
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+# Get user's reward balance (quick endpoint)
+@app.get("/api/user/balance")
+async def get_user_balance(session_token: str):
+    """Get user's current reward balance"""
+    user = get_current_user(session_token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    
+    try:
+        # Get active rewards
+        active_rewards = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/loyalty_rewards",
+            params={
+                "select": "reward_amount",
+                "user_id": f"eq.{user['user_id']}",
+                "status": "eq.active"
+            }
+        )
+        
+        total_balance = sum(r['reward_amount'] for r in active_rewards)
+        
+        return {
+            "balance": total_balance,
+            "rewards_count": len(active_rewards),
+            "user": {
+                "name": user["name"],
+                "email": user["email"]
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+
+# Debug endpoint to check user sessions (remove in production)
+@app.get("/api/debug/sessions")
+async def debug_sessions():
+    """Debug endpoint to see active sessions"""
+    active_sessions = {}
+    current_time = datetime.now()
+    
+    for token, session in user_sessions.items():
+        if current_time < session["expires_at"]:
+            active_sessions[token[:16] + "..."] = {
+                "email": session["email"],
+                "expires_in_minutes": int((session["expires_at"] - current_time).total_seconds() / 60)
+            }
+    
+    return {
+        "active_sessions": active_sessions,
+        "total_active": len(active_sessions)
+    }
+
+
+@app.get("/api/test/session")
+async def test_session(session_token: str = None):
+    """Test endpoint to verify session tokens work"""
+    if not session_token:
+        return {"error": "No session token provided"}
+    
+    user = get_current_user(session_token)
+    if user:
+        return {
+            "valid": True,
+            "user": user,
+            "session_token": session_token[:16] + "..."
+        }
+    else:
+        return {"valid": False, "error": "Invalid or expired session"}
+    
+
+@app.get("/debug.html", response_class=HTMLResponse)
+async def debug_page(request: Request):
+    return templates.TemplateResponse("debug.html", {"request": request})
+
+
+@app.get("/verdetalleestilos.html", response_class=HTMLResponse)
+async def ver_detalle_estilos(request: Request):
+    """
+    Renders a menu of estilos from inventario_estilos
+    where prioridad = 1 and saldos != 1 (including NULL saldos).
+    """
+    try:
+        # Query for prioridad=1 AND (saldos IS NULL OR saldos != 1)
+        # Select all needed fields for the HTML template
+        params = {
+            "select": "id,nombre,precio,cost,sold30,saldos,prioridad",
+            "prioridad": "eq.1",
+            "or": "(saldos.is.null,saldos.neq.1)",  # This handles both NULL and not-equal-to-1
+            "order": "nombre.asc"
+        }
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/inventario_estilos",
+                headers=HEADERS,
+                params=params,
+            )
+
+        print(f"[ver_detalle_estilos] Query response status: {resp.status_code}", flush=True)
+        
+        if resp.status_code >= 400:
+            print(f"[ver_detalle_estilos] Supabase error: {resp.status_code} - {resp.text}", flush=True)
+            return templates.TemplateResponse(
+                "verdetalleestilos.html",
+                {
+                    "request": request,
+                    "step": "select_estilo",
+                    "inventario_data": [],
+                    "error_message": f"Error al cargar estilos ({resp.status_code}).",
+                },
+                status_code=resp.status_code,
+            )
+
+        rows = resp.json() or []
+        print(f"[ver_detalle_estilos] Retrieved {len(rows)} rows", flush=True)
+        
+        # Clean up the data - ensure all fields have default values if missing
+        inventario_data = []
+        for row in rows:
+            if row.get("nombre"):  # Only include if nombre exists
+                item = {
+                    "id": row.get("id", ""),
+                    "nombre": row.get("nombre", "").strip(),
+                    "precio": row.get("precio", 0),
+                    "cost": row.get("cost", 0), 
+                    "sold30": row.get("sold30", 0),
+                    "saldos": row.get("saldos", 0),
+                    "prioridad": row.get("prioridad", 0)
+                }
+                inventario_data.append(item)
+        
+        print(f"[ver_detalle_estilos] Processed {len(inventario_data)} items for display", flush=True)
+
+        return templates.TemplateResponse(
+            "verdetalleestilos.html",
+            {
+                "request": request,
+                "step": "select_estilo",  # This tells the template which section to show
+                "inventario_data": inventario_data,  # Changed from 'estilos' to 'inventario_data'
+                "error_message": None,
+            },
+        )
+
+    except Exception as e:
+        print(f"[ver_detalle_estilos] Unexpected error: {e}", flush=True)
+        return templates.TemplateResponse(
+            "verdetalleestilos.html",
+            {
+                "request": request,
+                "step": "select_estilo",
+                "inventario_data": [],
+                "error_message": "Ocurrió un error al cargar el menú de estilos.",
+            },
+            status_code=500,
+        )
+
+@app.get("/verdetalleestilos/analytics", response_class=HTMLResponse)
+async def ver_detalle_estilos_analytics(
+    request: Request,
+    estilo: str,
+    modelos: str = "",  # Comma-separated list of models to filter
+    start_date: str = "",
+    end_date: str = "",
+    sort_order: str = "DESC"  # ASC or DESC for modelo sorting by sales
+):
+    """
+    Shows detailed analytics for a specific estilo (style) with sales data
+    from ventas_terex1 table, grouped by modelo.
+    Shows ALL models by default.
+    """
+    try:
+        from datetime import datetime, timedelta
+        import json
+        
+        # Set default date range (last 30 days) if not provided
+        if not end_date:
+            end_date = datetime.now().strftime('%Y-%m-%d')
+        if not start_date:
+            start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        
+        print(f"[Analytics] Analyzing estilo: {estilo}, dates: {start_date} to {end_date}", flush=True)
+        
+        # Get ALL sales data for this estilo first (no date filtering initially to get all models)
+        async with httpx.AsyncClient(timeout=30) as client:
+            # Get all sales for this estilo to find available models
+            resp_all = await client.get(
+                f"{SUPABASE_URL}/rest/v1/ventas_terex1",
+                headers=HEADERS,
+                params={
+                    "select": "modelo,qty,fecha,price,subtotal,total",
+                    "estilo": f"eq.{estilo}",
+                    "modelo": "not.is.null"
+                }
+            )
+            
+            if resp_all.status_code != 200:
+                raise Exception(f"Error fetching sales data: {resp_all.text}")
+            
+            all_sales_data = resp_all.json() or []
+            print(f"[Analytics] Retrieved {len(all_sales_data)} total sales records", flush=True)
+        
+        # Filter by date range in Python (easier than complex Supabase queries)
+        from datetime import datetime
+        
+        filtered_sales_data = []
+        for row in all_sales_data:
+            fecha_str = row.get("fecha")
+            if fecha_str:
+                try:
+                    fecha = datetime.strptime(fecha_str, '%Y-%m-%d').date()
+                    start_dt = datetime.strptime(start_date, '%Y-%m-%d').date()
+                    end_dt = datetime.strptime(end_date, '%Y-%m-%d').date()
+                    
+                    if start_dt <= fecha <= end_dt:
+                        filtered_sales_data.append(row)
+                except:
+                    # If date parsing fails, include the record
+                    filtered_sales_data.append(row)
+            else:
+                # If no date, include the record
+                filtered_sales_data.append(row)
+        
+        print(f"[Analytics] Filtered to {len(filtered_sales_data)} records in date range", flush=True)
+        
+        # Get unique models and their sales counts
+        modelo_sales = {}
+        for row in filtered_sales_data:
+            modelo = row.get("modelo", "").strip()
+            if modelo:
+                qty = int(row.get("qty", 1))
+                modelo_sales[modelo] = modelo_sales.get(modelo, 0) + qty
+        
+        # Sort models by sales count
+        available_modelos = []
+        for modelo, total_qty in sorted(modelo_sales.items(), key=lambda x: x[1], reverse=(sort_order == "DESC")):
+            # Count number of sales transactions (not just quantity)
+            sales_count = sum(1 for row in filtered_sales_data if row.get("modelo", "").strip() == modelo)
+            available_modelos.append({
+                "modelo": modelo,
+                "total_sales": sales_count,
+                "total_quantity": total_qty
             })
+        
+        print(f"[Analytics] Found {len(available_modelos)} models", flush=True)
+        
+        # Parse selected models - DEFAULT TO ALL MODELS 
+        selected_modelos = []
+        if modelos:
+            selected_modelos = [m.strip() for m in modelos.split(",") if m.strip()]
+        
+        # If no specific models selected, use ALL available models
+        if not selected_modelos:
+            selected_modelos = [m["modelo"] for m in available_modelos]
+        
+        print(f"[Analytics] Showing {len(selected_modelos)} models: {selected_modelos}", flush=True)
+        
+        # Filter sales data by selected models
+        final_sales_data = [
+            row for row in filtered_sales_data 
+            if row.get("modelo", "").strip() in selected_modelos
+        ]
+        
+        # Process the data for analytics
+        from collections import defaultdict
+        
+        # Group by modelo and date
+        modelo_daily_data = defaultdict(lambda: defaultdict(lambda: {
+            'sales': 0, 'quantity': 0, 'revenue': 0.0
+        }))
+        
+        modelo_totals = defaultdict(lambda: {
+            'total_sales': 0, 'total_quantity': 0, 'total_revenue': 0.0
+        })
+        
+        for row in final_sales_data:
+            modelo = row.get("modelo", "Unknown")
+            fecha_str = row.get("fecha")
+            qty = int(row.get("qty", 0))
+            price = float(row.get("price", 0))
+            subtotal = float(row.get("subtotal", 0)) if row.get("subtotal") else (qty * price)
+            
+            if fecha_str:
+                try:
+                    fecha = datetime.strptime(fecha_str, '%Y-%m-%d').strftime('%Y-%m-%d')
+                    
+                    # Update daily data
+                    modelo_daily_data[modelo][fecha]['sales'] += 1
+                    modelo_daily_data[modelo][fecha]['quantity'] += qty
+                    modelo_daily_data[modelo][fecha]['revenue'] += subtotal
+                    
+                    # Update totals
+                    modelo_totals[modelo]['total_sales'] += 1
+                    modelo_totals[modelo]['total_quantity'] += qty  
+                    modelo_totals[modelo]['total_revenue'] += subtotal
+                except:
+                    print(f"[Analytics] Warning: Could not parse date {fecha_str}", flush=True)
+        
+        # Create summary data for cards
+        summary_data = []
+        modelo_items = list(modelo_totals.items())
+        if sort_order == "DESC":
+            modelo_items.sort(key=lambda x: x[1]['total_sales'], reverse=True)
         else:
-            raise HTTPException(status_code=500, detail="Database deletion failed")
-    
-    except HTTPException:
-        raise
+            modelo_items.sort(key=lambda x: x[1]['total_sales'])
+        
+        for modelo, totals in modelo_items:
+            avg_price = totals['total_revenue'] / totals['total_quantity'] if totals['total_quantity'] > 0 else 0
+            summary_data.append({
+                'modelo': modelo,
+                'total_sales': totals['total_sales'],
+                'total_quantity': totals['total_quantity'], 
+                'total_revenue': totals['total_revenue'],
+                'avg_price': avg_price
+            })
+        
+        # Create daily data table
+        daily_data = []
+        for modelo in modelo_daily_data:
+            for fecha_str, data in sorted(modelo_daily_data[modelo].items()):
+                if data['quantity'] > 0:
+                    try:
+                        fecha = datetime.strptime(fecha_str, '%Y-%m-%d').date()
+                        daily_data.append({
+                            'fecha': fecha,
+                            'modelo': modelo,
+                            'daily_sales': data['sales'],
+                            'daily_quantity': data['quantity'],
+                            'daily_revenue': data['revenue'],
+                            'avg_daily_price': data['revenue'] / data['quantity'] if data['quantity'] > 0 else 0
+                        })
+                    except:
+                        print(f"[Analytics] Warning: Could not parse date {fecha_str} for daily data", flush=True)
+        
+        # Sort daily data
+        daily_data.sort(key=lambda x: (x['fecha'], x['modelo']))
+        
+        # Prepare chart data
+        chart_data = {
+            'modelo_totals': {item['modelo']: item['total_revenue'] for item in summary_data},
+            'daily_trends': {}
+        }
+        
+        # Prepare daily trends for chart
+        for modelo in modelo_daily_data:
+            chart_data['daily_trends'][modelo] = {}
+            for fecha_str, data in modelo_daily_data[modelo].items():
+                if data['revenue'] > 0:
+                    chart_data['daily_trends'][modelo][fecha_str] = data['revenue']
+        
+        analytics_data = {
+            'summary_data': summary_data,
+            'daily_data': daily_data
+        }
+        
+        print(f"[Analytics] Generated analytics for {len(summary_data)} models, {len(daily_data)} daily records", flush=True)
+        
+        return templates.TemplateResponse(
+            "verdetalleestilos.html",
+            {
+                "request": request,
+                "step": "analytics",
+                "estilo": estilo,
+                "available_modelos": available_modelos,
+                "selected_modelos": selected_modelos,
+                "start_date": start_date,
+                "end_date": end_date,
+                "sort_order": sort_order,
+                "analytics_data": analytics_data,
+                "chart_data": json.dumps(chart_data),
+                "error_message": None,
+            },
+        )
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+        print(f"[Analytics] Error: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        
+        return templates.TemplateResponse(
+            "verdetalleestilos.html",
+            {
+                "request": request,
+                "step": "analytics", 
+                "estilo": estilo,
+                "available_modelos": [],
+                "selected_modelos": [],
+                "start_date": start_date,
+                "end_date": end_date,
+                "sort_order": sort_order,
+                "analytics_data": {"summary_data": [], "daily_data": []},
+                "chart_data": "{}",
+                "error_message": "Error al cargar el análisis de ventas.",
+            },
+        )
 
-@app.get("/api/estilo/{estilo_id}")
-async def get_estilo(estilo_id: int):
-    """Get estilo details"""
+@app.get("/api/user/barcode/{email}")
+async def get_barcode_for_email(email: str):
+    barcode, existed = await ensure_user_barcode(email)
+    return {"success": True, "barcode": barcode, "message": "Existing" if existed else "Created"}
+
+
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+def _normalize_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+def _ean13_check_digit_for_partial12(partial_12: str) -> int:
+    """
+    EAN-13 check: sum of odd positions (1x) + even positions (3x); check = (10 - sum%10) % 10
+    partial_12: 12-digit string (no check digit).
+    """
+    s = 0
+    for i, d in enumerate(partial_12):            # i = 0..11
+        n = int(d)
+        s += n if (i + 1) % 2 == 1 else 3 * n     # 1-based odd=1x, even=3x
+    return (10 - (s % 10)) % 10
+
+def _compute_check_digit(partial_12: str) -> int:
+    """
+    Uses your existing weighting rule:
+    position 0-based: even*1, odd*2  (kept to stay compatible with your barcodes)
+    """
+    check_sum = sum(int(d) * (2 if i % 2 == 1 else 1) for i, d in enumerate(partial_12))
+    return (10 - (check_sum % 10)) % 10
+
+def _build_barcode_from_eight(eight_digits: str) -> str:
+    """Build 13-digit code: 8000 + eight + EAN-13 check digit"""
+    partial = f"8000{eight_digits}"                # 12 digits
+    return f"{partial}{_ean13_check_digit_for_partial12(partial)}"  # 
+
+
+@app.post("/api/admin/create-all-barcodes")
+async def create_barcodes_for_all_customers():
+    """Create barcodes for all customers who have loyalty rewards or order redemptions but no barcode"""
     try:
-        response = supabase.table('inventario_estilos').select('id, nombre').eq('id', estilo_id).execute()
+        # Get all unique emails from loyalty_rewards table
+        loyalty_emails = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/loyalty_rewards",
+            params={
+                "select": "email",
+            }
+        )
         
-        if not response.data:
-            raise HTTPException(status_code=404, detail="Estilo not found")
+        # Get all unique emails from order_redemptions table
+        redemption_emails = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/order_redemptions",
+            params={
+                "select": "email",
+            }
+        )
         
-        return JSONResponse(content={"estilo": response.data[0]})
-    
-    except HTTPException:
-        raise
+        # Combine and get unique emails
+        all_emails = set()
+        
+        for reward in loyalty_emails:
+            if reward["email"] and reward["email"].strip():
+                all_emails.add(reward["email"].strip().lower())
+        
+        for redemption in redemption_emails:
+            if redemption["email"] and redemption["email"].strip():
+                all_emails.add(redemption["email"].strip().lower())
+        
+        print(f"Found {len(all_emails)} unique customer emails")
+        
+        created_count = 0
+        existing_count = 0
+        
+        for email in all_emails:
+            try:
+                # Check if barcode already exists
+                existing_barcode = await supabase_request(
+                    method="GET",
+                    endpoint="/rest/v1/user_barcodes",
+                    params={
+                        "select": "barcode",
+                        "user_email": f"eq.{email}",
+                        "limit": "1"
+                    }
+                )
+                
+                if existing_barcode:
+                    existing_count += 1
+                    print(f"Barcode already exists for {email}: {existing_barcode[0]['barcode']}")
+                    continue
+                
+                # Create barcode for this email
+                barcode, was_existing = await ensure_user_barcode(email)
+                
+                if not was_existing:
+                    created_count += 1
+                    print(f"Created barcode {barcode} for {email}")
+                else:
+                    existing_count += 1
+                
+            except Exception as e:
+                print(f"Error processing {email}: {e}")
+                continue
+        
+        return {
+            "success": True,
+            "message": f"Processed {len(all_emails)} customers",
+            "created": created_count,
+            "already_existed": existing_count,
+            "total_emails": len(all_emails)
+        }
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching estilo: {str(e)}")
+        print(f"Error in create_all_barcodes: {e}")
+        raise HTTPException(status_code=500, detail=f"Error creating barcodes: {str(e)}")
 
-@app.get("/api/color/{color_id}")
-async def get_color(color_id: int):
-    """Get color details"""
+# Modify your existing ticket generation to include barcode creation
+# Add this to your api_save function in the ticket generation process
+
+async def ensure_barcode_for_future_customer(purchase_total: float, order_id: int):
+    """Create barcode for potential future customer when ticket is created"""
     try:
-        response = supabase.table('inventario_colores').select('id, color').eq('id', color_id).execute()
+        # Generate a unique email placeholder for this order that can be claimed later
+        # This creates the redemption token entry that will later be claimed
+        redemption_token = generate_redemption_token()
         
-        if not response.data:
-            raise HTTPException(status_code=404, detail="Color not found")
+        # Store redemption token with empty email (to be filled when redeemed)
+        redemption_data = {
+            "order_id": order_id,
+            "redemption_token": redemption_token,
+            "purchase_total": purchase_total,
+            "email": "",  # Empty - will be filled when customer redeems
+            "created_at": datetime.utcnow().isoformat()
+        }
         
-        return JSONResponse(content={"color": response.data[0]})
-    
-    except HTTPException:
-        raise
+        await supabase_request(
+            method="POST",
+            endpoint="/rest/v1/order_redemptions",
+            json_data=redemption_data
+        )
+        
+        return redemption_token
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching color: {str(e)}")
+        print(f"Error creating redemption token: {e}")
+        return None
 
+# Update your store_redemption_token function to use the new approach
+async def store_redemption_token(order_id: int, redemption_token: str, total: float):
+    """Store redemption token - simplified since we're not creating barcodes here"""
+    try:
+        redemption_data = {
+            "order_id": order_id,
+            "redemption_token": redemption_token,
+            "purchase_total": total,
+            "email": "",  # Empty until redeemed
+            "created_at": datetime.utcnow().isoformat()
+        }
+        
+        await supabase_request(
+            method="POST",
+            endpoint="/rest/v1/order_redemptions",
+            json_data=redemption_data
+        )
+        
+    except Exception as e:
+        print(f"Error storing redemption token: {e}")
+        raise
+
+
+@app.get("/api/admin/create-all-barcodes")
+async def create_barcodes_for_all_customers():
+    """Create barcodes for all customers who have loyalty rewards or order redemptions but no barcode"""
+    try:
+        # Get all unique emails from loyalty_rewards table
+        loyalty_emails = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/loyalty_rewards",
+            params={
+                "select": "email",
+            }
+        )
+        
+        # Get all unique emails from order_redemptions table
+        redemption_emails = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/order_redemptions",
+            params={
+                "select": "email",
+            }
+        )
+        
+        # Combine and get unique emails
+        all_emails = set()
+        
+        for reward in loyalty_emails:
+            if reward["email"] and reward["email"].strip():
+                all_emails.add(reward["email"].strip().lower())
+        
+        for redemption in redemption_emails:
+            if redemption["email"] and redemption["email"].strip():
+                all_emails.add(redemption["email"].strip().lower())
+        
+        print(f"Found {len(all_emails)} unique customer emails")
+        
+        created_count = 0
+        existing_count = 0
+        
+        for email in all_emails:
+            try:
+                # Check if barcode already exists
+                existing_barcode = await supabase_request(
+                    method="GET",
+                    endpoint="/rest/v1/user_barcodes",
+                    params={
+                        "select": "barcode",
+                        "user_email": f"eq.{email}",
+                        "limit": "1"
+                    }
+                )
+                
+                if existing_barcode:
+                    existing_count += 1
+                    print(f"Barcode already exists for {email}: {existing_barcode[0]['barcode']}")
+                    continue
+                
+                # Create barcode for this email
+                barcode, was_existing = await ensure_user_barcode(email)
+                
+                if not was_existing:
+                    created_count += 1
+                    print(f"Created barcode {barcode} for {email}")
+                else:
+                    existing_count += 1
+                
+            except Exception as e:
+                print(f"Error processing {email}: {e}")
+                continue
+        
+        return {
+            "success": True,
+            "message": f"Processed {len(all_emails)} customers",
+            "created": created_count,
+            "already_existed": existing_count,
+            "total_emails": len(all_emails)
+        }
+        
+    except Exception as e:
+        print(f"Error in create_all_barcodes: {e}")
+        raise HTTPException(status_code=500, detail=f"Error creating barcodes: {str(e)}")
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

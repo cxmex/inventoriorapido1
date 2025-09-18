@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard de Recompensas</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        .user-info {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 30px;
+            color: white;
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 40px rgba(31, 38, 135, 0.5);
+        }
+
+        .card h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.2rem;
+        }
+
+        .amount {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .barcode-section {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 30px;
+            text-align: center;
+            margin-bottom: 30px;
+            box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
+        }
+
+        .barcode-section h2 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+
+        .barcode-container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            display: inline-block;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        #barcode-canvas {
+            max-width: 100%;
+            height: auto;
+        }
+
+        .barcode-number {
+            font-family: 'Courier New', monospace;
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #333;
+            margin-top: 10px;
+            letter-spacing: 2px;
+        }
+
+        .btn {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+            margin: 10px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        .btn-secondary {
+            background: linear-gradient(45deg, #a8edea, #fed6e3);
+            color: #333;
+        }
+
+        .rewards-list {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
+        }
+
+        .rewards-list h3 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+
+        .reward-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.5);
+            border-radius: 10px;
+            margin-bottom: 10px;
+            border-left: 4px solid #667eea;
+        }
+
+        .reward-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .reward-status {
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 0.8rem;
+            font-weight: bold;
+        }
+
+        .status-active {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+
+        .status-redeemed {
+            background: #fff3e0;
+            color: #f57c00;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 50px;
+            color: white;
+        }
+
+        .error {
+            background: rgba(244, 67, 54, 0.1);
+            border: 1px solid rgba(244, 67, 54, 0.3);
+            color: #d32f2f;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+
+        .success {
+            background: rgba(76, 175, 80, 0.1);
+            border: 1px solid rgba(76, 175, 80, 0.3);
+            color: #388e3c;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+
+        @media (max-width: 768px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .barcode-container {
+                padding: 15px;
+            }
+        }
+
+        .logout-btn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(244, 67, 54, 0.8);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .logout-btn:hover {
+            background: rgba(244, 67, 54, 1);
+            transform: translateY(-2px);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <button class="logout-btn" onclick="logout()">Cerrar Sesión</button>
+        
+        <div class="header">
+            <h1>🎁 Panel de Recompensas</h1>
+            <p>Gestiona tus puntos y canjea recompensas</p>
+        </div>
+
+        <div id="loading" class="loading">
+            <h2>Cargando tu dashboard...</h2>
+        </div>
+
+        <div id="dashboard-content" style="display: none;">
+            <div class="user-info">
+                <h2>¡Hola, <span id="user-name">Usuario</span>!</h2>
+                <p>Email: <span id="user-email">email@example.com</span></p>
+            </div>
+
+            <div class="dashboard-grid">
+                <div class="card">
+                    <h3>💰 Total Ganado</h3>
+                    <div class="amount" id="total-earned">$0.00</div>
+                    <p>Total de recompensas acumuladas</p>
+                </div>
+
+                <div class="card">
+                    <h3>✅ Disponible</h3>
+                    <div class="amount" id="total-available">$0.00</div>
+                    <p>Listo para usar en tu próxima compra</p>
+                </div>
+
+                <div class="card">
+                    <h3>🎯 Usado</h3>
+                    <div class="amount" id="total-redeemed">$0.00</div>
+                    <p>Total canjeado hasta ahora</p>
+                </div>
+
+                <div class="card">
+                    <h3>📊 Recompensas</h3>
+                    <div class="amount" id="rewards-count">0</div>
+                    <p>Número total de recompensas</p>
+                </div>
+            </div>
+
+            <div class="barcode-section">
+                <h2>🏷️ Tu Código de Barras Personal</h2>
+                <p>Muestra este código en caja para aplicar tus recompensas</p>
+                
+                <div class="barcode-container">
+                    <canvas id="barcode-canvas"></canvas>
+                    <div class="barcode-number" id="barcode-number">7000010370028</div>
+                </div>
+                
+                <button class="btn" onclick="downloadBarcode()">📱 Descargar Código</button>
+                <button class="btn btn-secondary" onclick="regenerateBarcode()">🔄 Mostrar Código</button>
+            </div>
+
+            <div class="rewards-list">
+                <h3>📋 Historial de Recompensas</h3>
+                <div id="recent-rewards">
+                    <!-- Rewards will be populated here -->
+                </div>
+            </div>
+        </div>
+
+        <div id="error-message" style="display: none;" class="error">
+            <strong>Error:</strong> <span id="error-text"></span>
+        </div>
+    </div>
+
+    <script>
+        let currentUser = null;
+        let userBarcode = null;
+
+        // Check for session token and load dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            const sessionToken = localStorage.getItem('session_token');
+            
+            if (!sessionToken) {
+                showError('No hay sesión activa. Redirigiendo al login...');
+                setTimeout(() => {
+                    window.location.href = '/redeem.html';
+                }, 2000);
+                return;
+            }
+
+            loadDashboard(sessionToken);
+        });
+
+        async function loadDashboard(sessionToken) {
+            try {
+                const response = await fetch(`/api/user/dashboard?session_token=${sessionToken}`);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Error loading dashboard');
+                }
+
+                currentUser = data.user;
+                populateDashboard(data);
+                generateUserBarcode(data.user.email);
+                
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('dashboard-content').style.display = 'block';
+
+            } catch (error) {
+                console.error('Error loading dashboard:', error);
+                showError(error.message);
+                document.getElementById('loading').style.display = 'none';
+            }
+        }
+
+        function populateDashboard(data) {
+            // Populate user info
+            document.getElementById('user-name').textContent = data.user.name || 'Usuario';
+            document.getElementById('user-email').textContent = data.user.email;
+
+            // Populate summary cards
+            document.getElementById('total-earned').textContent = `$${data.summary.total_earned.toFixed(2)}`;
+            document.getElementById('total-available').textContent = `$${data.summary.total_available.toFixed(2)}`;
+            document.getElementById('total-redeemed').textContent = `$${data.summary.total_redeemed.toFixed(2)}`;
+            document.getElementById('rewards-count').textContent = data.summary.rewards_count;
+
+            // Populate recent rewards
+            const rewardsContainer = document.getElementById('recent-rewards');
+            
+            if (data.recent_rewards && data.recent_rewards.length > 0) {
+                rewardsContainer.innerHTML = data.recent_rewards.map(reward => `
+                    <div class="reward-item">
+                        <div>
+                            <strong>Orden #${reward.order_id}</strong><br>
+                            <small>Compra: $${reward.purchase_amount.toFixed(2)}</small>
+                        </div>
+                        <div>
+                            <strong>$${reward.reward_amount.toFixed(2)}</strong><br>
+                            <span class="reward-status status-${reward.status}">${reward.status === 'active' ? 'Activo' : 'Canjeado'}</span>
+                        </div>
+                    </div>
+                `).join('');
+            } else {
+                rewardsContainer.innerHTML = '<p>No tienes recompensas aún. ¡Realiza una compra para empezar a ganar puntos!</p>';
+            }
+        }
+
+        async function generateUserBarcode(email) {
+            try {
+                // Get the existing barcode from the database - NO GENERATION
+                const response = await fetch(`/api/user/barcode/${encodeURIComponent(email)}`);
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    if (result.success && result.barcode) {
+                        const barcodeNumber = result.barcode;
+                        
+                        userBarcode = barcodeNumber;
+                        document.getElementById('barcode-number').textContent = barcodeNumber;
+
+                        // Generate the barcode visual using JsBarcode
+                        try {
+                            JsBarcode("#barcode-canvas", barcodeNumber, {
+                                format: "CODE128",
+                                width: 2,
+                                height: 100,
+                                displayValue: false,
+                                background: "#ffffff",
+                                lineColor: "#000000",
+                                margin: 10
+                            });
+                        } catch (error) {
+                            console.error('Error generating barcode visual:', error);
+                        }
+                        
+                        console.log('Barcode retrieved from database:', barcodeNumber);
+                    } else {
+                        showError('No tienes un código de barras aún. Se creará cuando hagas tu primera compra.');
+                    }
+                } else {
+                    showError('No se pudo obtener tu código de barras.');
+                }
+                
+            } catch (error) {
+                console.error('Error getting barcode from database:', error);
+                showError('Error al obtener el código de barras.');
+            }
+        }
+
+        async function storeUserBarcode(email, barcodeNumber) {
+            try {
+                // Store the barcode in the backend database
+                const response = await fetch('/api/user/store-barcode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        email: email, 
+                        barcode: barcodeNumber 
+                    })
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    console.log('Barcode stored successfully:', result);
+                } else {
+                    console.error('Failed to store barcode:', response.statusText);
+                }
+                
+            } catch (error) {
+                console.error('Error storing barcode:', error);
+            }
+        }
+
+        function hashString(str) {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                const char = str.charCodeAt(i);
+                hash = ((hash << 5) - hash) + char;
+                hash = hash & hash; // Convert to 32bit integer
+            }
+            // Ensure we always get the same result for the same email
+            return Math.abs(hash).toString().padStart(10, '0');
+        }
+
+        function calculateCheckDigit(partialBarcode) {
+            // Simple check digit calculation for consistency
+            let sum = 0;
+            for (let i = 0; i < partialBarcode.length; i++) {
+                sum += parseInt(partialBarcode[i]) * (i % 2 === 0 ? 1 : 3);
+            }
+            return (10 - (sum % 10)) % 10;
+        }
+
+        function regenerateBarcode() {
+            if (currentUser && currentUser.email) {
+                // Show the same permanent barcode (don't actually regenerate)
+                // This ensures consistency
+                generateUserBarcode(currentUser.email);
+                
+                // Show success message
+                showSuccess('Código de barras actualizado (siempre será el mismo para tu email)');
+            }
+        }
+
+        function downloadBarcode() {
+            const canvas = document.getElementById('barcode-canvas');
+            const link = document.createElement('a');
+            link.download = `barcode_${currentUser ? currentUser.email : 'user'}.png`;
+            link.href = canvas.toDataURL();
+            link.click();
+            
+            showSuccess('Código de barras descargado');
+        }
+
+        function logout() {
+            localStorage.removeItem('session_token');
+            window.location.href = '/redeem.html';
+        }
+
+        function showError(message) {
+            document.getElementById('error-text').textContent = message;
+            document.getElementById('error-message').style.display = 'block';
+            setTimeout(() => {
+                document.getElementById('error-message').style.display = 'none';
+            }, 5000);
+        }
+
+        function showSuccess(message) {
+            // Create a temporary success message element
+            const successDiv = document.createElement('div');
+            successDiv.className = 'success';
+            successDiv.innerHTML = `<strong>Éxito:</strong> ${message}`;
+            
+            // Insert it at the top of the container
+            const container = document.querySelector('.container');
+            container.insertBefore(successDiv, container.firstChild);
+            
+            // Remove it after 3 seconds
+            setTimeout(() => {
+                successDiv.remove();
+            }, 3000);
+        }
+
+        // Refresh dashboard every 30 seconds
+        setInterval(() => {
+            const sessionToken = localStorage.getItem('session_token');
+            if (sessionToken && document.getElementById('dashboard-content').style.display !== 'none') {
+                loadDashboard(sessionToken);
+            }
+        }, 30000);
+    </script>
+</body>
+</html>
