@@ -1,0 +1,318 @@
+{% extends "base.html" %}
+
+{% block title %}{% if step == "analytics" %}Análisis {{ estilo }}{% else %}Seleccionar Estilo{% endif %}{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    {% if step == "select_estilo" %}
+    <!-- Style Selection Page -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2>Seleccionar Estilo para Análisis</h2>
+            <p class="lead">Elige un estilo para ver su análisis de ventas detallado.</p>
+        </div>
+    </div>
+    
+    <div class="card shadow-sm">
+        <div class="card-header bg-light">
+            <h5 class="mb-0">Estilos Disponibles</h5>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Nombre del Estilo</th>
+                            <th>Precio</th>
+                            <th>Costo</th>
+                            <th>Margen</th>
+                            <th>Vendidos (30d)</th>
+                            <th>Saldos</th>
+                            <th>Acción</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in inventario_data %}
+                        <tr>
+                            <td>
+                                <strong>{{ item.nombre }}</strong>
+                                <br><small class="text-muted">ID: {{ item.id }}</small>
+                            </td>
+                            <td>${{ "{:,.0f}".format(item.precio) if item.precio else '0' }}</td>
+                            <td>${{ "{:,.0f}".format(item.cost) if item.cost else '0' }}</td>
+                            <td>
+                                {% if item.precio and item.cost and item.precio > 0 %}
+                                    {% set margin = ((item.precio - item.cost) / item.precio * 100) %}
+                                    <span class="badge bg-{% if margin > 30 %}success{% elif margin > 15 %}warning{% else %}danger{% endif %}">
+                                        {{ "{:.1f}".format(margin) }}%
+                                    </span>
+                                {% else %}
+                                    <span class="badge bg-secondary">N/A</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <span class="badge bg-{% if item.sold30 and item.sold30 > 0 %}success{% else %}secondary{% endif %}">
+                                    {{ item.sold30 or 0 }}
+                                </span>
+                            </td>
+                            <td>{{ item.saldos or 0 }}</td>
+                            <td>
+                                <a href="/analytics?estilo={{ item.nombre|urlencode }}" 
+                                   class="btn btn-primary btn-sm">
+                                    <i class="bi bi-graph-up"></i> Analizar Ventas
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    {% elif step == "analytics" %}
+    <!-- Analytics Page -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center">
+                <h2>Análisis de Ventas: {{ estilo }}</h2>
+                <a href="/analytics" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left"></i> Volver a Estilos
+                </a>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Chart -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light">
+            <h5 class="mb-0">Tendencia de Ventas por Modelo</h5>
+        </div>
+        <div class="card-body">
+            {% if analytics_data and analytics_data.daily_data and analytics_data.daily_data|length > 0 %}
+                <div class="chart-container" style="position: relative; height:400px;">
+                    <canvas id="analyticsChart"></canvas>
+                </div>
+            {% else %}
+                <div class="alert alert-info">
+                    No hay datos disponibles para mostrar en el gráfico.
+                </div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <!-- Summary Cards -->
+    {% if analytics_data and analytics_data.summary_data %}
+    <div class="row mb-4">
+        {% for summary in analytics_data.summary_data %}
+        <div class="col-md-3 mb-3">
+            <div class="card bg-light">
+                <div class="card-body text-center">
+                    <h5 class="card-title">{{ summary.modelo }}</h5>
+                    <h3 class="text-primary">{{ summary.total_quantity }}</h3>
+                    <p class="mb-1">{{ summary.total_sales }} ventas</p>
+                    <p class="mb-0 text-muted small">${{ "{:,.0f}".format(summary.total_revenue) }}</p>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    
+    <!-- Data Table -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light">
+            <h5 class="mb-0">Detalle de Ventas Diarias</h5>
+        </div>
+        <div class="card-body">
+            {% if analytics_data and analytics_data.daily_data and analytics_data.daily_data|length > 0 %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Modelo</th>
+                                <th>Ventas</th>
+                                <th>Cantidad</th>
+                                <th>Ingresos</th>
+                                <th>Precio Promedio</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in analytics_data.daily_data %}
+                            <tr>
+                                <td>{{ row.fecha.strftime('%d/%m/%Y') if row.fecha else 'N/A' }}</td>
+                                <td><strong>{{ row.modelo }}</strong></td>
+                                <td>{{ row.daily_sales }}</td>
+                                <td><span class="badge bg-primary">{{ row.daily_quantity }}</span></td>
+                                <td>${{ "{:,.0f}".format(row.daily_revenue) if row.daily_revenue else '0' }}</td>
+                                <td>${{ "{:,.0f}".format(row.avg_daily_price) if row.avg_daily_price else '0' }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="alert alert-info">
+                    No se encontraron datos de ventas para el período seleccionado.
+                </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+{% if step == "analytics" %}
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('=== DYNAMIC ANALYTICS CHART ===');
+    console.log('Estilo:', '{{ estilo }}');
+    console.log('Chart.js loaded?', typeof Chart !== 'undefined');
+    
+    // Build chart data directly from template data
+    const rawData = [
+        {% if analytics_data and analytics_data.daily_data %}
+        {% for row in analytics_data.daily_data %}
+        {
+            fecha: "{{ row.fecha.strftime('%Y-%m-%d') if row.fecha else '' }}",
+            fechaLabel: "{{ row.fecha.strftime('%d/%m/%Y') if row.fecha else 'N/A' }}",
+            modelo: "{{ row.modelo }}",
+            cantidad: {{ row.daily_quantity or 0 }}
+        }{% if not loop.last %},{% endif %}
+        {% endfor %}
+        {% endif %}
+    ];
+    
+    console.log('Raw analytics data:', rawData);
+    
+    if (rawData.length > 0) {
+        // Process data
+        const fechasSet = new Set();
+        const modelosSet = new Set();
+        
+        rawData.forEach(item => {
+            if (item.fecha) fechasSet.add(item.fecha);
+            if (item.modelo) modelosSet.add(item.modelo);
+        });
+        
+        const fechasOrdenadas = Array.from(fechasSet).sort();
+        const modelos = Array.from(modelosSet);
+        
+        console.log('Dates:', fechasOrdenadas);
+        console.log('Models:', modelos);
+        
+        // Create labels
+        const etiquetasPorFecha = {};
+        rawData.forEach(item => {
+            etiquetasPorFecha[item.fecha] = item.fechaLabel;
+        });
+        const labels = fechasOrdenadas.map(fecha => etiquetasPorFecha[fecha] || fecha);
+        
+        // Build datasets
+        const colores = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40'];
+        
+        const datasets = modelos.map((modelo, index) => {
+            const data = fechasOrdenadas.map(fecha => {
+                const found = rawData.find(item => item.modelo === modelo && item.fecha === fecha);
+                return found ? found.cantidad : 0;
+            });
+            
+            const color = colores[index % colores.length];
+            
+            return {
+                label: modelo,
+                data: data,
+                borderColor: color,
+                backgroundColor: color + '20',
+                fill: false,
+                borderWidth: 3,
+                pointBackgroundColor: color,
+                pointBorderColor: '#fff',
+                pointBorderWidth: 2,
+                pointRadius: 6,
+                pointHoverRadius: 8,
+                tension: 0.4
+            };
+        });
+        
+        console.log('Final datasets:', datasets);
+        
+        // Create chart
+        const ctx = document.getElementById('analyticsChart').getContext('2d');
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: datasets
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Cantidad Vendida por Modelo - {{ estilo }}',
+                        font: {
+                            size: 16,
+                            weight: 'bold'
+                        }
+                    },
+                    legend: {
+                        position: 'top',
+                        labels: {
+                            padding: 20,
+                            usePointStyle: true
+                        }
+                    },
+                    tooltip: {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                        titleFont: { size: 14 },
+                        bodyFont: { size: 14 },
+                        callbacks: {
+                            label: function(context) {
+                                return context.dataset.label + ': ' + context.raw + ' unidades';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(200, 200, 200, 0.2)' },
+                        ticks: {
+                            callback: function(value) {
+                                return value + ' unidades';
+                            }
+                        },
+                        title: {
+                            display: true,
+                            text: 'Cantidad Vendida',
+                            font: { size: 14, weight: 'bold' }
+                        }
+                    },
+                    x: {
+                        grid: { display: false },
+                        title: {
+                            display: true,
+                            text: 'Fecha',
+                            font: { size: 14, weight: 'bold' }
+                        }
+                    }
+                },
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                }
+            }
+        });
+        
+        console.log('Chart created successfully:', chart);
+    } else {
+        console.log('No data available for chart');
+    }
+});
+</script>
+{% endif %}
+{% endblock %}

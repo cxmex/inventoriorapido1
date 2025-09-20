@@ -27,8 +27,8 @@
                 </div>
                 <div class="text-center mt-3">
                     <div class="btn-group" role="group">
-                        <button type="button" class="btn btn-outline-primary active" id="barChartBtn">Barras</button>
-                        <button type="button" class="btn btn-outline-primary" id="lineChartBtn">Línea</button>
+                        <button type="button" class="btn btn-outline-primary" id="barChartBtn">Barras</button>
+                        <button type="button" class="btn btn-outline-primary active" id="lineChartBtn">Línea</button>
                         <button type="button" class="btn btn-outline-secondary" id="stackedBarBtn">Barras Apiladas</button>
                     </div>
                 </div>
@@ -237,14 +237,30 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         };
         
-        // Create the bar chart by default
+        // Prepare data for line chart with enhanced styling
+        const lineChartData = {
+            ...chartData,
+            datasets: chartData.datasets.map(dataset => ({
+                ...dataset,
+                fill: false,
+                borderWidth: 3,
+                pointBackgroundColor: dataset.borderColor,
+                pointBorderColor: '#fff',
+                pointBorderWidth: 2,
+                pointRadius: 6,
+                pointHoverRadius: 8,
+                tension: 0.4
+            }))
+        };
+        
+        // Create the line chart by default
         let salesChart = new Chart(ctx, {
-            type: 'bar',
-            data: chartData,
+            type: 'line',
+            data: lineChartData,
             options: chartOptions
         });
         
-        console.log('Chart created successfully'); // Debug log
+        console.log('Line chart created successfully'); // Debug log
         
         // Function to switch to bar chart
         document.getElementById('barChartBtn').addEventListener('click', function() {
@@ -306,7 +322,7 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
         
-        // Function to switch to line chart
+        // Function to switch to line chart (reload line chart)
         document.getElementById('lineChartBtn').addEventListener('click', function() {
             // Update active button
             document.querySelectorAll('.btn-group .btn').forEach(btn => btn.classList.remove('active'));
@@ -314,21 +330,6 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // Destroy current chart
             salesChart.destroy();
-            
-            // Modify data for line chart (add tension and point styles)
-            const lineChartData = {
-                ...chartData,
-                datasets: chartData.datasets.map(dataset => ({
-                    ...dataset,
-                    fill: false,
-                    borderWidth: 2,
-                    pointBackgroundColor: dataset.borderColor,
-                    pointBorderColor: '#fff',
-                    pointBorderWidth: 2,
-                    pointRadius: 5,
-                    tension: 0.4
-                }))
-            };
             
             // Create line chart
             salesChart = new Chart(ctx, {

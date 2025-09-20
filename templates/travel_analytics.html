@@ -1,0 +1,306 @@
+{% extends "base.html" %}
+
+{% block title %}{% if step == "analytics" %}Análisis Travel - {{ lugar }}{% else %}Seleccionar Lugar{% endif %}{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    {% if step == "select_lugar" %}
+    <!-- Location Selection Page -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2>Análisis de Ventas Travel</h2>
+            <p class="lead">Selecciona un lugar para ver su análisis de ventas detallado.</p>
+        </div>
+    </div>
+    
+    <div class="card shadow-sm">
+        <div class="card-header bg-light">
+            <h5 class="mb-0">Lugares Disponibles</h5>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Lugar</th>
+                            <th>Total Ventas</th>
+                            <th>Total Subtotal</th>
+                            <th>Promedio por Venta</th>
+                            <th>Acción</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for lugar_info in lugares_data %}
+                        <tr>
+                            <td><strong>{{ lugar_info.lugar }}</strong></td>
+                            <td><span class="badge bg-primary">{{ lugar_info.total_ventas }}</span></td>
+                            <td class="text-success">${{ "{:,.0f}".format(lugar_info.total_subtotal) }}</td>
+                            <td>${{ "{:,.0f}".format(lugar_info.promedio_venta) }}</td>
+                            <td>
+                                <a href="/analyticstravel?lugar={{ lugar_info.lugar|urlencode }}" 
+                                   class="btn btn-success btn-sm">
+                                    <i class="bi bi-graph-up"></i> Analizar Lugar
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    {% elif step == "analytics" %}
+    <!-- Analytics Page -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center">
+                <h2>Análisis Travel: {{ lugar }}</h2>
+                <a href="/analyticstravel" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left"></i> Volver a Lugares
+                </a>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Chart -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light">
+            <h5 class="mb-0">Tendencia de Ventas por Estilo</h5>
+        </div>
+        <div class="card-body">
+            {% if analytics_data and analytics_data.daily_data and analytics_data.daily_data|length > 0 %}
+                <div class="chart-container" style="position: relative; height:400px;">
+                    <canvas id="travelChart"></canvas>
+                </div>
+            {% else %}
+                <div class="alert alert-info">
+                    No hay datos disponibles para mostrar en el gráfico.
+                </div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <!-- Summary Cards -->
+    {% if analytics_data and analytics_data.summary_data %}
+    <div class="row mb-4">
+        {% for summary in analytics_data.summary_data %}
+        <div class="col-md-3 mb-3">
+            <div class="card bg-light">
+                <div class="card-body text-center">
+                    <h5 class="card-title">{{ summary.estilo }}</h5>
+                    <h3 class="text-success">${{ "{:,.0f}".format(summary.total_subtotal) }}</h3>
+                    <p class="mb-1">{{ summary.total_ventas }} ventas</p>
+                    <p class="mb-0 text-muted small">{{ summary.total_qty }} unidades</p>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    
+    <!-- Data Table -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light">
+            <h5 class="mb-0">Detalle de Ventas Travel</h5>
+        </div>
+        <div class="card-body">
+            {% if analytics_data and analytics_data.daily_data and analytics_data.daily_data|length > 0 %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Estilo</th>
+                                <th>Cliente</th>
+                                <th>Cantidad</th>
+                                <th>Precio</th>
+                                <th>Subtotal</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in analytics_data.daily_data %}
+                            <tr>
+                                <td>{{ row.fecha.strftime('%d/%m/%Y') if row.fecha else 'N/A' }}</td>
+                                <td><strong>{{ row.estilo }}</strong></td>
+                                <td>{{ row.cliente or 'N/A' }}</td>
+                                <td><span class="badge bg-primary">{{ row.qty }}</span></td>
+                                <td>${{ "{:,.0f}".format(row.precio) if row.precio else '0' }}</td>
+                                <td class="text-success">${{ "{:,.0f}".format(row.subtotal) if row.subtotal else '0' }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="alert alert-info">
+                    No se encontraron datos de ventas para el lugar seleccionado.
+                </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+{% if step == "analytics" %}
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('=== TRAVEL ANALYTICS CHART ===');
+    console.log('Lugar:', '{{ lugar }}');
+    console.log('Chart.js loaded?', typeof Chart !== 'undefined');
+    
+    // Build chart data directly from template data
+    const rawData = [
+        {% if analytics_data and analytics_data.daily_data %}
+        {% for row in analytics_data.daily_data %}
+        {
+            fecha: "{{ row.fecha.strftime('%Y-%m-%d') if row.fecha else '' }}",
+            fechaLabel: "{{ row.fecha.strftime('%d/%m/%Y') if row.fecha else 'N/A' }}",
+            estilo: "{{ row.estilo }}",
+            subtotal: {{ row.subtotal or 0 }}
+        }{% if not loop.last %},{% endif %}
+        {% endfor %}
+        {% endif %}
+    ];
+    
+    console.log('Raw travel data:', rawData);
+    
+    if (rawData.length > 0) {
+        // Group by date and estilo for chart
+        const fechasSet = new Set();
+        const estilosSet = new Set();
+        
+        rawData.forEach(item => {
+            if (item.fecha) fechasSet.add(item.fecha);
+            if (item.estilo) estilosSet.add(item.estilo);
+        });
+        
+        const fechasOrdenadas = Array.from(fechasSet).sort();
+        const estilos = Array.from(estilosSet);
+        
+        console.log('Dates:', fechasOrdenadas);
+        console.log('Estilos:', estilos);
+        
+        // Create labels
+        const etiquetasPorFecha = {};
+        rawData.forEach(item => {
+            etiquetasPorFecha[item.fecha] = item.fechaLabel;
+        });
+        const labels = fechasOrdenadas.map(fecha => etiquetasPorFecha[fecha] || fecha);
+        
+        // Aggregate subtotals by estilo and date
+        const subtotalMap = new Map();
+        rawData.forEach(item => {
+            const key = `${item.estilo}|${item.fecha}`;
+            const existing = subtotalMap.get(key) || 0;
+            subtotalMap.set(key, existing + item.subtotal);
+        });
+        
+        // Build datasets
+        const colores = ['#28a745', '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40'];
+        
+        const datasets = estilos.map((estilo, index) => {
+            const data = fechasOrdenadas.map(fecha => {
+                const key = `${estilo}|${fecha}`;
+                return subtotalMap.get(key) || 0;
+            });
+            
+            const color = colores[index % colores.length];
+            
+            return {
+                label: estilo,
+                data: data,
+                borderColor: color,
+                backgroundColor: color + '20',
+                fill: false,
+                borderWidth: 3,
+                pointBackgroundColor: color,
+                pointBorderColor: '#fff',
+                pointBorderWidth: 2,
+                pointRadius: 6,
+                pointHoverRadius: 8,
+                tension: 0.4
+            };
+        });
+        
+        console.log('Final datasets:', datasets);
+        
+        // Create chart
+        const ctx = document.getElementById('travelChart').getContext('2d');
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: datasets
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Ventas Travel por Estilo - {{ lugar }}',
+                        font: {
+                            size: 16,
+                            weight: 'bold'
+                        }
+                    },
+                    legend: {
+                        position: 'top',
+                        labels: {
+                            padding: 20,
+                            usePointStyle: true
+                        }
+                    },
+                    tooltip: {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                        titleFont: { size: 14 },
+                        bodyFont: { size: 14 },
+                        callbacks: {
+                            label: function(context) {
+                                return context.dataset.label + ': $' + context.raw.toLocaleString();
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(200, 200, 200, 0.2)' },
+                        ticks: {
+                            callback: function(value) {
+                                return '$' + value.toLocaleString();
+                            }
+                        },
+                        title: {
+                            display: true,
+                            text: 'Subtotal ($)',
+                            font: { size: 14, weight: 'bold' }
+                        }
+                    },
+                    x: {
+                        grid: { display: false },
+                        title: {
+                            display: true,
+                            text: 'Fecha',
+                            font: { size: 14, weight: 'bold' }
+                        }
+                    }
+                },
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                }
+            }
+        });
+        
+        console.log('Travel chart created successfully:', chart);
+    } else {
+        console.log('No data available for chart');
+    }
+});
+</script>
+{% endif %}
+{% endblock %}

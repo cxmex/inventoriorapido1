@@ -4686,6 +4686,540 @@ async def ver_detalle_estilos_analytics(
             },
         )
 
+@app.get("/flores3-analytics", response_class=HTMLResponse)
+async def flores3_analytics(request: Request):
+    """
+    Direct analytics for FUN FLORES 3 style - simplified version
+    """
+    try:
+        from datetime import datetime, timedelta
+        
+        # Fixed estilo for testing
+        estilo = "FUN FLORES 3"
+        
+        # Set date range (last 30 days)
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        
+        print(f"[FLORES3] Analyzing: {estilo}, dates: {start_date} to {end_date}", flush=True)
+        
+        # Get sales data for FUN FLORES 3
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/ventas_terex1",
+                headers=HEADERS,
+                params={
+                    "select": "modelo,qty,fecha,price,subtotal,total",
+                    "estilo": f"eq.{estilo}",
+                    "modelo": "not.is.null",
+                    "fecha": f"gte.{start_date}",
+                    "fecha": f"lte.{end_date}"
+                }
+            )
+            
+            if resp.status_code != 200:
+                raise Exception(f"Error fetching sales data: {resp.text}")
+            
+            sales_data = resp.json() or []
+            print(f"[FLORES3] Retrieved {len(sales_data)} sales records", flush=True)
+        
+        # Process data exactly like your working analytics
+        from collections import defaultdict
+        
+        modelo_daily_data = defaultdict(lambda: defaultdict(lambda: {
+            'sales': 0, 'quantity': 0, 'revenue': 0.0
+        }))
+        
+        modelo_totals = defaultdict(lambda: {
+            'total_sales': 0, 'total_quantity': 0, 'total_revenue': 0.0
+        })
+        
+        for row in sales_data:
+            modelo = row.get("modelo", "Unknown")
+            fecha_str = row.get("fecha")
+            qty = int(row.get("qty", 0))
+            price = float(row.get("price", 0))
+            subtotal = float(row.get("subtotal", 0)) if row.get("subtotal") else (qty * price)
+            
+            if fecha_str:
+                try:
+                    fecha = datetime.strptime(fecha_str, '%Y-%m-%d').strftime('%Y-%m-%d')
+                    
+                    # Update daily data
+                    modelo_daily_data[modelo][fecha]['sales'] += 1
+                    modelo_daily_data[modelo][fecha]['quantity'] += qty
+                    modelo_daily_data[modelo][fecha]['revenue'] += subtotal
+                    
+                    # Update totals
+                    modelo_totals[modelo]['total_sales'] += 1
+                    modelo_totals[modelo]['total_quantity'] += qty  
+                    modelo_totals[modelo]['total_revenue'] += subtotal
+                except:
+                    print(f"[FLORES3] Warning: Could not parse date {fecha_str}", flush=True)
+        
+        # Create summary data
+        summary_data = []
+        for modelo, totals in modelo_totals.items():
+            summary_data.append({
+                'modelo': modelo,
+                'total_sales': totals['total_sales'],
+                'total_quantity': totals['total_quantity'], 
+                'total_revenue': totals['total_revenue']
+            })
+        
+        # Create daily data
+        daily_data = []
+        for modelo in modelo_daily_data:
+            for fecha_str, data in sorted(modelo_daily_data[modelo].items()):
+                if data['quantity'] > 0:
+                    try:
+                        fecha = datetime.strptime(fecha_str, '%Y-%m-%d').date()
+                        daily_data.append({
+                            'fecha': fecha,
+                            'modelo': modelo,
+                            'daily_sales': data['sales'],
+                            'daily_quantity': data['quantity'],
+                            'daily_revenue': data['revenue'],
+                            'avg_daily_price': data['revenue'] / data['quantity'] if data['quantity'] > 0 else 0
+                        })
+                    except:
+                        print(f"[FLORES3] Warning: Could not parse date {fecha_str}", flush=True)
+        
+        # Sort daily data
+        daily_data.sort(key=lambda x: (x['fecha'], x['modelo']))
+        
+        analytics_data = {
+            'summary_data': summary_data,
+            'daily_data': daily_data
+        }
+        
+        print(f"[FLORES3] Generated analytics: {len(summary_data)} models, {len(daily_data)} daily records", flush=True)
+        
+        return templates.TemplateResponse(
+            "flores3_analytics.html",  # New template file
+            {
+                "request": request,
+                "analytics_data": analytics_data,
+                "estilo": estilo,
+                "start_date": start_date,
+                "end_date": end_date
+            },
+        )
+        
+    except Exception as e:
+        print(f"[FLORES3] Error: {e}", flush=True)
+        return templates.TemplateResponse(
+            "flores3_analytics.html",
+            {
+                "request": request,
+                "analytics_data": {"summary_data": [], "daily_data": []},
+                "estilo": "FUN FLORES 3",
+                "error_message": "Error al cargar el análisis de ventas."
+            },
+        )
+
+
+@app.get("/analytics", response_class=HTMLResponse)
+async def analytics_main(request: Request, estilo: str = None):
+    """
+    Main analytics route - shows style selection or specific analytics
+    """
+    try:
+        if not estilo:
+            # Show style selection page
+            # Query for prioridad=1 AND (saldos IS NULL OR saldos != 1)
+            params = {
+                "select": "id,nombre,precio,cost,sold30,saldos,prioridad",
+                "prioridad": "eq.1",
+                "or": "(saldos.is.null,saldos.neq.1)",
+                "order": "nombre.asc"
+            }
+
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/inventario_estilos",
+                    headers=HEADERS,
+                    params=params,
+                )
+
+            if resp.status_code >= 400:
+                return templates.TemplateResponse(
+                    "analytics_dynamic.html",
+                    {
+                        "request": request,
+                        "step": "select_estilo",
+                        "inventario_data": [],
+                        "error_message": f"Error al cargar estilos ({resp.status_code}).",
+                    },
+                )
+
+            rows = resp.json() or []
+            
+            # Clean up the data
+            inventario_data = []
+            for row in rows:
+                if row.get("nombre"):
+                    item = {
+                        "id": row.get("id", ""),
+                        "nombre": row.get("nombre", "").strip(),
+                        "precio": row.get("precio", 0),
+                        "cost": row.get("cost", 0), 
+                        "sold30": row.get("sold30", 0),
+                        "saldos": row.get("saldos", 0),
+                        "prioridad": row.get("prioridad", 0)
+                    }
+                    inventario_data.append(item)
+
+            return templates.TemplateResponse(
+                "analytics_dynamic.html",
+                {
+                    "request": request,
+                    "step": "select_estilo",
+                    "inventario_data": inventario_data,
+                    "error_message": None,
+                },
+            )
+        
+        else:
+            # Show analytics for specific estilo
+            from datetime import datetime, timedelta
+            
+            # Set date range (last 30 days)
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+            
+            print(f"[Analytics] Analyzing: {estilo}, dates: {start_date} to {end_date}", flush=True)
+            
+            # Get sales data
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex1",
+                    headers=HEADERS,
+                    params={
+                        "select": "modelo,qty,fecha,price,subtotal,total",
+                        "estilo": f"eq.{estilo}",
+                        "modelo": "not.is.null",
+                        "fecha": f"gte.{start_date}",
+                        "fecha": f"lte.{end_date}"
+                    }
+                )
+                
+                if resp.status_code != 200:
+                    raise Exception(f"Error fetching sales data: {resp.text}")
+                
+                sales_data = resp.json() or []
+                print(f"[Analytics] Retrieved {len(sales_data)} sales records", flush=True)
+            
+            # Process data exactly like the working version
+            from collections import defaultdict
+            
+            modelo_daily_data = defaultdict(lambda: defaultdict(lambda: {
+                'sales': 0, 'quantity': 0, 'revenue': 0.0
+            }))
+            
+            modelo_totals = defaultdict(lambda: {
+                'total_sales': 0, 'total_quantity': 0, 'total_revenue': 0.0
+            })
+            
+            for row in sales_data:
+                modelo = row.get("modelo", "Unknown")
+                fecha_str = row.get("fecha")
+                qty = int(row.get("qty", 0))
+                price = float(row.get("price", 0))
+                subtotal = float(row.get("subtotal", 0)) if row.get("subtotal") else (qty * price)
+                
+                if fecha_str:
+                    try:
+                        fecha = datetime.strptime(fecha_str, '%Y-%m-%d').strftime('%Y-%m-%d')
+                        
+                        # Update daily data
+                        modelo_daily_data[modelo][fecha]['sales'] += 1
+                        modelo_daily_data[modelo][fecha]['quantity'] += qty
+                        modelo_daily_data[modelo][fecha]['revenue'] += subtotal
+                        
+                        # Update totals
+                        modelo_totals[modelo]['total_sales'] += 1
+                        modelo_totals[modelo]['total_quantity'] += qty  
+                        modelo_totals[modelo]['total_revenue'] += subtotal
+                    except:
+                        print(f"[Analytics] Warning: Could not parse date {fecha_str}", flush=True)
+            
+            # Create summary data
+            summary_data = []
+            for modelo, totals in modelo_totals.items():
+                summary_data.append({
+                    'modelo': modelo,
+                    'total_sales': totals['total_sales'],
+                    'total_quantity': totals['total_quantity'], 
+                    'total_revenue': totals['total_revenue']
+                })
+            
+            # Create daily data
+            daily_data = []
+            for modelo in modelo_daily_data:
+                for fecha_str, data in sorted(modelo_daily_data[modelo].items()):
+                    if data['quantity'] > 0:
+                        try:
+                            fecha = datetime.strptime(fecha_str, '%Y-%m-%d').date()
+                            daily_data.append({
+                                'fecha': fecha,
+                                'modelo': modelo,
+                                'daily_sales': data['sales'],
+                                'daily_quantity': data['quantity'],
+                                'daily_revenue': data['revenue'],
+                                'avg_daily_price': data['revenue'] / data['quantity'] if data['quantity'] > 0 else 0
+                            })
+                        except:
+                            print(f"[Analytics] Warning: Could not parse date {fecha_str}", flush=True)
+            
+            # Sort daily data
+            daily_data.sort(key=lambda x: (x['fecha'], x['modelo']))
+            
+            analytics_data = {
+                'summary_data': summary_data,
+                'daily_data': daily_data
+            }
+            
+            print(f"[Analytics] Generated analytics: {len(summary_data)} models, {len(daily_data)} daily records", flush=True)
+            
+            return templates.TemplateResponse(
+                "analytics_dynamic.html",
+                {
+                    "request": request,
+                    "step": "analytics",
+                    "analytics_data": analytics_data,
+                    "estilo": estilo,
+                    "start_date": start_date,
+                    "end_date": end_date
+                },
+            )
+        
+    except Exception as e:
+        print(f"[Analytics] Error: {e}", flush=True)
+        return templates.TemplateResponse(
+            "analytics_dynamic.html",
+            {
+                "request": request,
+                "step": "analytics" if estilo else "select_estilo",
+                "analytics_data": {"summary_data": [], "daily_data": []},
+                "estilo": estilo or "",
+                "error_message": "Error al cargar el análisis de ventas.",
+                "inventario_data": [] if not estilo else None
+            },
+        )
+
+@app.get("/analyticstravel", response_class=HTMLResponse)
+async def analytics_travel(request: Request, lugar: str = None):
+    """
+    Travel analytics route - shows location selection or specific travel analytics
+    """
+    try:
+        if not lugar:
+            # Show location selection page
+            print("[Travel Analytics] Loading lugares for selection", flush=True)
+            
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_travel2",
+                    headers=HEADERS,
+                    params={
+                        "select": "lugar,qty,subtotal",
+                        "lugar": "not.is.null"
+                    }
+                )
+
+            if resp.status_code >= 400:
+                return templates.TemplateResponse(
+                    "travel_analytics.html",
+                    {
+                        "request": request,
+                        "step": "select_lugar",
+                        "lugares_data": [],
+                        "error_message": f"Error al cargar lugares ({resp.status_code}).",
+                    },
+                )
+
+            rows = resp.json() or []
+            print(f"[Travel Analytics] Retrieved {len(rows)} travel records", flush=True)
+            
+            # Aggregate data by lugar
+            from collections import defaultdict
+            lugar_stats = defaultdict(lambda: {
+                'total_ventas': 0,
+                'total_subtotal': 0,
+                'total_qty': 0
+            })
+            
+            for row in rows:
+                lugar_name = row.get("lugar", "").strip()
+                if lugar_name:
+                    subtotal = float(row.get("subtotal", 0)) if row.get("subtotal") else 0
+                    qty = int(row.get("qty", 0)) if row.get("qty") else 0
+                    
+                    lugar_stats[lugar_name]['total_ventas'] += 1
+                    lugar_stats[lugar_name]['total_subtotal'] += subtotal
+                    lugar_stats[lugar_name]['total_qty'] += qty
+            
+            # Create lugares data for display
+            lugares_data = []
+            for lugar_name, stats in lugar_stats.items():
+                promedio = stats['total_subtotal'] / stats['total_ventas'] if stats['total_ventas'] > 0 else 0
+                lugares_data.append({
+                    'lugar': lugar_name,
+                    'total_ventas': stats['total_ventas'],
+                    'total_subtotal': stats['total_subtotal'],
+                    'total_qty': stats['total_qty'],
+                    'promedio_venta': promedio
+                })
+            
+            # Sort by total_subtotal descending
+            lugares_data.sort(key=lambda x: x['total_subtotal'], reverse=True)
+            
+            print(f"[Travel Analytics] Processed {len(lugares_data)} lugares", flush=True)
+
+            return templates.TemplateResponse(
+                "travel_analytics.html",
+                {
+                    "request": request,
+                    "step": "select_lugar",
+                    "lugares_data": lugares_data,
+                    "error_message": None,
+                },
+            )
+        
+        else:
+            # Show analytics for specific lugar
+            from datetime import datetime, timedelta
+            
+            # Set date range (last 30 days)
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+            
+            print(f"[Travel Analytics] Analyzing lugar: {lugar}, dates: {start_date} to {end_date}", flush=True)
+            
+            # Get travel sales data for this lugar
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_travel2",
+                    headers=HEADERS,
+                    params={
+                        "select": "created_at,order_id,qty,estilo_id,estilo,precio,subtotal,cliente,lugar",
+                        "lugar": f"eq.{lugar}",
+                        "estilo": "not.is.null",
+                        "created_at": f"gte.{start_date}",
+                        "created_at": f"lte.{end_date}T23:59:59"
+                    }
+                )
+                
+                if resp.status_code != 200:
+                    raise Exception(f"Error fetching travel data: {resp.text}")
+                
+                travel_data = resp.json() or []
+                print(f"[Travel Analytics] Retrieved {len(travel_data)} travel records for {lugar}", flush=True)
+            
+            # Process data for analytics
+            from collections import defaultdict
+            
+            estilo_daily_data = defaultdict(lambda: defaultdict(lambda: {
+                'ventas': 0, 'qty': 0, 'subtotal': 0.0
+            }))
+            
+            estilo_totals = defaultdict(lambda: {
+                'total_ventas': 0, 'total_qty': 0, 'total_subtotal': 0.0
+            })
+            
+            # Process each travel record
+            daily_data = []
+            for row in travel_data:
+                estilo = row.get("estilo", "Unknown")
+                created_at_str = row.get("created_at")
+                qty = int(row.get("qty", 0)) if row.get("qty") else 0
+                precio = float(row.get("precio", 0)) if row.get("precio") else 0
+                subtotal = float(row.get("subtotal", 0)) if row.get("subtotal") else 0
+                cliente = row.get("cliente", "")
+                
+                if created_at_str:
+                    try:
+                        # Parse the timestamp and extract date
+                        fecha = datetime.fromisoformat(created_at_str.replace('Z', '+00:00')).date()
+                        fecha_str = fecha.strftime('%Y-%m-%d')
+                        
+                        # Add to daily data for table display
+                        daily_data.append({
+                            'fecha': fecha,
+                            'estilo': estilo,
+                            'cliente': cliente,
+                            'qty': qty,
+                            'precio': precio,
+                            'subtotal': subtotal
+                        })
+                        
+                        # Update aggregated data for chart
+                        estilo_daily_data[estilo][fecha_str]['ventas'] += 1
+                        estilo_daily_data[estilo][fecha_str]['qty'] += qty
+                        estilo_daily_data[estilo][fecha_str]['subtotal'] += subtotal
+                        
+                        # Update totals
+                        estilo_totals[estilo]['total_ventas'] += 1
+                        estilo_totals[estilo]['total_qty'] += qty  
+                        estilo_totals[estilo]['total_subtotal'] += subtotal
+                        
+                    except Exception as e:
+                        print(f"[Travel Analytics] Warning: Could not parse date {created_at_str}: {e}", flush=True)
+            
+            # Create summary data
+            summary_data = []
+            for estilo, totals in estilo_totals.items():
+                summary_data.append({
+                    'estilo': estilo,
+                    'total_ventas': totals['total_ventas'],
+                    'total_qty': totals['total_qty'], 
+                    'total_subtotal': totals['total_subtotal']
+                })
+            
+            # Sort by total_subtotal descending
+            summary_data.sort(key=lambda x: x['total_subtotal'], reverse=True)
+            
+            # Sort daily data by date
+            daily_data.sort(key=lambda x: x['fecha'], reverse=True)
+            
+            analytics_data = {
+                'summary_data': summary_data,
+                'daily_data': daily_data
+            }
+            
+            print(f"[Travel Analytics] Generated analytics: {len(summary_data)} estilos, {len(daily_data)} records", flush=True)
+            
+            return templates.TemplateResponse(
+                "travel_analytics.html",
+                {
+                    "request": request,
+                    "step": "analytics",
+                    "analytics_data": analytics_data,
+                    "lugar": lugar,
+                    "start_date": start_date,
+                    "end_date": end_date
+                },
+            )
+        
+    except Exception as e:
+        print(f"[Travel Analytics] Error: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        
+        return templates.TemplateResponse(
+            "travel_analytics.html",
+            {
+                "request": request,
+                "step": "analytics" if lugar else "select_lugar",
+                "analytics_data": {"summary_data": [], "daily_data": []},
+                "lugar": lugar or "",
+                "error_message": "Error al cargar el análisis de ventas travel.",
+                "lugares_data": [] if not lugar else None
+            },
+        )
+
+
 @app.get("/api/user/barcode/{email}")
 async def get_barcode_for_email(email: str):
     barcode, existed = await ensure_user_barcode(email)
