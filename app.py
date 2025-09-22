@@ -3664,14 +3664,20 @@ async def store_redemption_token(order_id: int, token: str, total: float):
         import traceback
         print(f"DEBUG: Full traceback: {traceback.format_exc()}")
 
+
+
+
 def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, redemption_token: str) -> io.BytesIO:
     """Updated PDF generation with QR code - now takes redemption_token as parameter"""
     width = 58 * mm
-    height = 210 * mm  # Slightly taller for QR code
+    # Calculate dynamic height based on content
+    estimated_item_height = len(items) * 22  # Approximately 22 points per item
+    base_height = 80 + 44 * mm  # Header + QR code space
+    height = max(120 * mm, base_height + estimated_item_height)
     margin = 2 * mm
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=(width, height))
-
+    
     def header():
         y = height - margin
         c.setFont("Helvetica-Bold", 10); c.drawCentredString(width/2, y, "TICKET DE VENTA"); y -= 12
@@ -3687,9 +3693,9 @@ def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, r
         y -= 10
         c.setFont("Helvetica", 8)
         return y
-
-    y = header()
     
+    y = header()
+        
     # Add items
     for it in items:
         if y < 40 * mm:  # More space needed for QR
@@ -3700,50 +3706,50 @@ def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, r
         c.drawString(margin + 20, y, (name[:28] + ("…" if len(name) > 28 else "")))
         c.drawRightString(width - margin, y, f"${price:0.2f}"); y -= 10
         c.drawRightString(width - margin, y, f"Subtotal: ${sub:0.2f}"); y -= 12
-
+    
     y -= 4; c.line(margin, y, width - margin, y); y -= 12
     c.setFont("Helvetica-Bold", 9); c.drawString(margin, y, "TOTAL:"); c.drawRightString(width - margin, y, f"${total:0.2f}"); y -= 14
-    
+        
     # Add loyalty program message
     c.setFont("Helvetica", 7)
     c.drawCentredString(width/2, y, "¡Obtén 1% de recompensa!")
     y -= 8
     c.drawCentredString(width/2, y, "Escanea el código QR:")
     y -= 12
-
-    # Create QR Code
+    
+    # Create QR Code (doubled size: from 22mm to 44mm)
     try:
         # URL that points to your redeem page with the token
         qr_url = f"https://teresalocal352.com/redeem.html?token={redemption_token}"
-        
-        # Generate QR code using reportlab
+                
+        # Generate QR code using reportlab - doubled size
         qr_widget = QrCodeWidget(qr_url)
-        qr_widget.barWidth = 22 * mm
-        qr_widget.barHeight = 22 * mm
-        
+        qr_widget.barWidth = 44 * mm
+        qr_widget.barHeight = 44 * mm
+                
         # Create drawing and add QR code
-        qr_drawing = Drawing(22 * mm, 22 * mm)
+        qr_drawing = Drawing(44 * mm, 44 * mm)
         qr_drawing.add(qr_widget)
-        
+                
         # Center the QR code
-        x = (width - 22 * mm) / 2
-        y_qr = max(margin + 10, y - 22 * mm)
-        
+        x = (width - 44 * mm) / 2
+        y_qr = max(margin, y - 44 * mm)  # Reduced margin at bottom
+                
         # Render QR code on PDF
         renderPDF.draw(qr_drawing, c, x, y_qr)
-        
+                
         print(f"DEBUG: Generated QR code with URL: {qr_url}")
-        
+            
     except Exception as e:
         print(f"Error generating QR code: {e}")
         # Fallback text
         c.setFont("Helvetica", 6)
         c.drawCentredString(width/2, y - 10, f"Token: {redemption_token[:16]}...")
-
-    c.setFont("Helvetica", 6)
-    c.drawCentredString(width/2, margin + 5, "¡Gracias por su compra!")
-
+    
+    # Removed the "¡Gracias por su compra!" line
+    
     c.showPage(); c.save(); buf.seek(0); return buf
+
 
 async def get_order_total(order_id: int):
     """Get total amount for an order from ventas_terex1"""
