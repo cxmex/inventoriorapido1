@@ -3096,76 +3096,59 @@ def generate_user_barcode_from_email(email: str) -> str:
     return code
 
 
-async def ensure_user_barcode(email: str) -> tuple[str, bool]:
-    """
-    Ensure there's a row in user_barcodes for this email.
-    Returns (barcode, existed_already).
-    Raises HTTPException on failure with details from Supabase.
-    """
-    email = _normalize_email(email)
-    if not email:
-        raise HTTPException(status_code=400, detail="Email is required")
-
-    # 1) Check existing (any status)
-    existing = await supabase_request(
-        method="GET",
-        endpoint="/rest/v1/user_barcodes",
-        params={
-            "select": "barcode,status",
-            "user_email": f"eq.{email}",
-            "limit": "1"
+async def ensure_user_barcode(email: str):
+    """Ensure user has a barcode, create if missing, link existing ones to user account"""
+    try:
+        # First, check if there's ANY barcode for this email (user_id can be NULL or set)
+        existing_barcode = supabase.table("user_barcodes").select("*").eq("user_email", email).eq("status", "active").limit(1).execute()
+        
+        if existing_barcode.data:
+            barcode_record = existing_barcode.data[0]
+            
+            # If barcode exists but has no user_id, link it to the user account
+            if barcode_record.get("user_id") is None:
+                # Get the user_id for this email
+                user_check = supabase.table("users").select("id").eq("email", email).limit(1).execute()
+                
+                if user_check.data:
+                    user_id = user_check.data[0]["id"]
+                    
+                    # Update the barcode to link it to the user account
+                    supabase.table("user_barcodes").update({
+                        "user_id": user_id,
+                        "updated_at": datetime.utcnow().isoformat()
+                    }).eq("id", barcode_record["id"]).execute()
+                    
+                    print(f"DEBUG: Linked existing barcode to user account for {email}")
+            
+            return barcode_record["barcode"]
+        
+        # No barcode exists, create a new one
+        user_check = supabase.table("users").select("id").eq("email", email).limit(1).execute()
+        
+        if not user_check.data:
+            print(f"DEBUG: No user found for email {email}")
+            return None
+        
+        user_id = user_check.data[0]["id"]
+        new_barcode = generate_user_barcode(email)
+        
+        barcode_data = {
+            "user_id": user_id,
+            "user_email": email,
+            "barcode": new_barcode,
+            "status": "active",
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat()
         }
-    )
-    if isinstance(existing, dict) and existing.get("error"):
-        raise HTTPException(status_code=502, detail=f"Supabase read error: {existing}")
-    if existing:
-        return existing[0]["barcode"], True
-
-    # 2) Generate; collision check
-    new_barcode = generate_user_barcode_from_email(email)
-    collision = await supabase_request(
-        method="GET",
-        endpoint="/rest/v1/user_barcodes",
-        params={"select": "id", "barcode": f"eq.{new_barcode}", "limit": "1"}
-    )
-    if isinstance(collision, dict) and collision.get("error"):
-        raise HTTPException(status_code=502, detail=f"Supabase read error: {collision}")
-    if collision:
-        ts2 = str(int(time.time()))[-2:]
-        base_eight = new_barcode[4:12]              # 8-digit “core”
-        new_eight = f"{base_eight[:6]}{ts2}"
-        new_barcode = _build_barcode_from_eight(new_eight)
-
-    # 3) Insert
-    payload = {
-        "user_email": email,
-        "barcode": new_barcode,
-        "status": "active",
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
-    }
-    result = await supabase_request(
-        method="POST",
-        endpoint="/rest/v1/user_barcodes",
-        json_data=payload,
-        # If your supabase_request supports headers, prefer returning row to see errors quickly:
-        # headers={"Prefer": "return=representation"}
-    )
-
-    # Basic sanity/error surface (adapt to your supabase_request implementation)
-    if isinstance(result, dict) and result.get("error"):
-        # Common causes: RLS policy missing, check constraint failed (validate_barcode_format)
-        raise HTTPException(status_code=400, detail=f"Insert failed: {result}")
-
-    # Some wrappers return [] on return=minimal; re-read to confirm
-    confirm = await supabase_request(
-        method="GET",
-        endpoint="/rest/v1/user_barcodes",
-        params={"select": "barcode", "user_email": f"eq.{email}", "limit": "1"}
-    )
-    if not confirm:
-        raise HTTPException(status_code=500, detail="Insert appeared to succeed, but row not found. Check RLS policies and constraints.")
-    return confirm[0]["barcode"], False
+        
+        result = supabase.table("user_barcodes").insert(barcode_data).execute()
+        print(f"DEBUG: Created new barcode for {email}: {new_barcode}")
+        return new_barcode
+        
+    except Exception as e:
+        print(f"Error ensuring user barcode for {email}: {e}")
+        return None
 
 
 
@@ -3835,32 +3818,51 @@ async def redeem_page(request: Request):
 
 @app.post("/api/redeem")
 async def simple_redeem_reward(payload: SimpleRedeemRequest):
+    """Simple redemption without authentication"""
     try:
-        print(f"DEBUG: Redemption attempt for token: {payload.redemption_token[:16]}...")
-        print(f"DEBUG: Email: {payload.email}")
+        # Get redemption data
+        redemption = supabase.table("order_redemptions").select("order_id,email,purchase_total").eq("redemption_token", payload.redemption_token).limit(1).execute()
         
-        # 1. Find the order associated with the redemption token
-        redemption_data = await get_simple_redemption_data(payload.redemption_token)
-        print(f"DEBUG: Found redemption data: {redemption_data}")
+        if not redemption.data:
+            raise HTTPException(status_code=400, detail="Token de redención no válido o expirado")
         
-        # 2. Get order total from ventas_terex1
-        order_total = await get_order_total(redemption_data['order_id'])
-        print(f"DEBUG: Order total: {order_total}")
+        redemption_data = redemption.data[0]
         
-        # 3. Calculate reward (1% of purchase)
+        # Check if already redeemed
+        if redemption_data.get('email') and redemption_data.get('email').strip():
+            raise HTTPException(status_code=400, detail="Esta recompensa ya ha sido canjeada")
+        
+        # Get order total
+        order_items = supabase.table("ventas_terex1").select("qty,price").eq("order_id", redemption_data['order_id']).execute()
+        
+        if not order_items.data:
+            raise HTTPException(status_code=400, detail="Orden no encontrada")
+        
+        order_total = sum(item['qty'] * item['price'] for item in order_items.data)
         reward_amount = order_total * 0.01
-        print(f"DEBUG: Reward amount: {reward_amount}")
         
-        # 4. Create simple loyalty reward record
-        await create_simple_loyalty_reward(
-            order_id=redemption_data['order_id'],
-            email=payload.email,
-            purchase_amount=order_total,
-            reward_amount=reward_amount
-        )
+        # Create loyalty reward
+        supabase.table("loyalty_rewards").insert({
+            "order_id": redemption_data['order_id'],
+            "email": payload.email,
+            "purchase_amount": order_total,
+            "reward_amount": reward_amount,
+            "status": "active",
+            "user_id": None
+        }).execute()
         
-        # 5. Mark redemption as completed
-        await mark_redemption_completed(payload.redemption_token, payload.email)
+        # Mark redemption as completed
+        supabase.table("order_redemptions").update({
+            "email": payload.email
+        }).eq("redemption_token", payload.redemption_token).execute()
+        
+        # NEW: Create barcode for this email if it doesn't exist
+        try:
+            await ensure_barcode_for_email(payload.email)
+            print(f"DEBUG: Barcode created/ensured for email: {payload.email}")
+        except Exception as barcode_error:
+            print(f"DEBUG: Failed to create barcode for {payload.email}: {barcode_error}")
+            # Don't fail the redemption if barcode creation fails
         
         return {
             "success": True,
@@ -3870,9 +3872,11 @@ async def simple_redeem_reward(payload: SimpleRedeemRequest):
             "email": payload.email
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Redeem error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    
 
 async def get_simple_redemption_data(redemption_token: str):
     """Get order data from redemption token"""
@@ -4109,7 +4113,7 @@ def get_current_user(session_token: str):
     
     return session
 
-# Updated redeem endpoint with authentication
+
 @app.post("/api/redeem/authenticated")
 async def authenticated_redeem_reward(payload: AuthenticatedRedeemRequest):
     """Redeem reward with Google authentication"""
@@ -4119,54 +4123,104 @@ async def authenticated_redeem_reward(payload: AuthenticatedRedeemRequest):
         
         # Create or get user
         user = await create_or_get_user(user_info)
-
-        # CREATE SESSION TOKEN HERE (add this section)
+        
+        # Create session token
         session_token = generate_session_token()
         user_sessions[session_token] = {
-        "user_id": user["id"],
-        "email": user["email"],
-        "name": user["name"],
-        "expires_at": datetime.now() + timedelta(hours=24)
+            "user_id": user["id"],
+            "email": user["email"],
+            "name": user["name"],
+            "expires_at": datetime.utcnow() + timedelta(hours=24)
         }
-
-        print(f"DEBUG: Session created in redeem: {session_token[:16]}...")
         
-        # Get redemption data
-        redemption_data = await get_simple_redemption_data(payload.redemption_token)
+        # Get redemption data (same logic as simple redeem)
+        redemption = supabase.table("order_redemptions").select("order_id,email,purchase_total").eq("redemption_token", payload.redemption_token).limit(1).execute()
         
-        # Get order total and calculate reward
-        order_total = await get_order_total(redemption_data['order_id'])
+        if not redemption.data:
+            raise HTTPException(status_code=400, detail="Token de redención no válido o expirado")
+        
+        redemption_data = redemption.data[0]
+        
+        if redemption_data.get('email') and redemption_data.get('email').strip():
+            raise HTTPException(status_code=400, detail="Esta recompensa ya ha sido canjeada")
+        
+        # Get order total
+        order_items = supabase.table("ventas_terex1").select("qty,price").eq("order_id", redemption_data['order_id']).execute()
+        order_total = sum(item['qty'] * item['price'] for item in order_items.data)
         reward_amount = order_total * 0.01
         
-        # Create loyalty reward linked to authenticated user
-        await create_authenticated_loyalty_reward(
-            user_id=user["id"],
-            order_id=redemption_data['order_id'],
-            email=user["email"],
-            purchase_amount=order_total,
-            reward_amount=reward_amount
-        )
+        # Create loyalty reward with user_id
+        supabase.table("loyalty_rewards").insert({
+            "user_id": user["id"],
+            "order_id": redemption_data['order_id'],
+            "email": user["email"],
+            "purchase_amount": order_total,
+            "reward_amount": reward_amount,
+            "status": "active"
+        }).execute()
         
         # Mark redemption as completed
-        await mark_redemption_completed(payload.redemption_token, user["email"])
+        supabase.table("order_redemptions").update({
+            "email": user["email"]
+        }).eq("redemption_token", payload.redemption_token).execute()
+        
+        # NEW: Ensure user has a barcode (create if missing)
+        try:
+            await ensure_user_barcode(user["email"])
+            print(f"DEBUG: Barcode ensured for authenticated user: {user['email']}")
+        except Exception as barcode_error:
+            print(f"DEBUG: Barcode creation failed for {user['email']}: {barcode_error}")
+            # Continue anyway - barcode creation failure shouldn't block redemption
         
         return {
             "success": True,
             "order_id": redemption_data['order_id'],
             "total": order_total,
             "reward_amount": reward_amount,
-            "session_token": session_token,  # Add this line
+            "session_token": session_token,
             "user": {
                 "name": user["name"],
                 "email": user["email"]
             }
-
-            
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Authenticated redeem error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+
+
+async def ensure_barcode_for_email(email: str):
+    """Ensure an email has a barcode, create if missing (for simple redemptions without user accounts)"""
+    try:
+        # Check if email already has a barcode (any barcode, regardless of user_id)
+        existing_barcode = supabase.table("user_barcodes").select("barcode").eq("user_email", email).eq("status", "active").limit(1).execute()
+        
+        if existing_barcode.data:
+            print(f"DEBUG: Barcode already exists for email {email}")
+            return existing_barcode.data[0]["barcode"]
+        
+        # Generate new barcode for this email
+        new_barcode = generate_user_barcode(email)
+        
+        # Create barcode entry without user_id (since this is for simple redemption)
+        barcode_data = {
+            "user_id": None,  # No user account for simple redemptions
+            "user_email": email,
+            "barcode": new_barcode,
+            "status": "active",
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        
+        result = supabase.table("user_barcodes").insert(barcode_data).execute()
+        print(f"DEBUG: Created barcode for email {email}: {new_barcode}")
+        return new_barcode
+        
+    except Exception as e:
+        print(f"Error ensuring barcode for email {email}: {e}")
+        raise e
+
 
 async def create_authenticated_loyalty_reward(user_id: str, order_id: int, email: str, 
                                            purchase_amount: float, reward_amount: float):
@@ -5226,12 +5280,6 @@ async def analytics_travel(request: Request, lugar: str = None):
         )
 
 
-@app.get("/api/user/barcode/{email}")
-async def get_barcode_for_email(email: str):
-    barcode, existed = await ensure_user_barcode(email)
-    return {"success": True, "barcode": barcode, "message": "Existing" if existed else "Created"}
-
-
 
 
 @app.get("/health")
@@ -5485,6 +5533,398 @@ async def create_barcodes_for_all_customers():
     except Exception as e:
         print(f"Error in create_all_barcodes: {e}")
         raise HTTPException(status_code=500, detail=f"Error creating barcodes: {str(e)}")
+
+@app.get("/modelosanuales.html", response_class=HTMLResponse)
+async def modelos_anuales(
+    request: Request,
+    year: str = "2024"
+):
+    """
+    Shows ALL models using proper pagination to get complete data
+    """
+    try:
+        import json
+        from datetime import datetime
+        from collections import defaultdict
+        
+        print(f"[Yearly Models] Processing year: {year} - showing ALL models", flush=True)
+        
+        async with httpx.AsyncClient(timeout=60) as client:
+            # Get all data for the year with proper pagination
+            all_records = []
+            offset = 0
+            batch_size = 1000
+            
+            while True:
+                print(f"[Yearly Models] Fetching batch starting at {offset}...", flush=True)
+                
+                # Use Range header for pagination
+                headers_with_range = {**HEADERS, "Range": f"{offset}-{offset + batch_size - 1}"}
+                
+                resp = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex1",
+                    headers=headers_with_range,
+                    params={
+                        "select": "modelo,qty,fecha,price,subtotal",
+                        "fecha": f"gte.{year}-01-01",
+                        "modelo": "not.is.null",
+                        "order": "fecha.asc"
+                    }
+                )
+                
+                if resp.status_code != 200:
+                    print(f"[Yearly Models] Error: {resp.status_code} - {resp.text}", flush=True)
+                    break
+                
+                batch_data = resp.json() or []
+                print(f"[Yearly Models] Got {len(batch_data)} records in this batch", flush=True)
+                
+                if not batch_data:
+                    break
+                
+                # Filter for the specific year (end date) in Python
+                year_filtered = []
+                for record in batch_data:
+                    fecha_str = record.get("fecha")
+                    if fecha_str and fecha_str.startswith(year) and fecha_str <= f"{year}-12-31":
+                        year_filtered.append(record)
+                
+                all_records.extend(year_filtered)
+                print(f"[Yearly Models] Added {len(year_filtered)} records for {year}", flush=True)
+                
+                # If we got less than a full batch, we've reached the end
+                if len(batch_data) < batch_size:
+                    break
+                
+                offset += batch_size
+                
+                # Safety limit to prevent infinite loops
+                if len(all_records) > 50000:
+                    print(f"[Yearly Models] Safety limit reached, stopping at {len(all_records)} records", flush=True)
+                    break
+            
+            print(f"[Yearly Models] Total records retrieved for {year}: {len(all_records)}", flush=True)
+            
+            if not all_records:
+                return templates.TemplateResponse(
+                    "modelosanuales.html",
+                    {
+                        "request": request,
+                        "year": year,
+                        "chart_data": {"labels": [], "datasets": []},
+                        "summary_data": [],
+                        "monthly_details": [],
+                        "available_years": ["2022", "2023", "2024", "2025"],
+                        "error_message": f"No se encontraron datos para el año {year}.",
+                    },
+                )
+            
+            # Debug: Check date distribution
+            if all_records:
+                dates = [r.get('fecha') for r in all_records if r.get('fecha')]
+                if dates:
+                    months_found = set([d[5:7] for d in dates if len(d) >= 7])
+                    min_date = min(dates)
+                    max_date = max(dates)
+                    print(f"[Yearly Models] Date range: {min_date} to {max_date}")
+                    print(f"[Yearly Models] Months found: {sorted(list(months_found))}")
+        
+        # Debug: Show sample of what we're aggregating
+        print(f"[Yearly Models] Sample of raw data being processed:")
+        for i, record in enumerate(all_records[:3]):
+            fecha = record.get('fecha', 'NO_DATE')
+            modelo = record.get('modelo', 'NO_MODEL') 
+            qty = record.get('qty', 0)
+            print(f"  Record {i+1}: {modelo} on {fecha} qty={qty}")
+        
+        # Process all the data
+        monthly_aggregates = defaultdict(lambda: defaultdict(lambda: {
+            'total_qty': 0,
+            'total_revenue': 0.0,
+            'total_sales': 0
+        }))
+        
+        processed_records = 0
+        unique_models = set()
+        monthly_debug = defaultdict(set)  # Track which months we actually process
+        
+        for row in all_records:
+            modelo = row.get("modelo", "").strip()
+            fecha_str = row.get("fecha")
+            
+            if not modelo or not fecha_str:
+                continue
+            
+            unique_models.add(modelo)
+            
+            try:
+                fecha_obj = datetime.strptime(fecha_str, '%Y-%m-%d')
+                month_key = fecha_obj.strftime('%Y-%m-01')
+                month_num = fecha_obj.strftime('%m')  # For debugging
+                monthly_debug[modelo].add(month_num)
+                
+                qty = int(row.get("qty", 0))
+                subtotal = row.get("subtotal")
+                if subtotal is not None:
+                    revenue = float(subtotal)
+                else:
+                    price = float(row.get("price", 0))
+                    revenue = qty * price
+                
+                monthly_aggregates[modelo][month_key]['total_qty'] += qty
+                monthly_aggregates[modelo][month_key]['total_revenue'] += revenue
+                monthly_aggregates[modelo][month_key]['total_sales'] += 1
+                processed_records += 1
+                
+            except (ValueError, TypeError) as e:
+                continue
+        
+        print(f"[Yearly Models] Processed: {processed_records} records")
+        print(f"[Yearly Models] Unique models found: {len(unique_models)}")
+        print(f"[Yearly Models] Model aggregates created: {len(monthly_aggregates)}")
+        
+        # Debug: Show which months we found for top models
+        top_models_debug = sorted(unique_models)[:3]
+        for modelo in top_models_debug:
+            months_found = sorted(list(monthly_debug.get(modelo, set())))
+            print(f"[Yearly Models] {modelo} has data for months: {months_found}")
+            
+            # Show monthly aggregates for this model
+            if modelo in monthly_aggregates:
+                for month_key, data in monthly_aggregates[modelo].items():
+                    if data['total_qty'] > 0:
+                        month_name = datetime.strptime(month_key, '%Y-%m-%d').strftime('%b')
+                        print(f"  {month_name}: {data['total_qty']} qty, {data['total_sales']} sales")
+            else:
+                print(f"  WARNING: {modelo} not in monthly_aggregates!")
+        
+        if not monthly_aggregates:
+            return templates.TemplateResponse(
+                "modelosanuales.html",
+                {
+                    "request": request,
+                    "year": year,
+                    "chart_data": {"labels": [], "datasets": []},
+                    "summary_data": [],
+                    "monthly_details": [],
+                    "available_years": ["2022", "2023", "2024", "2025"],
+                    "error_message": f"No se encontraron ventas para el año {year}.",
+                },
+            )
+        
+        # Convert to chart format
+        modelo_monthly = defaultdict(dict)
+        modelo_totals = defaultdict(lambda: {
+            'total_revenue': 0, 'total_sales': 0, 'total_quantity': 0
+        })
+        
+        total_month_records = 0
+        
+        for modelo, months_data in monthly_aggregates.items():
+            for month_str, data in months_data.items():
+                try:
+                    month_obj = datetime.strptime(month_str, '%Y-%m-%d')
+                    month_num = month_obj.strftime('%m')
+                    
+                    modelo_monthly[modelo][month_num] = {
+                        'sales': data['total_sales'],
+                        'quantity': data['total_qty'],
+                        'revenue': data['total_revenue']
+                    }
+                    
+                    modelo_totals[modelo]['total_revenue'] += data['total_revenue']
+                    modelo_totals[modelo]['total_sales'] += data['total_sales']
+                    modelo_totals[modelo]['total_quantity'] += data['total_qty']
+                    
+                    total_month_records += 1
+                    
+                except Exception as e:
+                    continue
+        
+        print(f"[Yearly Models] Created {total_month_records} model-month combinations")
+        
+        # Sort ALL models by revenue
+        all_models_sorted = sorted(modelo_totals.items(), key=lambda x: x[1]['total_revenue'], reverse=True)
+        all_models = [modelo for modelo, totals in all_models_sorted if totals['total_revenue'] > 0]
+        
+        print(f"[Yearly Models] Final: {len(all_models)} models with sales data")
+        
+        # Chart data
+        months = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
+        month_labels = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
+        
+        # Generate colors dynamically
+        def generate_distinct_colors(count):
+            colors = []
+            for i in range(count):
+                hue = (i * 137.508) % 360  # Golden angle for good distribution
+                saturation = 65 + (i % 4) * 10
+                lightness = 45 + (i % 3) * 15
+                colors.append(f"hsl({hue}, {saturation}%, {lightness}%)")
+            return colors
+        
+        colors = generate_distinct_colors(len(all_models))
+        
+        # Create datasets for ALL models
+        datasets = []
+        for i, modelo in enumerate(all_models):
+            monthly_revenues = []
+            for month in months:
+                revenue = modelo_monthly[modelo].get(month, {}).get('revenue', 0)
+                monthly_revenues.append(revenue)
+            
+            datasets.append({
+                'label': modelo,
+                'data': monthly_revenues,
+                'borderColor': colors[i],
+                'backgroundColor': colors[i] + '20',
+                'borderWidth': 1.5,
+                'tension': 0.4,
+                'fill': False,
+                'pointRadius': 1,
+                'pointHoverRadius': 3
+            })
+        
+        chart_data = {
+            'labels': month_labels,
+            'datasets': datasets
+        }
+        
+        # Function to extract brand from model name
+        def extract_brand(modelo):
+            modelo = modelo.upper().strip()
+            if modelo.startswith('IPHONE'):
+                return 'APPLE'
+            elif modelo.startswith('SAMSUNG') or modelo.startswith('S2') or modelo.startswith('S3') or modelo.startswith('NOTE') or modelo.startswith('A0') or modelo.startswith('A1') or modelo.startswith('A2') or modelo.startswith('A3') or modelo.startswith('A4') or modelo.startswith('A5') or modelo.startswith('A6') or modelo.startswith('A7') or modelo.startswith('A8') or modelo.startswith('FLIP') or modelo.startswith('Z FOLD'):
+                return 'SAMSUNG'
+            elif modelo.startswith('MOTO') or modelo.startswith('EDGE'):
+                return 'MOTOROLA'
+            elif modelo.startswith('REDMI') or modelo.startswith('MI ') or modelo.startswith('POCO') or modelo.startswith('XIAOMI'):
+                return 'XIAOMI'
+            elif modelo.startswith('HONOR'):
+                return 'HONOR'
+            elif modelo.startswith('OPPO') or modelo.startswith('RENO'):
+                return 'OPPO'
+            elif modelo.startswith('VIVO'):
+                return 'VIVO'
+            elif modelo.startswith('REALME'):
+                return 'REALME'
+            elif modelo.startswith('NOVA') or modelo.startswith('P30') or modelo.startswith('P60') or modelo.startswith('MATE') or modelo.startswith('MAGIC'):
+                return 'HUAWEI'
+            elif modelo.startswith('ZTE') or modelo.startswith('AXON'):
+                return 'ZTE'
+            elif modelo.startswith('INFINIX'):
+                return 'INFINIX'
+            elif 'UNIVERSAL' in modelo:
+                return 'UNIVERSAL'
+            else:
+                return 'OTROS'
+        
+        # Summary data with embedded monthly quantities and brand
+        summary_data = []
+        for modelo, totals in all_models_sorted:
+            # Create monthly quantities array for this model
+            monthly_quantities = []
+            for month in months:  # ['01', '02', '03', ...]
+                qty = modelo_monthly[modelo].get(month, {}).get('quantity', 0)
+                monthly_quantities.append(qty)
+            
+            summary_data.append({
+                'modelo': modelo,
+                'marca': extract_brand(modelo),
+                'total_revenue': totals['total_revenue'],
+                'total_quantity': totals['total_quantity'],
+                'avg_monthly': totals['total_revenue'] / 12,
+                'monthly_qty': monthly_quantities  # Add monthly quantities directly
+            })
+        
+        # Monthly details - Create a lookup dictionary for faster template processing
+        monthly_lookup = {}
+        for modelo in all_models:
+            monthly_lookup[modelo] = {}
+            for month_num, month_name in zip(months, month_labels):
+                data = modelo_monthly[modelo].get(month_num, {})
+                if data.get('revenue', 0) > 0:
+                    monthly_lookup[modelo][month_num] = {
+                        'month_name': month_name,
+                        'sales': data.get('sales', 0),
+                        'quantity': data.get('quantity', 0),
+                        'revenue': data.get('revenue', 0)
+                    }
+                else:
+                    monthly_lookup[modelo][month_num] = {
+                        'month_name': month_name,
+                        'sales': 0,
+                        'quantity': 0,
+                        'revenue': 0
+                    }
+        
+        # Also create the original monthly_details for backward compatibility
+        monthly_details = []
+        for modelo in all_models:
+            for month_num, month_name in zip(months, month_labels):
+                data = modelo_monthly[modelo].get(month_num, {})
+                if data.get('revenue', 0) > 0:
+                    monthly_details.append({
+                        'modelo': modelo,
+                        'month_num': int(month_num),
+                        'month_name': month_name,
+                        'sales': data.get('sales', 0),
+                        'quantity': data.get('quantity', 0),
+                        'revenue': data.get('revenue', 0)
+                    })
+        
+        monthly_details.sort(key=lambda x: (x['modelo'], x['month_num']))
+        
+        # Final debug output
+        months_in_final = set([str(d['month_num']).zfill(2) for d in monthly_details])
+        print(f"[Yearly Models] SUCCESS: {len(datasets)} models, {len(monthly_details)} monthly records")
+        print(f"[Yearly Models] Final data includes months: {sorted(list(months_in_final))}")
+        
+        # Debug: Show sample of monthly lookup data
+        if monthly_lookup and len(monthly_lookup) > 0:
+            first_model = list(monthly_lookup.keys())[0]
+            print(f"[Yearly Models] Sample monthly data for {first_model}: {monthly_lookup[first_model]}")
+        else:
+            print(f"[Yearly Models] WARNING: monthly_lookup is empty!")
+            
+        # Debug: Show sample of summary data
+        if summary_data and len(summary_data) > 0:
+            print(f"[Yearly Models] Sample summary data: {summary_data[0]}")
+        else:
+            print(f"[Yearly Models] WARNING: summary_data is empty!")
+        
+        return templates.TemplateResponse(
+            "modelosanuales.html",
+            {
+                "request": request,
+                "year": year,
+                "chart_data": chart_data,
+                "summary_data": summary_data,
+                "monthly_details": monthly_details,
+                "monthly_lookup": monthly_lookup,  # Add this for easier template lookup
+                "available_years": ["2022", "2023", "2024", "2025"],
+                "error_message": None,
+            },
+        )
+        
+    except Exception as e:
+        print(f"[Yearly Models] Error: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        
+        return templates.TemplateResponse(
+            "modelosanuales.html",
+            {
+                "request": request,
+                "year": year,
+                "chart_data": {"labels": [], "datasets": []},
+                "summary_data": [],
+                "monthly_details": [],
+                "available_years": ["2022", "2023", "2024", "2025"],
+                "error_message": f"Error al cargar los datos: {str(e)}",
+            },
+        )
 
 
 if __name__ == "__main__":

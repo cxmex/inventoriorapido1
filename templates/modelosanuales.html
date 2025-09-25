@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Modelos Anuales ({{ year }})</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
+    <style>
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            background: white;
+            font-size: 11px;
+        }
+        .data-table th, .data-table td {
+            border: 1px solid #dee2e6;
+            padding: 4px 6px;
+            text-align: left;
+            white-space: nowrap;
+        }
+        .data-table th {
+            background-color: #343a40;
+            color: white;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .data-table th:first-child,
+        .data-table td:first-child,
+        .data-table th:nth-child(2), 
+        .data-table td:nth-child(2) {
+            position: sticky;
+            background-color: white;
+            z-index: 10;
+            font-weight: bold;
+        }
+        .data-table th:first-child,
+        .data-table td:first-child {
+            left: 0;
+            min-width: 80px;
+        }
+        .data-table th:nth-child(2),
+        .data-table td:nth-child(2) {
+            left: 80px;
+            min-width: 120px;
+        }
+        .data-table th:first-child,
+        .data-table th:nth-child(2) {
+            background-color: #343a40;
+            z-index: 101;
+        }
+        .data-table tr:nth-child(even) {
+            background-color: #f8f9fa;
+        }
+        .data-table tr:nth-child(even) td:first-child {
+            background-color: #f8f9fa;
+        }
+        .month-col {
+            min-width: 45px;
+            text-align: center;
+        }
+        .total-col {
+            min-width: 70px;
+            text-align: right;
+            background-color: #e9ecef !important;
+            font-weight: bold;
+        }
+        .table-responsive {
+            max-height: 70vh;
+            overflow: auto;
+            border: 2px solid #dee2e6;
+            border-radius: 6px;
+        }
+        .chart-container {
+            position: relative;
+            height: 500px;
+            margin: 20px 0;
+            background: white;
+            border: 2px solid #e9ecef;
+            border-radius: 6px;
+            padding: 15px;
+        }
+        .summary-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .summary-card {
+            background: white;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            padding: 15px;
+            text-align: center;
+        }
+        .summary-card h3 {
+            margin: 0 0 10px 0;
+            color: #495057;
+            font-size: 16px;
+        }
+        .summary-card .value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #007bff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid mt-4">
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h2>Modelos Anuales ({{ year }})</h2>
+                    <div class="d-flex gap-2">
+                        <form method="GET" action="/modelosanuales.html" class="d-inline-flex gap-2">
+                            <select name="year" class="form-select" style="width: auto;">
+                                {% for yr in available_years %}
+                                <option value="{{ yr }}" {{ 'selected' if yr == year else '' }}>{{ yr }}</option>
+                                {% endfor %}
+                            </select>
+                            <button type="submit" class="btn btn-primary">Actualizar</button>
+                        </form>
+                        <button class="btn btn-outline-primary" onclick="window.print()">
+                            <i class="bi bi-printer"></i> Imprimir
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Chart -->
+        <div class="card shadow-sm mb-4">
+            <div class="card-header bg-light">
+                <h5 class="mb-0">Gráfico de Ventas por Modelo</h5>
+            </div>
+            <div class="card-body">
+                {% if chart_data and chart_data.labels and chart_data.labels|length > 0 %}
+                    <div class="chart-container">
+                        <canvas id="salesChart"></canvas>
+                    </div>
+                    <div class="text-center mt-3">
+                        <div class="btn-group" role="group">
+                            <button type="button" class="btn btn-outline-primary" id="barChartBtn">Barras</button>
+                            <button type="button" class="btn btn-outline-primary active" id="lineChartBtn">Línea</button>
+                            <button type="button" class="btn btn-outline-secondary" id="stackedBarBtn">Barras Apiladas</button>
+                        </div>
+                    </div>
+                {% else %}
+                    <div class="alert alert-info">
+                        No hay datos disponibles para mostrar en el gráfico.
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+        
+        {% if error_message %}
+        <div class="alert alert-danger">
+            {{ error_message }}
+        </div>
+        {% else %}
+        
+        <!-- Summary Cards -->
+        {% if summary_data %}
+        <div class="summary-cards">
+            {% for item in summary_data[:6] %}
+            <div class="summary-card">
+                <h3>{{ item.modelo }}</h3>
+                <div class="value">${{ "{:,.0f}".format(item.total_revenue) }}</div>
+                <small>{{ item.total_sales }} ventas | {{ item.total_quantity }} unidades</small>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        
+        <!-- Horizontal Monthly Data Table -->
+        {% if summary_data %}
+        <div class="card shadow-sm mb-4">
+            <div class="card-header bg-light">
+                <h5 class="mb-0">Tabla de Cantidades Mensuales por Modelo</h5>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Marca</th>
+                                <th>Modelo</th>
+                                <th class="month-col">Ene</th>
+                                <th class="month-col">Feb</th>
+                                <th class="month-col">Mar</th>
+                                <th class="month-col">Abr</th>
+                                <th class="month-col">May</th>
+                                <th class="month-col">Jun</th>
+                                <th class="month-col">Jul</th>
+                                <th class="month-col">Ago</th>
+                                <th class="month-col">Sep</th>
+                                <th class="month-col">Oct</th>
+                                <th class="month-col">Nov</th>
+                                <th class="month-col">Dic</th>
+                                <th class="total-col">Total Qty</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in summary_data %}
+                            <tr>
+                                <td>{{ item.marca }}</td>
+                                <td>{{ item.modelo }}</td>
+                                <!-- Monthly quantities using the embedded array -->
+                                {% for month_index in range(12) %}
+                                <td class="text-center">
+                                    {% if item.monthly_qty and item.monthly_qty[month_index] > 0 %}
+                                        {{ item.monthly_qty[month_index] }}
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </td>
+                                {% endfor %}
+                                <!-- Total quantity only -->
+                                <td class="total-col">{{ item.total_quantity }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+        
+        <!-- Summary Stats -->
+        {% if summary_data %}
+        <div class="card shadow-sm">
+            <div class="card-header bg-light">
+                <h5 class="mb-0">Resumen Anual</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    {% set grand_total = 0 %}
+                    {% set grand_qty = 0 %}
+                    {% for item in summary_data %}
+                        {% set grand_total = grand_total + item.total_revenue %}
+                        {% set grand_qty = grand_qty + item.total_quantity %}
+                    {% endfor %}
+                    
+                    <div class="col-md-3">
+                        <div class="card bg-primary text-white">
+                            <div class="card-body text-center">
+                                <h6 class="card-title">Total de Ventas</h6>
+                                <h3>${{ "{:,.0f}".format(grand_total) }}</h3>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-3">
+                        <div class="card bg-success text-white">
+                            <div class="card-body text-center">
+                                <h6 class="card-title">Total Unidades</h6>
+                                <h3>{{ "{:,}".format(grand_qty) }}</h3>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-3">
+                        <div class="card bg-info text-white">
+                            <div class="card-body text-center">
+                                <h6 class="card-title">Modelos Activos</h6>
+                                <h3>{{ summary_data|length }}</h3>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-3">
+                        <div class="card bg-warning text-dark">
+                            <div class="card-body text-center">
+                                <h6 class="card-title">Promedio por Modelo</h6>
+                                <h3>${{ "{:,.0f}".format(grand_total / summary_data|length) }}</h3>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+        
+        {% endif %}
+    </div>
+
+    <!-- Chart.js Script -->
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Check if we have chart data
+        const chartData = {{ chart_data|tojson }};
+        
+        if (chartData && chartData.labels && chartData.labels.length > 0) {
+            console.log('Chart data loaded:', chartData);
+            
+            // Get the chart canvas
+            const ctx = document.getElementById('salesChart').getContext('2d');
+            
+            // Chart configuration
+            const chartOptions = {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        display: false  // Hide legend since we have many models
+                    },
+                    title: {
+                        display: true,
+                        text: 'Ventas Mensuales por Modelo ({{ year }})',
+                        font: {
+                            size: 16,
+                            weight: 'bold'
+                        }
+                    },
+                    tooltip: {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                        titleFont: { size: 14 },
+                        bodyFont: { size: 14 },
+                        filter: function(tooltipItem) {
+                            return tooltipItem.raw > 0;
+                        },
+                        callbacks: {
+                            label: function(context) {
+                                if (context.raw > 0) {
+                                    return context.dataset.label + ': $' + context.raw.toLocaleString();
+                                }
+                                return null;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(200, 200, 200, 0.2)' },
+                        ticks: {
+                            font: { size: 12 },
+                            callback: function(value) {
+                                return '$' + value.toLocaleString();
+                            }
+                        },
+                        title: {
+                            display: true,
+                            text: 'Ingresos ($)',
+                            font: { size: 14, weight: 'bold' }
+                        }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { font: { size: 12 } },
+                        title: {
+                            display: true,
+                            text: 'Mes',
+                            font: { size: 14, weight: 'bold' }
+                        }
+                    }
+                },
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                }
+            };
+            
+            // Prepare data for line chart with enhanced styling
+            const lineChartData = {
+                ...chartData,
+                datasets: chartData.datasets.map(dataset => ({
+                    ...dataset,
+                    fill: false,
+                    borderWidth: 2,
+                    pointBackgroundColor: dataset.borderColor,
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 1,
+                    pointRadius: 2,
+                    pointHoverRadius: 4,
+                    tension: 0.4
+                }))
+            };
+            
+            // Create the line chart by default
+            let salesChart = new Chart(ctx, {
+                type: 'line',
+                data: lineChartData,
+                options: chartOptions
+            });
+            
+            console.log('Line chart created successfully');
+            
+            // Function to switch to bar chart
+            document.getElementById('barChartBtn').addEventListener('click', function() {
+                document.querySelectorAll('.btn-group .btn').forEach(btn => btn.classList.remove('active'));
+                this.classList.add('active');
+                
+                salesChart.destroy();
+                
+                salesChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: chartData,
+                    options: {
+                        ...chartOptions,
+                        scales: {
+                            ...chartOptions.scales,
+                            x: { ...chartOptions.scales.x, stacked: false },
+                            y: { ...chartOptions.scales.y, stacked: false }
+                        }
+                    }
+                });
+            });
+            
+            // Function to switch to stacked bar chart
+            document.getElementById('stackedBarBtn').addEventListener('click', function() {
+                document.querySelectorAll('.btn-group .btn').forEach(btn => btn.classList.remove('active'));
+                this.classList.add('active');
+                
+                salesChart.destroy();
+                
+                salesChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: chartData,
+                    options: {
+                        ...chartOptions,
+                        scales: {
+                            ...chartOptions.scales,
+                            x: { ...chartOptions.scales.x, stacked: true },
+                            y: { ...chartOptions.scales.y, stacked: true }
+                        }
+                    }
+                });
+            });
+            
+            // Function to switch to line chart
+            document.getElementById('lineChartBtn').addEventListener('click', function() {
+                document.querySelectorAll('.btn-group .btn').forEach(btn => btn.classList.remove('active'));
+                this.classList.add('active');
+                
+                salesChart.destroy();
+                
+                salesChart = new Chart(ctx, {
+                    type: 'line',
+                    data: lineChartData,
+                    options: {
+                        ...chartOptions,
+                        scales: {
+                            ...chartOptions.scales,
+                            x: { ...chartOptions.scales.x, stacked: false },
+                            y: { ...chartOptions.scales.y, stacked: false }
+                        }
+                    }
+                });
+            });
+        } else {
+            console.error('No chart data available or chart data is invalid');
+        }
+    });
+    </script>
+</body>
+</html>
