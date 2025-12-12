@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Balance Sheet Tracking</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2rem;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+        
+        .controls {
+            padding: 20px 30px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+        }
+        
+        button {
+            padding: 10px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .charts-container {
+            padding: 30px;
+        }
+        
+        .chart-wrapper {
+            margin-bottom: 40px;
+            background: #fff;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        
+        .chart-wrapper h2 {
+            margin-bottom: 20px;
+            color: #333;
+            font-size: 1.3rem;
+            font-weight: 600;
+        }
+        
+        .status {
+            padding: 15px 30px;
+            text-align: center;
+            font-size: 0.9rem;
+            color: #666;
+        }
+        
+        .error {
+            color: #e53e3e;
+            background: #fff5f5;
+            padding: 15px 30px;
+            border-radius: 8px;
+            margin: 20px 30px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Balance Sheet Tracking</h1>
+            <p>Visualize your financial data over time</p>
+        </div>
+        
+        <div class="controls">
+            <button id="loadBtn" onclick="loadData()">Load Data</button>
+            <button onclick="location.reload()">Refresh</button>
+        </div>
+        
+        <div id="status" class="status">Click "Load Data" to fetch your balance sheet data</div>
+        <div id="error" class="error"></div>
+        
+        <div class="charts-container" id="chartsContainer" style="display: none;">
+            <div class="chart-wrapper">
+                <h2>Assets Overview</h2>
+                <canvas id="assetsChart"></canvas>
+            </div>
+            
+            <div class="chart-wrapper">
+                <h2>Liabilities Overview</h2>
+                <canvas id="liabilitiesChart"></canvas>
+            </div>
+            
+            <div class="chart-wrapper">
+                <h2>Assets vs Liabilities</h2>
+                <canvas id="comparisonChart"></canvas>
+            </div>
+            
+            <div class="chart-wrapper">
+                <h2>All Metrics</h2>
+                <canvas id="allMetricsChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let charts = {};
+        
+        function showError(message) {
+            const errorDiv = document.getElementById('error');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            setTimeout(() => {
+                errorDiv.style.display = 'none';
+            }, 5000);
+        }
+        
+        function updateStatus(message) {
+            document.getElementById('status').textContent = message;
+        }
+        
+        async function loadData() {
+            const btn = document.getElementById('loadBtn');
+            btn.disabled = true;
+            updateStatus('Loading data...');
+            
+            try {
+                const response = await fetch('/api/balance-data');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.length === 0) {
+                    showError('No data found in balance_date table');
+                    updateStatus('No data available');
+                    btn.disabled = false;
+                    return;
+                }
+                
+                renderCharts(data);
+                document.getElementById('chartsContainer').style.display = 'block';
+                updateStatus(`Loaded ${data.length} records • Last updated: ${new Date().toLocaleTimeString()}`);
+                
+            } catch (error) {
+                showError(`Error loading data: ${error.message}`);
+                updateStatus('Error loading data');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+        
+        function renderCharts(data) {
+            Object.values(charts).forEach(chart => chart.destroy());
+            charts = {};
+            
+            const dates = data.map(d => d.date);
+            
+            charts.assets = new Chart(document.getElementById('assetsChart'), {
+                type: 'line',
+                data: {
+                    labels: dates,
+                    datasets: [
+                        {
+                            label: 'Total Assets',
+                            data: data.map(d => d.total_assets),
+                            borderColor: '#667eea',
+                            backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                            borderWidth: 3,
+                            fill: true,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Inventory On Hand',
+                            data: data.map(d => d.inventory_on_hand),
+                            borderColor: '#48bb78',
+                            backgroundColor: 'rgba(72, 187, 120, 0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Inventory In Transit',
+                            data: data.map(d => d.inventory_on_transit),
+                            borderColor: '#ed8936',
+                            backgroundColor: 'rgba(237, 137, 54, 0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Accounts Receivable',
+                            data: data.map(d => d.accounts_receivable),
+                            borderColor: '#38b2ac',
+                            backgroundColor: 'rgba(56, 178, 172, 0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.4
+                        }
+                    ]
+                },
+                options: getChartOptions('Assets')
+            });
+            
+            charts.liabilities = new Chart(document.getElementById('liabilitiesChart'), {
+                type: 'line',
+                data: {
+                    labels: dates,
+                    datasets: [
+                        {
+                            label: 'Total Liabilities',
+                            data: data.map(d => d.total_liabilities),
+                            borderColor: '#e53e3e',
+                            backgroundColor: 'rgba(229, 62, 62, 0.1)',
+                            borderWidth: 3,
+                            fill: true,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Accounts Payable',
+                            data: data.map(d => d.accounts_payable),
+                            borderColor: '#d69e2e',
+                            backgroundColor: 'rgba(214, 158, 46, 0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.4
+                        }
+                    ]
+                },
+                options: getChartOptions('Liabilities')
+            });
+            
+            charts.comparison = new Chart(document.getElementById('comparisonChart'), {
+                type: 'line',
+                data: {
+                    labels: dates,
+                    datasets: [
+                        {
+                            label: 'Total Assets',
+                            data: data.map(d => d.total_assets),
+                            borderColor: '#667eea',
+                            backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                            borderWidth: 3,
+                            fill: true,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Total Liabilities',
+                            data: data.map(d => d.total_liabilities),
+                            borderColor: '#e53e3e',
+                            backgroundColor: 'rgba(229, 62, 62, 0.1)',
+                            borderWidth: 3,
+                            fill: true,
+                            tension: 0.4
+                        }
+                    ]
+                },
+                options: getChartOptions('Comparison')
+            });
+            
+            charts.allMetrics = new Chart(document.getElementById('allMetricsChart'), {
+                type: 'line',
+                data: {
+                    labels: dates,
+                    datasets: [
+                        {
+                            label: 'Inventory On Hand',
+                            data: data.map(d => d.inventory_on_hand),
+                            borderColor: '#48bb78',
+                            borderWidth: 2,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Inventory In Transit',
+                            data: data.map(d => d.inventory_on_transit),
+                            borderColor: '#ed8936',
+                            borderWidth: 2,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Accounts Receivable',
+                            data: data.map(d => d.accounts_receivable),
+                            borderColor: '#38b2ac',
+                            borderWidth: 2,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Total Assets',
+                            data: data.map(d => d.total_assets),
+                            borderColor: '#667eea',
+                            borderWidth: 3,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Accounts Payable',
+                            data: data.map(d => d.accounts_payable),
+                            borderColor: '#d69e2e',
+                            borderWidth: 2,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Total Liabilities',
+                            data: data.map(d => d.total_liabilities),
+                            borderColor: '#e53e3e',
+                            borderWidth: 3,
+                            tension: 0.4
+                        }
+                    ]
+                },
+                options: getChartOptions('All Metrics')
+            });
+        }
+        
+        function getChartOptions(title) {
+            return {
+                responsive: true,
+                maintainAspectRatio: true,
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                },
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top',
+                        labels: {
+                            usePointStyle: true,
+                            padding: 15,
+                            font: {
+                                size: 12
+                            }
+                        }
+                    },
+                    tooltip: {
+                        backgroundColor: 'rgba(0,0,0,0.8)',
+                        padding: 12,
+                        titleFont: {
+                            size: 14
+                        },
+                        bodyFont: {
+                            size: 13
+                        },
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) {
+                                    label += ': ';
+                                }
+                                if (context.parsed.y !== null) {
+                                    label += new Intl.NumberFormat('en-US', {
+                                        style: 'currency',
+                                        currency: 'USD'
+                                    }).format(context.parsed.y);
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            callback: function(value) {
+                                return '$' + value.toLocaleString();
+                            }
+                        },
+                        grid: {
+                            color: 'rgba(0,0,0,0.05)'
+                        }
+                    },
+                    x: {
+                        grid: {
+                            display: false
+                        }
+                    }
+                }
+            };
+        }
+        
+        window.addEventListener('load', loadData);
+    </script>
+</body>
+</html>

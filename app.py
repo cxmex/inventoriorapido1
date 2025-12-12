@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from datetime import datetime
 import time
 import hashlib
+from fastapi.responses import FileResponse
 
 import qrcode
 from fastapi import FastAPI, HTTPException, Request, Form, Depends
@@ -19,6 +20,7 @@ from fastapi.responses import JSONResponse,StreamingResponse  # Optional for deb
 from collections import defaultdict
 import httpx
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo 
 import os
 import shutil
 import traceback
@@ -623,7 +625,9 @@ async def update_terex1(
     name: str = Form(...),
     estilo_id: int = Form(...)
 ):
+
     try:
+        mexico_tz = ZoneInfo("America/Mexico_City") 
         print(f"Processing update for barcode: {barcode}, new value: {new_value}", flush=True)
         
         # Get current value before update
@@ -708,7 +712,7 @@ async def update_terex1(
                 "name": name,
                 "new_qty": new_value,
                 "old_qty": old_value,
-                "fecha": datetime.now().isoformat()  # Add timestamp
+                "fecha": datetime.now(mexico_tz).isoformat()  # Mexico Add timestamp
             }
             
             print(f"Sending tracking data: {tracking_data}", flush=True)
@@ -760,6 +764,7 @@ async def update_terex1(
 
 
     # Directory Structure Checker
+
 @app.get("/check-static")
 async def check_static():
     """Endpoint to check static files directory structure"""
@@ -5926,6 +5931,31 @@ async def modelos_anuales(
             },
         )
 
+@app.get("/api/balance-data")
+async def get_balance_data():
+    """Fetch balance_date data from Supabase"""
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/balance_date",
+                headers=HEADERS,
+                params={"select": "*", "order": "date.asc"}
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/balance-tracking", response_class=HTMLResponse)
+async def balance_tracking_page():
+    """Serve the balance tracking HTML page"""
+    with open("balancesheettracking.html", "r") as f:
+        return f.read()
+    
+@app.get("/balancesheettracking.html")
+async def serve_html():
+    """Serve the balance tracking HTML file"""
+    return FileResponse("templates/balancesheettracking.html")
 
 if __name__ == "__main__":
     import uvicorn
