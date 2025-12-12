@@ -3176,7 +3176,8 @@ async def api_save(payload: SavePayload):
         raise HTTPException(status_code=400, detail="No products provided")
 
     next_order_id = await get_next_order_id()
-    now = datetime.now()
+    mexico_tz = pytz.timezone("America/Mexico_City")
+    now = datetime.now(mexico_tz)
     fecha = now.strftime("%Y-%m-%d")
     hora = now.strftime("%H:%M:%S")
     
