@@ -148,11 +148,12 @@ async def supabase_rpc(function_name: str, params: Dict[str, Any] = None) -> Dic
     return response.json()
 
 def _now_strs():
-    now = dt.datetime.now()
+    mexico_tz = pytz.timezone("America/Mexico_City")
+    now = dt.datetime.now(mexico_tz)  # ADD TIMEZONE HERE
     fecha = f"{now.year}-{now.month:02d}-{now.day:02d}"
     hora = f"{now.hour:02d}:{now.minute:02d}:{now.second:02d}"
     return now, fecha, hora
-
+    
 def _build_receipt_pdf(items: List[dict], total: float, order_id: int) -> io.BytesIO:
     # 58mm receipt width
     width = 58 * mm
