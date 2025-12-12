@@ -12,3 +12,5 @@ qrcode[pil]
 pillow
 google-auth
 pyjwt
+pytz
+

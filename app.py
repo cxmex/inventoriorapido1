@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse,StreamingResponse  # Optional for deb
 from collections import defaultdict
 import httpx
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo 
+import pytz
 import os
 import shutil
 import traceback
@@ -627,7 +627,7 @@ async def update_terex1(
 ):
 
     try:
-        mexico_tz = ZoneInfo("America/Mexico_City") 
+        mexico_tz = pytz.timezone("America/Mexico_City")
         print(f"Processing update for barcode: {barcode}, new value: {new_value}", flush=True)
         
         # Get current value before update
