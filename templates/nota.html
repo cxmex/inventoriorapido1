@@ -146,6 +146,10 @@
         }
         
         barcodeInput.value = '';
+        // ⭐ NEW: Trigger camera capture (fire and forget - don't wait for it)
+        fetch(`/api/start_camera_capture?barcode=${encodeURIComponent(barcode)}`, {
+          method: 'POST'
+        }).catch(err => console.error('Camera capture error:', err));
         
       } catch (error) {
         console.error('Search error:', error);

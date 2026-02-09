@@ -8,8 +8,12 @@ from datetime import datetime
 import time
 import hashlib
 from fastapi.responses import FileResponse
+import urllib.parse
+
 
 import qrcode
+import asyncio
+
 from fastapi import FastAPI, HTTPException, Request, Form, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -38,6 +42,8 @@ from reportlab.graphics.shapes import Drawing
 from reportlab.graphics.barcode.qr import QrCodeWidget
 from reportlab.graphics.barcode import getCodes
 import secrets
+import re
+import json
 
 print(f"Templates directory exists: {os.path.exists('templates')}", flush=True)
 print(f"Templates directory contents: {os.listdir('templates')}", flush=True)
@@ -57,6 +63,9 @@ templates = Jinja2Templates(directory="templates")
 # Supabase configuration
 SUPABASE_URL = "https://gbkhkbfbarsnpbdkxzii.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdia2hrYmZiYXJzbnBiZGt4emlpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQzODAzNzMsImV4cCI6MjA0OTk1NjM3M30.mcOcC2GVEu_wD3xNBzSCC3MwDck3CIdmz4D8adU-bpI"
+
+LOCAL_CAMERA_SERVICE = "http://192.168.1.70:5001"
+
 
 # Supabase client headers
 HEADERS = {
@@ -153,7 +162,7 @@ def _now_strs():
     fecha = f"{now.year}-{now.month:02d}-{now.day:02d}"
     hora = f"{now.hour:02d}:{now.minute:02d}:{now.second:02d}"
     return now, fecha, hora
-    
+
 def _build_receipt_pdf(items: List[dict], total: float, order_id: int) -> io.BytesIO:
     # 58mm receipt width
     width = 58 * mm
@@ -237,6 +246,162 @@ def _build_receipt_pdf(items: List[dict], total: float, order_id: int) -> io.Byt
     return buf
 
 user_sessions = {}
+
+
+# Global variables for camera capture
+current_capture_task = None
+current_barcode = None
+
+# Camera configuration
+CAMERA_USERNAME = "admin"
+CAMERA_PASSWORD = "admin123!"
+CAMERAS = [
+    {"ip": "192.168.1.103", "name": "Camera_1"},
+    {"ip": "192.168.1.106", "name": "Camera_2"},
+    {"ip": "192.168.1.107", "name": "Camera_3"},
+]
+
+def initialize_cameras():
+    """Initialize all camera connections"""
+    import cv2
+    caps = []
+    for cam in CAMERAS:
+        ip = cam["ip"]
+        url = f"rtsp://{CAMERA_USERNAME}:{CAMERA_PASSWORD}@{ip}:554/cam/realmonitor?channel=1&subtype=1&unicast=true&proto=Onvif"
+        cap = cv2.VideoCapture(url)
+        if cap.isOpened():
+            caps.append({"cap": cap, "name": cam['name'], "ip": ip})
+    return caps
+
+async def capture_images_for_one_minute(barcode: str, task_id: int):
+    """Capture images for 1 minute with the given barcode"""
+    import cv2
+    import time
+    from datetime import datetime
+    
+    global current_barcode
+    
+    print(f"Starting capture for barcode: {barcode}")
+    caps = initialize_cameras()
+    
+    if len(caps) == 0:
+        print("No cameras connected!")
+        return
+    
+    start_time = time.time()
+    capture_interval = 5
+    last_capture_time = time.time()
+    duration = 60
+    
+    try:
+        while time.time() - start_time < duration:
+            if current_barcode != barcode or task_id != id(current_capture_task):
+                print(f"Capture cancelled for {barcode}")
+                break
+            
+            current_time = time.time()
+            
+            if current_time - last_capture_time >= capture_interval:
+                for cam_data in caps:
+                    if current_barcode != barcode:
+                        break
+                    
+                    cap = cam_data["cap"]
+                    name = cam_data["name"]
+                    ret, frame = cap.read()
+                    
+                    if not ret:
+                        continue
+                    
+                    timestamp = datetime.now().strftime("%Y-%b-%d-%H:%M:%S")
+                    camera_name = name.lower().replace("camera_", "cam")
+                    filename = f"{timestamp}-{camera_name}-{barcode}.jpg"
+                    
+                    success, buffer = cv2.imencode('.jpg', frame)
+                    
+                    if success:
+                        image_bytes = buffer.tobytes()
+                        try:
+                            supabase.storage.from_("camera-captures").upload(
+                                path=filename,
+                                file=image_bytes,
+                                file_options={"content-type": "image/jpeg"}
+                            )
+                            print(f"✓ Uploaded: {filename}")
+                        except Exception as e:
+                            print(f"✗ Upload failed: {str(e)}")
+                
+                last_capture_time = current_time
+            
+            await asyncio.sleep(0.1)
+    
+    finally:
+        for cam_data in caps:
+            cam_data["cap"].release()
+
+@app.post("/api/start_camera_capture")
+async def start_camera_capture(barcode: str):
+    """
+    Trigger the local camera service to start capturing images.
+    This endpoint can be called from your server, and it will communicate
+    with your local machine where the cameras are connected.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.post(
+                f"{LOCAL_CAMERA_SERVICE}/trigger",
+                json={"barcode": barcode}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return {
+                    "status": "success",
+                    "message": f"Camera capture started for barcode: {barcode}",
+                    "details": data
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": f"Camera service returned status {response.status_code}"
+                }
+                
+    except httpx.ConnectError:
+        # Local camera service is not reachable
+        print(f"Cannot connect to camera service at {LOCAL_CAMERA_SERVICE}")
+        return {
+            "status": "error",
+            "message": "Camera service unavailable"
+        }
+    except httpx.TimeoutException:
+        print(f"Timeout connecting to camera service")
+        return {
+            "status": "error",
+            "message": "Camera service timeout"
+        }
+    except Exception as e:
+        print(f"Camera service error: {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+@app.get("/api/camera_status")
+async def camera_status():
+    """Check if the local camera service is online"""
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            response = await client.get(f"{LOCAL_CAMERA_SERVICE}/")
+            return {
+                "status": "online",
+                "camera_service": LOCAL_CAMERA_SERVICE
+            }
+    except Exception as e:
+        return {
+            "status": "offline",
+            "camera_service": LOCAL_CAMERA_SERVICE,
+            "error": str(e)
+        }
 
 
 # Home page / Menu
@@ -1296,6 +1461,143 @@ async def ver_ventas_por_semana(request: Request):
             }
         )
 
+
+
+
+@app.get("/verinventariodaily", response_class=HTMLResponse)
+async def ver_ventas_por_semana(request: Request):
+    try:
+        import traceback
+        print("Fetching LAST WEEK sales by estilo", flush=True)
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response_by_estilo = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_weekly_sales_by_estilo",
+                    headers=HEADERS,
+                    params={"weeks_back": 2}  # safer than 1 if RPC can return current+previous; we will pick latest
+                )
+
+                response_total = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_weekly_sales_total",
+                    headers=HEADERS,
+                    params={"weeks_back": 2}
+                )
+
+                if response_by_estilo.status_code >= 400:
+                    print(f"Function call error (by estilo): {response_by_estilo.text}", flush=True)
+                    raise Exception(f"Function call failed: {response_by_estilo.status_code}")
+
+                if response_total.status_code >= 400:
+                    print(f"Function call error (total): {response_total.text}", flush=True)
+                    raise Exception(f"Function call failed: {response_total.status_code}")
+
+                weekly_results_by_estilo = response_by_estilo.json() or []
+                weekly_results_total = response_total.json() or []
+
+            if not weekly_results_by_estilo:
+                return templates.TemplateResponse(
+                    "ventas_por_semana.html",
+                    {
+                        "request": request,
+                        "week_totals": {},
+                        "chart_data": {"labels": [], "datasets": []},
+                        "chart_data_by_estilo": False,
+                        "selected_week_start": None,
+                    }
+                )
+
+            # ---- pick the latest week_start present ----
+            # your week_start format appears to be "%d/%m/%Y"
+            def parse_week_start(s: str) -> datetime:
+                return datetime.strptime(s, "%d/%m/%Y")
+
+            all_week_starts = sorted(
+                {row.get("week_start") for row in weekly_results_by_estilo if row.get("week_start")},
+                key=parse_week_start
+            )
+            latest_week_start = all_week_starts[-1]
+
+            # ---- filter only latest week ----
+            last_week_rows = [
+                r for r in weekly_results_by_estilo
+                if r.get("week_start") == latest_week_start
+            ]
+
+            # ---- aggregate by estilo (in case duplicates) ----
+            estilo_totals = {}
+            for row in last_week_rows:
+                estilo = (row.get("estilo") or "SIN_ESTILO").strip()
+                total = float(row.get("total_revenue", 0) or 0)
+                estilo_totals[estilo] = estilo_totals.get(estilo, 0) + total
+
+            # ---- sort estilos high -> low ----
+            sorted_items = sorted(estilo_totals.items(), key=lambda kv: kv[1], reverse=True)
+
+            labels = [k for k, _ in sorted_items]
+            values = [round(v, 2) for _, v in sorted_items]
+
+            # Optional: last-week total for table/header
+            # You can compute it from estilo totals:
+            last_week_total = round(sum(values), 2)
+
+            # Or use weekly_results_total if you want:
+            week_totals = {}
+            for row in weekly_results_total:
+                wk = row.get("week_start")
+                total = float(row.get("total_revenue", 0) or 0)
+                week_totals[wk] = round(total, 2)
+
+            chart_data = {
+                "labels": labels,
+                "datasets": [
+                    {
+                        "label": f"Ventas por estilo (Semana {latest_week_start})",
+                        "data": values,
+                        # Chart.js bar colors (single color is fine, or you can build an array)
+                        "backgroundColor": "rgba(54, 162, 235, 0.7)",
+                        "borderColor": "rgba(54, 162, 235, 1)",
+                        "borderWidth": 1,
+                    }
+                ],
+            }
+
+            return templates.TemplateResponse(
+                "ventas_por_semana.html",
+                {
+                    "request": request,
+                    "week_totals": {latest_week_start: week_totals.get(latest_week_start, last_week_total)},
+                    "chart_data": chart_data,
+                    "chart_data_by_estilo": True,
+                    "selected_week_start": latest_week_start,
+                    "sorted_count": len(labels),
+                }
+            )
+
+        except Exception as fetch_error:
+            print(f"Error fetching data: {str(fetch_error)}", flush=True)
+            traceback.print_exc()
+            return templates.TemplateResponse(
+                "ventas_por_semana.html",
+                {
+                    "request": request,
+                    "week_totals": {},
+                    "chart_data": {"labels": [], "datasets": []},
+                    "chart_data_by_estilo": False,
+                    "selected_week_start": None,
+                }
+            )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return templates.TemplateResponse(
+            "error.html",
+            {
+                "request": request,
+                "error_message": f"Error loading weekly sales: {str(e)}",
+            }
+        )
 
 # Add this new endpoint to your FastAPI app
 # Make sure this route is properly defined in your main FastAPI app
@@ -5958,6 +6260,58 @@ async def balance_tracking_page():
 async def serve_html():
     """Serve the balance tracking HTML file"""
     return FileResponse("templates/balancesheettracking.html")
+
+
+@app.get("/metertelefonos", response_class=HTMLResponse)
+async def metertelefonos_get(request: Request):
+    return templates.TemplateResponse("metertelefonos.html", {"request": request})
+
+def normalize_phone(raw: str) -> str:
+    return re.sub(r"\D+", "", raw or "")
+
+async def supabase_insert(table: str, payload: dict):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_KEY env vars")
+
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(url, headers=headers, json=payload)
+
+    if r.status_code >= 400:
+        raise HTTPException(status_code=500, detail=f"Supabase insert failed: {r.status_code} {r.text}")
+
+    return r.json()
+
+@app.post("/metertelefonos")
+async def meter_telefonos_submit(
+    nombre: str = Form(...),
+    telefono: str = Form(...)
+):
+    try:
+        phone = normalize_phone(telefono)
+        if not phone:
+            raise HTTPException(status_code=400, detail="Telefono inválido")
+
+        # ✅ INSERT (NO supabase_request call here)
+        await supabase_insert("telefonos", {"nombre": nombre, "telefono": phone})
+
+        # ✅ WhatsApp link with "HOLA AMIGO"
+        whatsapp_url = f"https://wa.me/{phone}?text={urllib.parse.quote('HOLA AMIGO')}"
+
+        return RedirectResponse(url=whatsapp_url, status_code=303)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error saving phone and creating WhatsApp link: {str(e)}", flush=True)
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

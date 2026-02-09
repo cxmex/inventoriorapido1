@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Meter Teléfonos</title>
+</head>
+<body>
+  <h1>Guardar contacto</h1>
+
+  <form method="POST" action="/metertelefonos">
+    <div>
+      <label>Nombre</label><br>
+      <input name="nombre" required>
+    </div>
+
+    <div style="margin-top:10px;">
+      <label>Teléfono (formato internacional)</label><br>
+      <input name="telefono" placeholder="521XXXXXXXXXX" required>
+    </div>
+
+    <div style="margin-top:15px;">
+      <button type="submit">Guardar y enviar WhatsApp</button>
+    </div>
+  </form>
+</body>
+</html>
