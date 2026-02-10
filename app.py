@@ -64,7 +64,7 @@ templates = Jinja2Templates(directory="templates")
 SUPABASE_URL = "https://gbkhkbfbarsnpbdkxzii.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdia2hrYmZiYXJzbnBiZGt4emlpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQzODAzNzMsImV4cCI6MjA0OTk1NjM3M30.mcOcC2GVEu_wD3xNBzSCC3MwDck3CIdmz4D8adU-bpI"
 
-LOCAL_CAMERA_SERVICE = "http://100.122.143.101:5001"
+LOCAL_CAMERA_SERVICE = "http://192.168.1.71:5001"
 
 
 # Supabase client headers
