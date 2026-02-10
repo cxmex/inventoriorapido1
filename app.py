@@ -67,7 +67,7 @@ SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 LOCAL_CAMERA_SERVICE = "http://192.168.1.71:5001"
 
 
-# Supabase client headers
+# Supabase client headershello world
 HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
