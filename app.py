@@ -3,11 +3,12 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 import jwt
 import requests
-from fastapi import HTTPException
+from fastapi import HTTPException,APIRouter
 from datetime import datetime
 import time
 import hashlib
 from fastapi.responses import FileResponse
+
 import urllib.parse
 
 
@@ -76,7 +77,19 @@ HEADERS = {
     "Prefer": "return=representation"
 }
 
+router = APIRouter()
+
+
 # Data models
+class ConteoEfectivoCreate(BaseModel):
+    nombre: str
+    amount: float
+
+class ConteoEfectivoResponse(BaseModel):
+    id: int
+    nombre: str
+    amount: float
+    created_at: str
 
 class GoogleAuthRequest(BaseModel):
     google_token: str
@@ -3163,6 +3176,9 @@ async def compare_queries():
 async def nota(request: Request):
     return templates.TemplateResponse("nota.html", {"request": request})
 
+@app.get("/nota1", response_class=HTMLResponse)
+async def nota(request: Request):
+    return templates.TemplateResponse("nota1.html", {"request": request})
 
 
 
@@ -3962,7 +3978,7 @@ async def store_redemption_token(order_id: int, token: str, total: float):
 
 
 def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, redemption_token: str) -> io.BytesIO:
-    """Updated PDF generation with QR code - now takes redemption_token as parameter"""
+    """Updated PDF generation with QR code, total pieces, and discount"""
     width = 58 * mm
     # Calculate dynamic height based on content
     estimated_item_height = len(items) * 22  # Approximately 22 points per item
@@ -3971,6 +3987,19 @@ def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, r
     margin = 2 * mm
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=(width, height))
+    
+    # Calculate total pieces and discount
+    total_pieces = sum(it["qty"] for it in items)
+    
+    def get_discount(qty):
+        if qty > 100:
+            return qty * 10
+        if qty > 50:
+            return qty * 5
+        return 0
+    
+    discount = get_discount(total_pieces)
+    subtotal = total + discount  # Reverse calculate subtotal
     
     def header():
         y = height - margin
@@ -3992,7 +4021,7 @@ def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, r
         
     # Add items
     for it in items:
-        if y < 40 * mm:  # More space needed for QR
+        if y < 60 * mm:  # More space needed for totals + QR
             c.showPage()
             y = header()
         qty = str(it["qty"]); name = str(it["name"]); price = it["price"]; sub = it["subtotal"]
@@ -4002,7 +4031,32 @@ def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, r
         c.drawRightString(width - margin, y, f"Subtotal: ${sub:0.2f}"); y -= 12
     
     y -= 4; c.line(margin, y, width - margin, y); y -= 12
-    c.setFont("Helvetica-Bold", 9); c.drawString(margin, y, "TOTAL:"); c.drawRightString(width - margin, y, f"${total:0.2f}"); y -= 14
+    
+    # Show total pieces
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(margin, y, f"Total Piezas: {total_pieces}")
+    y -= 12
+    
+    # Show subtotal
+    c.setFont("Helvetica", 8)
+    c.drawString(margin, y, "SUBTOTAL:")
+    c.drawRightString(width - margin, y, f"${subtotal:0.2f}")
+    y -= 10
+    
+    # Show discount if applicable
+    if discount > 0:
+        c.setFont("Helvetica", 8)
+        c.drawString(margin, y, "DESCUENTO:")
+        c.setFillColor(colors.green)
+        c.drawRightString(width - margin, y, f"-${discount:0.2f}")
+        c.setFillColor(colors.black)
+        y -= 10
+    
+    # Show final total
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(margin, y, "TOTAL:")
+    c.drawRightString(width - margin, y, f"${total:0.2f}")
+    y -= 14
         
     # Add loyalty program message
     c.setFont("Helvetica", 7)
@@ -4014,7 +4068,7 @@ def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, r
     # Create QR Code (doubled size: from 22mm to 44mm)
     try:
         # URL that points to your redeem page with the token
-        qr_url = f"https://teresalocal352.com/redeem.html?token={redemption_token}"
+        qr_url = f"https://view.page/sCj5OZ"
                 
         # Generate QR code using reportlab - doubled size
         qr_widget = QrCodeWidget(qr_url)
@@ -4040,10 +4094,7 @@ def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, r
         c.setFont("Helvetica", 6)
         c.drawCentredString(width/2, y - 10, f"Token: {redemption_token[:16]}...")
     
-    # Removed the "¡Gracias por su compra!" line
-    
     c.showPage(); c.save(); buf.seek(0); return buf
-
 
 async def get_order_total(order_id: int):
     """Get total amount for an order from ventas_terex1"""
@@ -6314,6 +6365,77 @@ async def meter_telefonos_submit(
     except Exception as e:
         print(f"Error saving phone and creating WhatsApp link: {str(e)}", flush=True)
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.get("/conteoefectivo")
+async def conteoefectivo_page():
+    return FileResponse("templates/conteoefectivo.html")
+
+
+@app.post("/api/conteo", response_model=ConteoEfectivoResponse)
+async def create_conteo(data: ConteoEfectivoCreate):
+    """Save a new cash count entry"""
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo"
+        payload = {
+            "nombre": data.nombre,
+            "amount": data.amount
+        }
+        
+        response = requests.post(url, headers=HEADERS, json=payload)
+        response.raise_for_status()
+        
+        entry = response.json()[0]
+        return ConteoEfectivoResponse(
+            id=entry["id"],
+            nombre=entry["nombre"],
+            amount=entry["amount"],
+            created_at=entry["created_at"]
+        )
+    except Exception as e:
+        print(f"Error saving conteo: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/conteo", response_model=List[ConteoEfectivoResponse])
+async def get_conteo(limit: Optional[int] = 50):
+    """Get cash count entries (most recent first)"""
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo?order=created_at.desc&limit={limit}"
+        
+        response = requests.get(url, headers=HEADERS)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if not data:
+            return []
+        
+        return [
+            ConteoEfectivoResponse(
+                id=entry["id"],
+                nombre=entry["nombre"],
+                amount=entry["amount"],
+                created_at=entry["created_at"]
+            )
+            for entry in data
+        ]
+    except Exception as e:
+        print(f"Error fetching conteo: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/conteo/{conteo_id}")
+async def delete_conteo(conteo_id: int):
+    """Delete a cash count entry"""
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo?id=eq.{conteo_id}"
+        
+        response = requests.delete(url, headers=HEADERS)
+        response.raise_for_status()
+        
+        return {"success": True, "message": "Entry deleted"}
+    except Exception as e:
+        print(f"Error deleting conteo: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn

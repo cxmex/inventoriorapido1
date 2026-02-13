@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Conteo de Efectivo</title>
+  <style>
+    body { 
+      font-family: Arial, sans-serif; 
+      margin: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #333;
+      border-bottom: 3px solid #2196f3;
+      padding-bottom: 10px;
+    }
+    .current-time {
+      background: #2196f3;
+      color: white;
+      padding: 15px;
+      border-radius: 8px;
+      margin: 20px 0;
+      text-align: center;
+      font-size: 18px;
+      font-weight: bold;
+    }
+    .form-section {
+      background: #f9f9f9;
+      padding: 20px;
+      border-radius: 8px;
+      margin: 20px 0;
+    }
+    .row { 
+      display: flex; 
+      gap: 10px; 
+      margin: 10px 0; 
+      align-items: center; 
+    }
+    .btn { 
+      padding: 10px 20px; 
+      border: none;
+      background: #4caf50; 
+      color: white;
+      cursor: pointer;
+      border-radius: 4px;
+      font-size: 16px;
+      font-weight: bold;
+    }
+    .btn:hover {
+      background: #45a049;
+    }
+    .btn-delete {
+      background: #f44336;
+      padding: 5px 10px;
+      font-size: 12px;
+    }
+    .btn-delete:hover {
+      background: #da190b;
+    }
+    input[type="text"], input[type="number"] { 
+      padding: 10px; 
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 16px;
+    }
+    input[type="text"] {
+      width: 250px;
+    }
+    input[type="number"] {
+      width: 150px;
+    }
+    table { 
+      width: 100%; 
+      border-collapse: collapse; 
+      margin-top: 20px;
+      background: white;
+    }
+    th, td { 
+      border: 1px solid #ddd; 
+      padding: 12px; 
+      text-align: left; 
+    }
+    th {
+      background: #2196f3;
+      color: white;
+      font-weight: bold;
+    }
+    tr:nth-child(even) {
+      background: #f9f9f9;
+    }
+    tr:hover {
+      background: #f1f1f1;
+    }
+    .status { 
+      margin-left: 10px; 
+      color: #666; 
+    }
+    .error { 
+      color: #f44336; 
+      font-weight: bold;
+    }
+    .success { 
+      color: #4caf50; 
+      font-weight: bold;
+    }
+    .total-section {
+      background: #e3f2fd;
+      padding: 15px;
+      border-radius: 8px;
+      margin: 20px 0;
+      font-size: 18px;
+      font-weight: bold;
+    }
+    .amount {
+      color: #2196f3;
+      font-weight: bold;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 40px;
+      color: #999;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>💰 Conteo de Efectivo</h1>
+    
+    <div class="current-time">
+      🕐 <span id="current-time"></span>
+    </div>
+
+    <div class="form-section">
+      <h2>Registrar Conteo</h2>
+      <div class="row">
+        <input id="nombre" type="text" placeholder="Nombre de quien cuenta" autofocus />
+        <input id="amount" type="number" placeholder="Monto" step="0.01" />
+        <button id="btn-save" class="btn">💾 Guardar</button>
+        <span id="status" class="status"></span>
+      </div>
+    </div>
+
+    <div class="total-section">
+      Total de Registros: <span id="total-count" class="amount">0</span> | 
+      Total Acumulado: <span id="total-amount" class="amount">$0.00</span>
+    </div>
+
+    <h2>📋 Historial de Conteos</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Nombre</th>
+          <th>Monto</th>
+          <th>Fecha y Hora</th>
+          <th>Acción</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <script>
+    const nombreInput = document.getElementById('nombre');
+    const amountInput = document.getElementById('amount');
+    const statusEl = document.getElementById('status');
+    const tbody = document.getElementById('tbody');
+    const saveBtn = document.getElementById('btn-save');
+    const totalCountEl = document.getElementById('total-count');
+    const totalAmountEl = document.getElementById('total-amount');
+    const currentTimeEl = document.getElementById('current-time');
+
+    function fmt(n) { 
+      return '$' + Number(n || 0).toFixed(2); 
+    }
+
+    function formatDateTime(isoString) {
+      const date = new Date(isoString);
+      const dateStr = date.toLocaleDateString('es-MX', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      const timeStr = date.toLocaleTimeString('es-MX', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      });
+      return `${dateStr} ${timeStr}`;
+    }
+
+    function updateCurrentTime() {
+      const now = new Date();
+      const timeStr = now.toLocaleString('es-MX', {
+        timeZone: 'America/Mexico_City',
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      });
+      currentTimeEl.textContent = timeStr;
+    }
+
+    // Update time every second
+    updateCurrentTime();
+    setInterval(updateCurrentTime, 1000);
+
+    async function loadConteos() {
+      try {
+        const response = await fetch('/api/conteo');
+        if (!response.ok) {
+          throw new Error('Error al cargar datos');
+        }
+        
+        const data = await response.json();
+        
+        tbody.innerHTML = '';
+        
+        if (data.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No hay registros aún</td></tr>';
+          totalCountEl.textContent = '0';
+          totalAmountEl.textContent = '$0.00';
+          return;
+        }
+        
+        let totalAmount = 0;
+        
+        data.forEach(entry => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${entry.id}</td>
+            <td><strong>${entry.nombre}</strong></td>
+            <td class="amount">${fmt(entry.amount)}</td>
+            <td>${formatDateTime(entry.created_at)}</td>
+            <td><button class="btn btn-delete" onclick="deleteConteo(${entry.id})">🗑️ Eliminar</button></td>
+          `;
+          tbody.appendChild(tr);
+          totalAmount += parseFloat(entry.amount);
+        });
+        
+        totalCountEl.textContent = data.length;
+        totalAmountEl.textContent = fmt(totalAmount);
+        
+      } catch (error) {
+        console.error('Error loading conteos:', error);
+        statusEl.textContent = 'Error al cargar datos';
+        statusEl.className = 'status error';
+      }
+    }
+
+    async function saveConteo() {
+      const nombre = nombreInput.value.trim();
+      const amount = parseFloat(amountInput.value);
+      
+      if (!nombre) {
+        statusEl.textContent = 'Por favor ingresa un nombre';
+        statusEl.className = 'status error';
+        return;
+      }
+      
+      if (!amount || amount <= 0) {
+        statusEl.textContent = 'Por favor ingresa un monto válido';
+        statusEl.className = 'status error';
+        return;
+      }
+      
+      saveBtn.disabled = true;
+      statusEl.textContent = 'Guardando...';
+      statusEl.className = 'status';
+      
+      try {
+        const response = await fetch('/api/conteo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nombre, amount })
+        });
+        
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.detail || 'Error al guardar');
+        }
+        
+        statusEl.textContent = '✅ Guardado exitosamente';
+        statusEl.className = 'status success';
+        
+        // Clear inputs
+        nombreInput.value = '';
+        amountInput.value = '';
+        nombreInput.focus();
+        
+        // Reload table
+        await loadConteos();
+        
+      } catch (error) {
+        console.error('Save error:', error);
+        statusEl.textContent = `❌ Error: ${error.message}`;
+        statusEl.className = 'status error';
+      } finally {
+        saveBtn.disabled = false;
+        setTimeout(() => {
+          if (statusEl.className.includes('success')) {
+            statusEl.textContent = '';
+          }
+        }, 3000);
+      }
+    }
+
+    async function deleteConteo(id) {
+      if (!confirm('¿Estás seguro de eliminar este registro?')) {
+        return;
+      }
+      
+      try {
+        const response = await fetch(`/api/conteo/${id}`, {
+          method: 'DELETE'
+        });
+        
+        if (!response.ok) {
+          throw new Error('Error al eliminar');
+        }
+        
+        await loadConteos();
+        
+      } catch (error) {
+        console.error('Delete error:', error);
+        alert('Error al eliminar: ' + error.message);
+      }
+    }
+
+    // Event listeners
+    saveBtn.addEventListener('click', saveConteo);
+    nombreInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        amountInput.focus();
+      }
+    });
+    amountInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        saveConteo();
+      }
+    });
+
+    // Load data on page load
+    loadConteos();
+  </script>
+</body>
+</html>
