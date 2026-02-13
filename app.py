@@ -82,14 +82,21 @@ router = APIRouter()
 
 # Data models
 class ConteoEfectivoCreate(BaseModel):
+    tipo: str  # 'credito' or 'debito'
     nombre: str
     amount: float
+
 
 class ConteoEfectivoResponse(BaseModel):
     id: int
     nombre: str
+    tipo: str
     amount: float
+    balance: float
     created_at: str
+    order_id: Optional[int] = None
+    descripcion: Optional[str] = None
+
 
 class GoogleAuthRequest(BaseModel):
     google_token: str
@@ -106,7 +113,8 @@ class ProductIn(BaseModel):
     price: float = Field(..., ge=0)
 
 class SavePayload(BaseModel):
-    products: list[ProductIn] = Field(..., min_length=1)
+    products: list[dict]
+    payment_method: Optional[str] = "efectivo"
 
 
 class InventarioEstilo(BaseModel):
@@ -121,8 +129,6 @@ class Product(BaseModel):
     price: float
     customer_email: Optional[str] = None  # Add this field
 
-class SavePayload(BaseModel):
-    products: List[Product]
 
 # Helper function for Supabase requests
 async def supabase_request(
@@ -3489,12 +3495,16 @@ async def create_barcode_for_existing_customer(email: str):
         return None
 
 
-
 @app.post("/api/save")
 async def api_save(payload: SavePayload):
-    """Enhanced save function that processes loyalty deductions"""
+    """Enhanced save function that processes loyalty deductions and payment method"""
     if not payload.products:
         raise HTTPException(status_code=400, detail="No products provided")
+
+    # Get payment method with fallback
+    payment_method = getattr(payload, 'payment_method', 'efectivo')
+    print(f"DEBUG: Received payment_method: {payment_method}")  # Debug log
+    
 
     next_order_id = await get_next_order_id()
     mexico_tz = pytz.timezone("America/Mexico_City")
@@ -3503,21 +3513,31 @@ async def api_save(payload: SavePayload):
     hora = now.strftime("%H:%M:%S")
     
     items_for_ticket = []
-    loyalty_deductions = []  # Track loyalty deductions
-    
+    loyalty_deductions = []
+    payment_method = getattr(payload, 'payment_method', 'efectivo')  # Fallback to efectivo if missing
+
     for p in payload.products:
+        # Convert to dict if it's a Pydantic model
+        if hasattr(p, 'dict'):
+            p_dict = p.dict()
+        elif hasattr(p, 'model_dump'):
+            p_dict = p.model_dump()
+        else:
+            p_dict = p  # Already a dict
+        
         # Check if this is a loyalty barcode (starts with 8000)
-        if p.codigo.startswith('8000') and len(p.codigo) == 13:
+        codigo = p_dict.get('codigo', '')
+        if codigo.startswith('8000') and len(codigo) == 13:
             # Process loyalty deduction
-            loyalty_result = await process_loyalty_deduction(p, next_order_id, fecha, hora)
+            loyalty_result = await process_loyalty_deduction(p_dict, next_order_id, fecha, hora)
             loyalty_deductions.append(loyalty_result)
             
             # Add to ticket items
             items_for_ticket.append({
-                "qty": p.qty,
-                "name": p.name,
-                "price": p.price,
-                "subtotal": p.qty * p.price
+                "qty": p_dict.get('qty', 1),
+                "name": p_dict.get('name', ''),
+                "price": p_dict.get('price', 0),
+                "subtotal": p_dict.get('qty', 1) * p_dict.get('price', 0)
             })
             continue
         
@@ -3527,7 +3547,7 @@ async def api_save(payload: SavePayload):
             endpoint="/rest/v1/inventario1",
             params={
                 "select": "modelo,modelo_id,estilo,estilo_id,terex1",
-                "barcode": f"eq.{p.codigo}",
+                "barcode": f"eq.{codigo}",
                 "limit": "1",
             },
         )
@@ -3535,17 +3555,17 @@ async def api_save(payload: SavePayload):
         if not inv_rows:
             raise HTTPException(
                 status_code=400, 
-                detail=f"Producto con barcode {p.codigo} no existe en inventario1"
+                detail=f"Producto con barcode {codigo} no existe en inventario1"
             )
         
         inv = inv_rows[0]
 
-        # Insert into ventas_terex1
+        # Insert into ventas_terex1 with payment_method
         record = {
-            "qty": p.qty,
-            "name": p.name,
-            "name_id": p.codigo,
-            "price": p.price,
+            "qty": p_dict.get('qty', 1),
+            "name": p_dict.get('name', ''),
+            "name_id": codigo,
+            "price": p_dict.get('price', 0),
             "fecha": fecha,
             "hora": hora,
             "order_id": next_order_id,
@@ -3553,6 +3573,7 @@ async def api_save(payload: SavePayload):
             "modelo_id": inv.get("modelo_id", ""),
             "estilo": inv.get("estilo", ""),
             "estilo_id": inv.get("estilo_id", ""),
+            "payment_method": payment_method  # Add payment method
         }
 
         await supabase_request(
@@ -3563,30 +3584,55 @@ async def api_save(payload: SavePayload):
 
         # Update inventory
         current_qty = int(inv.get("terex1") or 0)
-        new_qty = current_qty - p.qty
+        new_qty = current_qty - p_dict.get('qty', 1)
         
         await supabase_request(
             method="PATCH",
-            endpoint=f"/rest/v1/inventario1?barcode=eq.{p.codigo}",
+            endpoint=f"/rest/v1/inventario1?barcode=eq.{codigo}",
             json_data={"terex1": new_qty},
         )
 
         # Add to ticket items
         items_for_ticket.append({
-            "qty": p.qty,
-            "name": p.name,
-            "price": p.price,
-            "subtotal": p.qty * p.price
+            "qty": p_dict.get('qty', 1),
+            "name": p_dict.get('name', ''),
+            "price": p_dict.get('price', 0),
+            "subtotal": p_dict.get('qty', 1) * p_dict.get('price', 0)
         })
 
     # Calculate total
     total = sum(i["subtotal"] for i in items_for_ticket)
 
+    # If payment method is efectivo, add entry to conteo_efectivo
+    if payment_method == "efectivo":
+        print(f"DEBUG: Adding to conteo_efectivo for order {next_order_id}")  # Debug
+        try:
+            current_balance = await get_current_balance()
+            new_balance = current_balance + total
+            
+            url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo"
+            payload_conteo = {
+                "nombre": f"Venta #{next_order_id}",
+                "tipo": "credito",
+                "amount": total,
+                "balance": new_balance,
+                "order_id": next_order_id
+            }
+            
+            response = requests.post(url, headers=HEADERS, json=payload_conteo)
+            response.raise_for_status()
+            print(f"Added cash entry for order {next_order_id}: ${total}")
+        except Exception as e:
+            print(f"Error adding conteo_efectivo entry: {e}")
+    else:
+        print(f"DEBUG: Skipping conteo_efectivo (payment method is {payment_method})")
+            # Don't fail the whole transaction if conteo fails
+
     # Generate redemption token and PDF
     redemption_token = generate_redemption_token()
     await store_redemption_token(next_order_id, redemption_token, total)
     
-    # Use your existing QR PDF function, not the loyalty one
+    # Use your existing QR PDF function
     pdf_buf = _build_receipt_pdf_with_qr(items_for_ticket, total, next_order_id, redemption_token)
     
     filename = f"ticket_{next_order_id}_{int(datetime.now().timestamp()*1000)}.pdf"
@@ -3596,6 +3642,7 @@ async def api_save(payload: SavePayload):
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
 
 
 async def process_loyalty_deduction(product, order_id: int, fecha: str, hora: str):
@@ -6397,8 +6444,8 @@ async def create_conteo(data: ConteoEfectivoCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/conteo", response_model=List[ConteoEfectivoResponse])
-async def get_conteo(limit: Optional[int] = 50):
-    """Get cash count entries (most recent first)"""
+async def get_conteo(limit: Optional[int] = 100):
+    """Get cash movement entries (most recent first)"""
     try:
         url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo?order=created_at.desc&limit={limit}"
         
@@ -6414,8 +6461,12 @@ async def get_conteo(limit: Optional[int] = 50):
             ConteoEfectivoResponse(
                 id=entry["id"],
                 nombre=entry["nombre"],
+                tipo=entry["tipo"],
                 amount=entry["amount"],
-                created_at=entry["created_at"]
+                balance=entry["balance"],
+                created_at=entry["created_at"],
+                order_id=entry.get("order_id"),
+                descripcion=entry.get("descripcion")
             )
             for entry in data
         ]
@@ -6425,16 +6476,123 @@ async def get_conteo(limit: Optional[int] = 50):
 
 @app.delete("/api/conteo/{conteo_id}")
 async def delete_conteo(conteo_id: int):
-    """Delete a cash count entry"""
+    """Delete a cash movement entry and recalculate all balances"""
     try:
-        url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo?id=eq.{conteo_id}"
+        # Check if trying to delete the initial balance
+        check_url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo?id=eq.{conteo_id}"
+        check_response = requests.get(check_url, headers=HEADERS)
+        check_response.raise_for_status()
+        entry_data = check_response.json()
         
+        if entry_data and entry_data[0].get('tipo') == 'inicial':
+            raise HTTPException(status_code=400, detail="Cannot delete initial balance")
+        
+        # Delete the entry
+        url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo?id=eq.{conteo_id}"
         response = requests.delete(url, headers=HEADERS)
         response.raise_for_status()
         
-        return {"success": True, "message": "Entry deleted"}
+        # Recalculate all balances
+        await recalculate_balances()
+        
+        return {"success": True, "message": "Entry deleted and balances recalculated"}
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error deleting conteo: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def get_current_balance():
+    """Get the current balance from the last entry"""
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo?order=created_at.desc&limit=1"
+        response = requests.get(url, headers=HEADERS)
+        response.raise_for_status()
+        data = response.json()
+        
+        if not data:
+            return 0.0
+        
+        return float(data[0].get('balance', 0.0))
+    except Exception as e:
+        print(f"Error getting current balance: {e}")
+        return 0.0
+
+# Helper function to recalculate all balances after deletion
+async def recalculate_balances():
+    """Recalculate all balances after a deletion"""
+    try:
+        # Get all entries ordered by creation time
+        url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo?order=created_at.asc"
+        response = requests.get(url, headers=HEADERS)
+        response.raise_for_status()
+        entries = response.json()
+        
+        running_balance = 0.0
+        
+        for entry in entries:
+            if entry['tipo'] == 'inicial':
+                running_balance = float(entry['amount'])
+            elif entry['tipo'] == 'credito':
+                running_balance += float(entry['amount'])
+            elif entry['tipo'] == 'debito':
+                running_balance -= float(entry['amount'])
+            
+            # Update the entry's balance
+            update_url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo?id=eq.{entry['id']}"
+            update_response = requests.patch(
+                update_url,
+                headers=HEADERS,
+                json={"balance": running_balance}
+            )
+            update_response.raise_for_status()
+        
+        return running_balance
+    except Exception as e:
+        print(f"Error recalculating balances: {e}")
+        raise
+
+@app.post("/api/conteo", response_model=ConteoEfectivoResponse)
+async def create_conteo(data: ConteoEfectivoCreate):
+    """Save a new cash movement entry"""
+    try:
+        # Get current balance
+        current_balance = await get_current_balance()
+        
+        # Calculate new balance
+        if data.tipo == 'credito':
+            new_balance = current_balance + data.amount
+        elif data.tipo == 'debito':
+            new_balance = current_balance - data.amount
+        else:
+            raise HTTPException(status_code=400, detail="Tipo must be 'credito' or 'debito'")
+        
+        # Insert new entry
+        url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo"
+        payload = {
+            "nombre": data.nombre,
+            "tipo": data.tipo,
+            "amount": data.amount,
+            "balance": new_balance
+        }
+        
+        response = requests.post(url, headers=HEADERS, json=payload)
+        response.raise_for_status()
+        
+        entry = response.json()[0]
+        return ConteoEfectivoResponse(
+            id=entry["id"],
+            nombre=entry["nombre"],
+            tipo=entry["tipo"],
+            amount=entry["amount"],
+            balance=entry["balance"],
+            created_at=entry["created_at"],
+            order_id=entry.get("order_id"),
+            descripcion=entry.get("descripcion")
+        )
+    except Exception as e:
+        print(f"Error saving conteo: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

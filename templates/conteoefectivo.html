@@ -11,7 +11,7 @@
       background: #f5f5f5;
     }
     .container {
-      max-width: 1000px;
+      max-width: 1200px;
       margin: 0 auto;
       background: white;
       padding: 20px;
@@ -31,6 +31,23 @@
       margin: 20px 0;
       text-align: center;
       font-size: 18px;
+      font-weight: bold;
+    }
+    .balance-card {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 25px;
+      border-radius: 12px;
+      margin: 20px 0;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+    }
+    .balance-label {
+      font-size: 14px;
+      opacity: 0.9;
+      margin-bottom: 5px;
+    }
+    .balance-amount {
+      font-size: 36px;
       font-weight: bold;
     }
     .form-section {
@@ -66,14 +83,20 @@
     .btn-delete:hover {
       background: #da190b;
     }
-    input[type="text"], input[type="number"] { 
+    .btn-expense {
+      background: #ff9800;
+    }
+    .btn-expense:hover {
+      background: #f57c00;
+    }
+    input[type="text"], input[type="number"], select { 
       padding: 10px; 
       border: 1px solid #ddd;
       border-radius: 4px;
       font-size: 16px;
     }
-    input[type="text"] {
-      width: 250px;
+    input[type="text"], select {
+      width: 200px;
     }
     input[type="number"] {
       width: 150px;
@@ -112,17 +135,35 @@
       color: #4caf50; 
       font-weight: bold;
     }
-    .total-section {
-      background: #e3f2fd;
-      padding: 15px;
-      border-radius: 8px;
-      margin: 20px 0;
-      font-size: 18px;
+    .amount-positive {
+      color: #4caf50;
       font-weight: bold;
     }
-    .amount {
-      color: #2196f3;
+    .amount-negative {
+      color: #f44336;
       font-weight: bold;
+    }
+    .amount-neutral {
+      color: #666;
+      font-weight: bold;
+    }
+    .tipo-badge {
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: bold;
+    }
+    .tipo-inicial {
+      background: #e3f2fd;
+      color: #1976d2;
+    }
+    .tipo-credito {
+      background: #c8e6c9;
+      color: #388e3c;
+    }
+    .tipo-debito {
+      background: #ffccbc;
+      color: #d84315;
     }
     .empty-state {
       text-align: center;
@@ -134,35 +175,43 @@
 </head>
 <body>
   <div class="container">
-    <h1>💰 Conteo de Efectivo</h1>
+    <h1>💰 Estado de Cuenta - Efectivo</h1>
     
     <div class="current-time">
       🕐 <span id="current-time"></span>
     </div>
 
+    <div class="balance-card">
+      <div class="balance-label">Saldo Actual</div>
+      <div class="balance-amount" id="current-balance">$0.00</div>
+    </div>
+
     <div class="form-section">
-      <h2>Registrar Conteo</h2>
+      <h2>Registrar Movimiento</h2>
       <div class="row">
-        <input id="nombre" type="text" placeholder="Nombre de quien cuenta" autofocus />
+        <select id="tipo">
+          <option value="credito">💵 Ingreso (Crédito)</option>
+          <option value="debito">💸 Gasto (Débito)</option>
+        </select>
+        <input id="nombre" type="text" placeholder="Descripción" />
         <input id="amount" type="number" placeholder="Monto" step="0.01" />
         <button id="btn-save" class="btn">💾 Guardar</button>
         <span id="status" class="status"></span>
       </div>
     </div>
 
-    <div class="total-section">
-      Total de Registros: <span id="total-count" class="amount">0</span> | 
-      Total Acumulado: <span id="total-amount" class="amount">$0.00</span>
-    </div>
-
-    <h2>📋 Historial de Conteos</h2>
+    <h2>📋 Movimientos</h2>
     <table>
       <thead>
         <tr>
           <th>ID</th>
-          <th>Nombre</th>
-          <th>Monto</th>
-          <th>Fecha y Hora</th>
+          <th>Fecha/Hora</th>
+          <th>Tipo</th>
+          <th>Descripción</th>
+          <th>Ingreso</th>
+          <th>Gasto</th>
+          <th>Saldo</th>
+          <th>Order ID</th>
           <th>Acción</th>
         </tr>
       </thead>
@@ -171,13 +220,13 @@
   </div>
 
   <script>
+    const tipoSelect = document.getElementById('tipo');
     const nombreInput = document.getElementById('nombre');
     const amountInput = document.getElementById('amount');
     const statusEl = document.getElementById('status');
     const tbody = document.getElementById('tbody');
     const saveBtn = document.getElementById('btn-save');
-    const totalCountEl = document.getElementById('total-count');
-    const totalAmountEl = document.getElementById('total-amount');
+    const currentBalanceEl = document.getElementById('current-balance');
     const currentTimeEl = document.getElementById('current-time');
 
     function fmt(n) { 
@@ -216,6 +265,15 @@
       currentTimeEl.textContent = timeStr;
     }
 
+    function getTipoBadge(tipo) {
+      const badges = {
+        'inicial': '<span class="tipo-badge tipo-inicial">INICIAL</span>',
+        'credito': '<span class="tipo-badge tipo-credito">💵 INGRESO</span>',
+        'debito': '<span class="tipo-badge tipo-debito">💸 GASTO</span>'
+      };
+      return badges[tipo] || tipo;
+    }
+
     // Update time every second
     updateCurrentTime();
     setInterval(updateCurrentTime, 1000);
@@ -232,29 +290,37 @@
         tbody.innerHTML = '';
         
         if (data.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No hay registros aún</td></tr>';
-          totalCountEl.textContent = '0';
-          totalAmountEl.textContent = '$0.00';
+          tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No hay movimientos aún</td></tr>';
+          currentBalanceEl.textContent = '$0.00';
           return;
         }
         
-        let totalAmount = 0;
+        // Display in reverse (oldest first to show balance progression)
+        const reversedData = [...data].reverse();
         
-        data.forEach(entry => {
+        reversedData.forEach(entry => {
           const tr = document.createElement('tr');
+          
+          const ingreso = entry.tipo === 'credito' ? fmt(entry.amount) : '-';
+          const gasto = entry.tipo === 'debito' ? fmt(entry.amount) : '-';
+          
           tr.innerHTML = `
             <td>${entry.id}</td>
-            <td><strong>${entry.nombre}</strong></td>
-            <td class="amount">${fmt(entry.amount)}</td>
             <td>${formatDateTime(entry.created_at)}</td>
-            <td><button class="btn btn-delete" onclick="deleteConteo(${entry.id})">🗑️ Eliminar</button></td>
+            <td>${getTipoBadge(entry.tipo)}</td>
+            <td>${entry.nombre}</td>
+            <td class="amount-positive">${ingreso}</td>
+            <td class="amount-negative">${gasto}</td>
+            <td class="amount-neutral">${fmt(entry.balance)}</td>
+            <td>${entry.order_id || '-'}</td>
+            <td>${entry.tipo !== 'inicial' ? `<button class="btn btn-delete" onclick="deleteConteo(${entry.id})">🗑️</button>` : '-'}</td>
           `;
           tbody.appendChild(tr);
-          totalAmount += parseFloat(entry.amount);
         });
         
-        totalCountEl.textContent = data.length;
-        totalAmountEl.textContent = fmt(totalAmount);
+        // Current balance is the last entry's balance
+        const currentBalance = data[0].balance;
+        currentBalanceEl.textContent = fmt(currentBalance);
         
       } catch (error) {
         console.error('Error loading conteos:', error);
@@ -264,11 +330,12 @@
     }
 
     async function saveConteo() {
+      const tipo = tipoSelect.value;
       const nombre = nombreInput.value.trim();
       const amount = parseFloat(amountInput.value);
       
       if (!nombre) {
-        statusEl.textContent = 'Por favor ingresa un nombre';
+        statusEl.textContent = 'Por favor ingresa una descripción';
         statusEl.className = 'status error';
         return;
       }
@@ -287,7 +354,7 @@
         const response = await fetch('/api/conteo', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ nombre, amount })
+          body: JSON.stringify({ tipo, nombre, amount })
         });
         
         if (!response.ok) {
@@ -321,7 +388,7 @@
     }
 
     async function deleteConteo(id) {
-      if (!confirm('¿Estás seguro de eliminar este registro?')) {
+      if (!confirm('¿Estás seguro de eliminar este registro? Esto recalculará todos los saldos.')) {
         return;
       }
       

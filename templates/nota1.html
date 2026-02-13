@@ -90,6 +90,16 @@
     <span id="save-msg" class="status"></span>
   </div>
 
+  <div style="background: #f0f0f0; padding: 15px; border-radius: 8px; margin: 10px 0;">
+    <strong>Método de Pago:</strong>
+    <label style="margin-left: 15px;">
+      <input type="radio" name="payment-method" value="efectivo" checked> 💵 Efectivo
+    </label>
+    <label style="margin-left: 15px;">
+      <input type="radio" name="payment-method" value="transferencia"> 💳 Transferencia
+    </label>
+  </div>
+
   <script>
     const barcodeInput = document.getElementById('barcode');
     const statusEl = document.getElementById('status');
@@ -256,29 +266,38 @@
       });
       return products;
     }
-
     async function saveTransaction() {
-      const products = getProducts();
-      
-      if (products.length === 0) {
-        saveMsg.textContent = 'Agrega productos primero';
-        saveMsg.className = 'status error';
-        return;
-      }
-      
-      saveBtn.disabled = true;
-      saveMsg.textContent = 'Guardando...';
-      saveMsg.className = 'status';
-      
-      try {
-        console.log('Saving products:', products);
-        
-        const response = await fetch('/api/save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ products })
-        });
-        
+  const products = getProducts();
+  
+  if (products.length === 0) {
+    saveMsg.textContent = 'Agrega productos primero';
+    saveMsg.className = 'status error';
+    return;
+  }
+  
+  // Get selected payment method
+  const paymentMethod = document.querySelector('input[name="payment-method"]:checked').value;
+  
+  console.log('Payment method selected:', paymentMethod); // Debug log
+  
+  saveBtn.disabled = true;
+  saveMsg.textContent = 'Guardando...';
+  saveMsg.className = 'status';
+  
+  try {
+    const payload = { 
+      products: products,
+      payment_method: paymentMethod 
+    };
+    
+    console.log('Sending payload:', payload); // Debug log
+    
+    const response = await fetch('/api/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+          
         if (!response.ok) {
           const error = await response.json();
           throw new Error(error.detail || 'Error al guardar');
