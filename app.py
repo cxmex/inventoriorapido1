@@ -82,7 +82,7 @@ router = APIRouter()
 
 # Data models
 class ConteoEfectivoCreate(BaseModel):
-    tipo: str  # 'credito' or 'debito'
+    tipo: str  # 'credito', 'debito', or 'conteo'
     nombre: str
     amount: float
 
@@ -96,6 +96,7 @@ class ConteoEfectivoResponse(BaseModel):
     created_at: str
     order_id: Optional[int] = None
     descripcion: Optional[str] = None
+    diferencia: Optional[float] = None  # NEW: for conteo tipo
 
 
 class GoogleAuthRequest(BaseModel):
@@ -6421,23 +6422,75 @@ async def conteoefectivo_page():
 
 @app.post("/api/conteo", response_model=ConteoEfectivoResponse)
 async def create_conteo(data: ConteoEfectivoCreate):
-    """Save a new cash count entry"""
+    """Save a new cash movement entry"""
     try:
+        # Get current balance
+        current_balance = await get_current_balance()
+        
+        # Initialize variables
+        new_balance = current_balance
+        diferencia = None
+        
+        # Calculate new balance and diferencia based on tipo
+        if data.tipo == 'credito':
+            # Money coming in
+            new_balance = current_balance + data.amount
+        elif data.tipo == 'debito':
+            # Money going out
+            new_balance = current_balance - data.amount
+        elif data.tipo == 'conteo':
+            # Physical cash count - calculate difference
+            diferencia = data.amount - current_balance
+            new_balance = data.amount  # New balance is the counted amount
+        else:
+            raise HTTPException(status_code=400, detail="Tipo must be 'credito', 'debito', or 'conteo'")
+        
+        # Build payload
         url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo"
         payload = {
             "nombre": data.nombre,
-            "amount": data.amount
+            "tipo": data.tipo,
+            "amount": data.amount,
+            "balance": new_balance
         }
         
+        # Only add diferencia if it's not None (for conteo tipo)
+        if diferencia is not None:
+            payload["diferencia"] = diferencia
+        
+        print(f"DEBUG: Sending payload: {payload}")
+        
+        # Send request to Supabase
         response = requests.post(url, headers=HEADERS, json=payload)
+        
+        # Log error details if request fails
+        if not response.ok:
+            print(f"ERROR: Status {response.status_code}")
+            print(f"ERROR: Response: {response.text}")
+        
         response.raise_for_status()
         
         entry = response.json()[0]
+        
+        # Log the conteo result
+        if data.tipo == 'conteo':
+            if diferencia == 0:
+                print(f"✅ Conteo correcto: Balance esperado ${current_balance:.2f} = Contado ${data.amount:.2f}")
+            elif diferencia > 0:
+                print(f"💰 Sobrante en caja: ${diferencia:.2f} (Esperado: ${current_balance:.2f}, Contado: ${data.amount:.2f})")
+            else:
+                print(f"⚠️ Faltante en caja: ${abs(diferencia):.2f} (Esperado: ${current_balance:.2f}, Contado: ${data.amount:.2f})")
+        
         return ConteoEfectivoResponse(
             id=entry["id"],
             nombre=entry["nombre"],
+            tipo=entry["tipo"],
             amount=entry["amount"],
-            created_at=entry["created_at"]
+            balance=entry["balance"],
+            created_at=entry["created_at"],
+            order_id=entry.get("order_id"),
+            descripcion=entry.get("descripcion"),
+            diferencia=entry.get("diferencia")
         )
     except Exception as e:
         print(f"Error saving conteo: {e}")
@@ -6466,13 +6519,28 @@ async def get_conteo(limit: Optional[int] = 100):
                 balance=entry["balance"],
                 created_at=entry["created_at"],
                 order_id=entry.get("order_id"),
-                descripcion=entry.get("descripcion")
+                descripcion=entry.get("descripcion"),
+                diferencia=entry.get("diferencia")  # Include diferencia
             )
             for entry in data
         ]
     except Exception as e:
         print(f"Error fetching conteo: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 @app.delete("/api/conteo/{conteo_id}")
 async def delete_conteo(conteo_id: int):
@@ -6560,13 +6628,22 @@ async def create_conteo(data: ConteoEfectivoCreate):
         # Get current balance
         current_balance = await get_current_balance()
         
-        # Calculate new balance
+        # Initialize variables
+        new_balance = current_balance
+        diferencia = None
+        
+        # Calculate new balance and diferencia based on tipo
         if data.tipo == 'credito':
             new_balance = current_balance + data.amount
         elif data.tipo == 'debito':
             new_balance = current_balance - data.amount
+        elif data.tipo == 'conteo':
+            # Conteo: user enters actual counted amount
+            # Diferencia = actual - expected
+            diferencia = data.amount - current_balance
+            new_balance = data.amount  # New balance is the counted amount
         else:
-            raise HTTPException(status_code=400, detail="Tipo must be 'credito' or 'debito'")
+            raise HTTPException(status_code=400, detail="Tipo must be 'credito', 'debito', or 'conteo'")
         
         # Insert new entry
         url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo"
@@ -6574,13 +6651,24 @@ async def create_conteo(data: ConteoEfectivoCreate):
             "nombre": data.nombre,
             "tipo": data.tipo,
             "amount": data.amount,
-            "balance": new_balance
+            "balance": new_balance,
+            "diferencia": diferencia
         }
         
         response = requests.post(url, headers=HEADERS, json=payload)
         response.raise_for_status()
         
         entry = response.json()[0]
+        
+        # Log the conteo result
+        if data.tipo == 'conteo':
+            if diferencia == 0:
+                print(f"✅ Conteo correcto: Balance esperado ${current_balance:.2f} = Contado ${data.amount:.2f}")
+            elif diferencia > 0:
+                print(f"💰 Sobrante en caja: ${diferencia:.2f} (Esperado: ${current_balance:.2f}, Contado: ${data.amount:.2f})")
+            else:
+                print(f"⚠️ Faltante en caja: ${abs(diferencia):.2f} (Esperado: ${current_balance:.2f}, Contado: ${data.amount:.2f})")
+        
         return ConteoEfectivoResponse(
             id=entry["id"],
             nombre=entry["nombre"],
@@ -6589,11 +6677,16 @@ async def create_conteo(data: ConteoEfectivoCreate):
             balance=entry["balance"],
             created_at=entry["created_at"],
             order_id=entry.get("order_id"),
-            descripcion=entry.get("descripcion")
+            descripcion=entry.get("descripcion"),
+            diferencia=entry.get("diferencia")
         )
     except Exception as e:
         print(f"Error saving conteo: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
 
 if __name__ == "__main__":
     import uvicorn

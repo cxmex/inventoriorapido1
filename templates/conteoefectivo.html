@@ -165,6 +165,18 @@
       background: #ffccbc;
       color: #d84315;
     }
+    .tipo-conteo {
+      background: #fff9c4;
+      color: #f57f17;
+    }
+    .diferencia-positive {
+      color: #4caf50;
+      font-weight: bold;
+    }
+    .diferencia-negative {
+      color: #f44336;
+      font-weight: bold;
+    }
     .empty-state {
       text-align: center;
       padding: 40px;
@@ -192,11 +204,15 @@
         <select id="tipo">
           <option value="credito">💵 Ingreso (Crédito)</option>
           <option value="debito">💸 Gasto (Débito)</option>
+          <option value="conteo">📊 Conteo de Caja</option>
         </select>
         <input id="nombre" type="text" placeholder="Descripción" />
         <input id="amount" type="number" placeholder="Monto" step="0.01" />
         <button id="btn-save" class="btn">💾 Guardar</button>
         <span id="status" class="status"></span>
+      </div>
+      <div id="conteo-info" style="display: none; margin-top: 10px; padding: 10px; background: #fff3cd; border-radius: 4px; color: #856404;">
+        ℹ️ <strong>Conteo de Caja:</strong> Ingresa el monto real contado. El sistema calculará automáticamente la diferencia con el saldo esperado.
       </div>
     </div>
 
@@ -210,9 +226,9 @@
           <th>Descripción</th>
           <th>Ingreso</th>
           <th>Gasto</th>
+          <th>Diferencia</th>
           <th>Saldo</th>
           <th>Order ID</th>
-          <th>Acción</th>
         </tr>
       </thead>
       <tbody id="tbody"></tbody>
@@ -269,10 +285,25 @@
       const badges = {
         'inicial': '<span class="tipo-badge tipo-inicial">INICIAL</span>',
         'credito': '<span class="tipo-badge tipo-credito">💵 INGRESO</span>',
-        'debito': '<span class="tipo-badge tipo-debito">💸 GASTO</span>'
+        'debito': '<span class="tipo-badge tipo-debito">💸 GASTO</span>',
+        'conteo': '<span class="tipo-badge tipo-conteo">📊 CONTEO</span>'
       };
       return badges[tipo] || tipo;
     }
+
+    // Show/hide conteo info when tipo changes
+    tipoSelect.addEventListener('change', () => {
+      const conteoInfo = document.getElementById('conteo-info');
+      if (tipoSelect.value === 'conteo') {
+        conteoInfo.style.display = 'block';
+        nombreInput.placeholder = 'Ej: Conteo de cierre del día';
+        amountInput.placeholder = 'Monto contado físicamente';
+      } else {
+        conteoInfo.style.display = 'none';
+        nombreInput.placeholder = 'Descripción';
+        amountInput.placeholder = 'Monto';
+      }
+    });
 
     // Update time every second
     updateCurrentTime();
@@ -304,6 +335,15 @@
           const ingreso = entry.tipo === 'credito' ? fmt(entry.amount) : '-';
           const gasto = entry.tipo === 'debito' ? fmt(entry.amount) : '-';
           
+          // Format diferencia
+          let diferenciaHtml = '-';
+          if (entry.diferencia !== null && entry.diferencia !== undefined) {
+            const diff = parseFloat(entry.diferencia);
+            const diffClass = diff >= 0 ? 'diferencia-positive' : 'diferencia-negative';
+            const diffSign = diff >= 0 ? '+' : '';
+            diferenciaHtml = `<span class="${diffClass}">${diffSign}${fmt(diff)}</span>`;
+          }
+          
           tr.innerHTML = `
             <td>${entry.id}</td>
             <td>${formatDateTime(entry.created_at)}</td>
@@ -311,9 +351,9 @@
             <td>${entry.nombre}</td>
             <td class="amount-positive">${ingreso}</td>
             <td class="amount-negative">${gasto}</td>
+            <td>${diferenciaHtml}</td>
             <td class="amount-neutral">${fmt(entry.balance)}</td>
             <td>${entry.order_id || '-'}</td>
-            <td>${entry.tipo !== 'inicial' ? `<button class="btn btn-delete" onclick="deleteConteo(${entry.id})">🗑️</button>` : '-'}</td>
           `;
           tbody.appendChild(tr);
         });
@@ -384,28 +424,6 @@
             statusEl.textContent = '';
           }
         }, 3000);
-      }
-    }
-
-    async function deleteConteo(id) {
-      if (!confirm('¿Estás seguro de eliminar este registro? Esto recalculará todos los saldos.')) {
-        return;
-      }
-      
-      try {
-        const response = await fetch(`/api/conteo/${id}`, {
-          method: 'DELETE'
-        });
-        
-        if (!response.ok) {
-          throw new Error('Error al eliminar');
-        }
-        
-        await loadConteos();
-        
-      } catch (error) {
-        console.error('Delete error:', error);
-        alert('Error al eliminar: ' + error.message);
       }
     }
 
