@@ -130,6 +130,10 @@ class Product(BaseModel):
     price: float
     customer_email: Optional[str] = None  # Add this field
 
+class FCMTokenRegistration(BaseModel):
+    fcm_token: str
+    device_name: Optional[str] = None
+
 
 # Helper function for Supabase requests
 async def supabase_request(
@@ -3628,7 +3632,6 @@ async def api_save(payload: SavePayload):
     else:
         print(f"DEBUG: Skipping conteo_efectivo (payment method is {payment_method})")
             # Don't fail the whole transaction if conteo fails
-
     # Generate redemption token and PDF
     redemption_token = generate_redemption_token()
     await store_redemption_token(next_order_id, redemption_token, total)
@@ -6570,7 +6573,6 @@ async def delete_conteo(conteo_id: int):
         print(f"Error deleting conteo: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 async def get_current_balance():
     """Get the current balance from the last entry"""
     try:
@@ -6586,7 +6588,6 @@ async def get_current_balance():
     except Exception as e:
         print(f"Error getting current balance: {e}")
         return 0.0
-
 # Helper function to recalculate all balances after deletion
 async def recalculate_balances():
     """Recalculate all balances after a deletion"""
@@ -6685,7 +6686,138 @@ async def create_conteo(data: ConteoEfectivoCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def send_push_notification(order_id: int, total: float, items_count: int, payment_method: str):
+    """Send push notification to all registered devices"""
+    try:
+        # Get all active FCM tokens
+        url = f"{SUPABASE_URL}/rest/v1/fcm_tokens?active=eq.true"
+        response = requests.get(url, headers=HEADERS)
+        response.raise_for_status()
+        tokens_data = response.json()
+        
+        if not tokens_data:
+            print("No FCM tokens registered")
+            return
+        
+        # Get your Firebase Server Key from Firebase Console
+        # Go to: Firebase Console > Project Settings > Cloud Messaging > Server Key
+        FIREBASE_SERVER_KEY = "YOUR_FIREBASE_SERVER_KEY_HERE"  # TODO: Replace this
+        
+        # Prepare notification
+        fcm_url = "https://fcm.googleapis.com/fcm/send"
+        fcm_headers = {
+            "Authorization": f"Bearer {FIREBASE_SERVER_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        # Send to each token
+        for token_entry in tokens_data:
+            fcm_token = token_entry['token']
+            
+            notification_body = {
+                "to": fcm_token,
+                "notification": {
+                    "title": f"🎉 Nueva Venta #{order_id}",
+                    "body": f"Total: ${total:.2f} | {items_count} producto(s) | {payment_method}",
+                    "sound": "default",
+                    "badge": "1"
+                },
+                "data": {
+                    "order_id": str(order_id),
+                    "total": str(total),
+                    "items_count": str(items_count),
+                    "payment_method": payment_method,
+                    "type": "new_sale"
+                },
+                "priority": "high"
+            }
+            
+            try:
+                fcm_response = requests.post(
+                    fcm_url,
+                    headers=fcm_headers,
+                    data=json.dumps(notification_body)
+                )
+                
+                if fcm_response.status_code == 200:
+                    print(f"✅ Notification sent for order #{order_id}")
+                else:
+                    print(f"❌ FCM Error: {fcm_response.text}")
+                    
+            except Exception as e:
+                print(f"Error sending to token {fcm_token[:20]}...: {e}")
+        
+        # Update last_used timestamp
+        update_url = f"{SUPABASE_URL}/rest/v1/fcm_tokens"
+        requests.patch(
+            update_url,
+            headers=HEADERS,
+            json={"last_used": "now()"}
+        )
+        
+    except Exception as e:
+        print(f"Error in send_push_notification: {e}")
 
+# ============================
+# API ENDPOINTS
+# ============================
+
+@app.post("/api/register_fcm_token")
+async def register_fcm_token(data: FCMTokenRegistration):
+    """Register a new FCM token for push notifications"""
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/fcm_tokens"
+        payload = {
+            "token": data.fcm_token,
+            "device_name": data.device_name,
+            "active": True
+        }
+        
+        # Use upsert to handle duplicate tokens
+        response = requests.post(
+            url,
+            headers={**HEADERS, "Prefer": "resolution=merge-duplicates"},
+            json=payload
+        )
+        
+        if response.status_code in [200, 201]:
+            print(f"✅ FCM Token registered: {data.fcm_token[:20]}...")
+            return {"success": True, "message": "Token registered successfully"}
+        else:
+            print(f"Error registering token: {response.text}")
+            raise HTTPException(status_code=400, detail="Failed to register token")
+            
+    except Exception as e:
+        print(f"Error in register_fcm_token: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/fcm_tokens")
+async def get_fcm_tokens():
+    """Get all registered FCM tokens (for debugging)"""
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/fcm_tokens?active=eq.true&order=created_at.desc"
+        response = requests.get(url, headers=HEADERS)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"Error getting tokens: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/fcm_tokens/{token_id}")
+async def deactivate_fcm_token(token_id: int):
+    """Deactivate an FCM token"""
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/fcm_tokens?id=eq.{token_id}"
+        response = requests.patch(
+            url,
+            headers=HEADERS,
+            json={"active": False}
+        )
+        response.raise_for_status()
+        return {"success": True, "message": "Token deactivated"}
+    except Exception as e:
+        print(f"Error deactivating token: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

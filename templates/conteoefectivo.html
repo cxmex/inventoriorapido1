@@ -216,7 +216,7 @@
       </div>
     </div>
 
-    <h2>📋 Movimientos</h2>
+    <h2>📋 Movimientos (Ayer y Hoy)</h2>
     <table>
       <thead>
         <tr>
@@ -326,8 +326,28 @@
           return;
         }
         
+        // ⭐ FILTER: Show only yesterday and today
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        
+        const filteredData = data.filter(entry => {
+          const entryDate = new Date(entry.created_at);
+          const entryDay = new Date(entryDate.getFullYear(), entryDate.getMonth(), entryDate.getDate());
+          return entryDay >= yesterday;
+        });
+        
+        if (filteredData.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No hay movimientos de ayer u hoy</td></tr>';
+          // Still show current balance from all data
+          const currentBalance = data[0].balance;
+          currentBalanceEl.textContent = fmt(currentBalance);
+          return;
+        }
+        
         // Display in reverse (oldest first to show balance progression)
-        const reversedData = [...data].reverse();
+        const reversedData = [...filteredData].reverse();
         
         reversedData.forEach(entry => {
           const tr = document.createElement('tr');
@@ -358,7 +378,7 @@
           tbody.appendChild(tr);
         });
         
-        // Current balance is the last entry's balance
+        // Current balance is the last entry's balance from ALL data (not filtered)
         const currentBalance = data[0].balance;
         currentBalanceEl.textContent = fmt(currentBalance);
         
