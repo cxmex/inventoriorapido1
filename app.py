@@ -273,6 +273,17 @@ def _build_receipt_pdf(items: List[dict], total: float, order_id: int) -> io.Byt
 user_sessions = {}
 
 
+TELEGRAM_TOKEN = "8487551934:AAGOw4FLIgXKolbeiFmAsRuyBS8mJ-3kSQk"
+TELEGRAM_CHAT_IDS = ["7204722077", "7145539843"]
+
+def send_telegram_message(text: str):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    for chat_id in TELEGRAM_CHAT_IDS:
+        try:
+            requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=5)
+        except Exception as e:
+            print(f"Telegram error: {e}")
+
 # Global variables for camera capture
 current_capture_task = None
 current_barcode = None
@@ -3276,6 +3287,11 @@ async def api_search_barcode(barcode: str):
     row = rows[0]
     name = row.get("name") or row.get("modelo") or ""
     price = float(row.get("precio") or 0.0)
+    send_telegram_message(
+    f"🔍 Código escaneado\n"
+    f"📦 Producto: {name}\n"
+    f"💰 Precio: ${price:.2f}"
+    )
     return {"name": name, "price": price, "codigo": barcode}
 
 
@@ -3607,6 +3623,21 @@ async def api_save(payload: SavePayload):
 
     # Calculate total
     total = sum(i["subtotal"] for i in items_for_ticket)
+    
+    try:
+        payment_emoji = "💵" if payment_method == "efectivo" else "💳"
+        total_pieces = sum(i['qty'] for i in items_for_ticket)
+    
+        message = (
+            f"🎉 VENTA #{next_order_id}\n"
+            f"📊 {total_pieces} piezas\n"
+            f"💰 ${total:.2f}\n"
+            f"{payment_emoji} {payment_method.title()}\n"
+        )
+    
+        send_telegram_message(message)
+    except Exception as e:
+        print(f"Telegram error: {e}")
 
     # If payment method is efectivo, add entry to conteo_efectivo
     if payment_method == "efectivo":
