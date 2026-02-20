@@ -420,6 +420,11 @@
 
     // Check API on load
     checkAPI();
+    // Sync prices on page load
+fetch('/api/sync_prices')
+  .then(r => r.json())
+  .then(d => console.log('✅ Prices synced:', d.updated))
+  .catch(e => console.error('Sync error:', e));
   </script>
 </body>
 </html>

@@ -274,7 +274,7 @@ user_sessions = {}
 
 
 TELEGRAM_TOKEN = "8487551934:AAGOw4FLIgXKolbeiFmAsRuyBS8mJ-3kSQk"
-TELEGRAM_CHAT_IDS = ["7204722077", "7145539843"]
+TELEGRAM_CHAT_IDS = ["7204722077", "7145539843","8133878707"]
 
 def send_telegram_message(text: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -6849,6 +6849,24 @@ async def deactivate_fcm_token(token_id: int):
     except Exception as e:
         print(f"Error deactivating token: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/sync_prices")
+async def sync_prices():
+    """Sync prices from inventario_estilos to inventario1"""
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/rpc/sync_inventario_prices"
+        response = requests.post(url, headers=HEADERS)
+        response.raise_for_status()
+        
+        result = response.json()
+        updated_count = result[0].get('updated_count', 0) if result else 0
+        
+        print(f"✅ Synced {updated_count} prices")
+        return {"success": True, "updated": updated_count}
+    except Exception as e:
+        print(f"❌ Sync error: {e}")
+        return {"success": False, "error": str(e)}
 
 
 if __name__ == "__main__":
