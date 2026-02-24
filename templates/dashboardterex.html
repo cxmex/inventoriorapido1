@@ -1,0 +1,474 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Terex Analytics{% endblock %}
+
+{% block content %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --bg:        #0a0a0a;
+    --surface:   #111111;
+    --surface2:  #1a1a1a;
+    --border:    #222222;
+    --orange:    #ff6b00;
+    --orange2:   #ff9500;
+    --orange-dim:#ff6b0022;
+    --text:      #e8e8e8;
+    --muted:     #666666;
+    --green:     #00e676;
+    --red:       #ff3d57;
+  }
+
+  body { background: var(--bg) !important; color: var(--text); font-family: 'Syne', sans-serif; }
+
+  /* ── Page wrapper ── */
+  .dash-wrap { max-width: 1400px; margin: 0 auto; padding: 24px 20px 60px; }
+
+  /* ── Header ── */
+  .dash-header {
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 28px;
+  }
+  .dash-logo { font-size: 1.6rem; font-weight: 800; letter-spacing: -1px; }
+  .dash-logo span { color: var(--orange); }
+  .dash-sub { font-family: 'Space Mono', monospace; font-size: .7rem; color: var(--muted); margin-top: 2px; }
+
+  /* ── Time range toggle ── */
+  .range-toggle { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .range-btn {
+    font-family: 'Space Mono', monospace; font-size: .7rem; font-weight: 700;
+    padding: 6px 14px; border-radius: 4px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--muted); cursor: pointer;
+    text-decoration: none; transition: all .15s;
+  }
+  .range-btn:hover { border-color: var(--orange); color: var(--orange); }
+  .range-btn.active { background: var(--orange); border-color: var(--orange); color: #000; font-weight: 700; }
+
+  /* Custom date form */
+  .custom-range { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .custom-range input[type=date] {
+    font-family: 'Space Mono', monospace; font-size: .7rem;
+    background: var(--surface); border: 1px solid var(--border); color: var(--text);
+    padding: 6px 10px; border-radius: 4px; cursor: pointer;
+  }
+  .custom-range input[type=date]:focus { outline: none; border-color: var(--orange); }
+  .custom-range button {
+    font-family: 'Space Mono', monospace; font-size: .7rem; font-weight: 700;
+    padding: 6px 14px; border-radius: 4px; border: 1px solid var(--orange);
+    background: transparent; color: var(--orange); cursor: pointer; transition: all .15s;
+  }
+  .custom-range button:hover { background: var(--orange); color: #000; }
+
+  /* ── KPI Cards ── */
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 28px; }
+  .kpi-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 18px 20px; position: relative; overflow: hidden;
+    animation: fadeUp .4s ease both;
+  }
+  .kpi-card::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    background: var(--orange);
+  }
+  .kpi-label { font-family: 'Space Mono', monospace; font-size: .65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  .kpi-value { font-size: 1.7rem; font-weight: 800; color: var(--text); line-height: 1; }
+  .kpi-value.orange { color: var(--orange); }
+  .kpi-sub { font-family: 'Space Mono', monospace; font-size: .65rem; color: var(--muted); margin-top: 6px; }
+
+  /* ── Section titles ── */
+  .section-title {
+    font-family: 'Space Mono', monospace; font-size: .7rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 2px; color: var(--orange);
+    margin-bottom: 14px; display: flex; align-items: center; gap: 8px;
+  }
+  .section-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+  /* ── Card ── */
+  .card-dark {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 20px; margin-bottom: 20px;
+    animation: fadeUp .5s ease both;
+  }
+
+  /* ── Two column layout ── */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+  @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+
+  /* ── Chart containers ── */
+  .chart-wrap { position: relative; height: 280px; }
+  .chart-wrap-sm { position: relative; height: 220px; }
+
+  /* ── Tables ── */
+  .dash-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  .dash-table th {
+    font-family: 'Space Mono', monospace; font-size: .6rem; text-transform: uppercase;
+    letter-spacing: 1px; color: var(--muted); padding: 8px 12px;
+    border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap;
+  }
+  .dash-table td { padding: 9px 12px; border-bottom: 1px solid #161616; vertical-align: middle; }
+  .dash-table tr:last-child td { border-bottom: none; }
+  .dash-table tr:hover td { background: var(--surface2); }
+  .dash-table .num { font-family: 'Space Mono', monospace; font-size: .8rem; text-align: right; }
+  .rank-num { font-family: 'Space Mono', monospace; font-size: .7rem; color: var(--muted); width: 28px; }
+
+  /* Bar fill */
+  .bar-cell { width: 100px; }
+  .mini-bar-bg { background: var(--border); border-radius: 2px; height: 4px; }
+  .mini-bar-fill { background: var(--orange); height: 4px; border-radius: 2px; transition: width .6s ease; }
+
+  /* Velocity badge */
+  .vel-badge {
+    font-family: 'Space Mono', monospace; font-size: .7rem; font-weight: 700;
+    padding: 2px 8px; border-radius: 3px; background: var(--orange-dim); color: var(--orange2);
+    white-space: nowrap;
+  }
+  .vel-badge.hot { background: #ff6b0033; color: #ff9500; }
+  .vel-badge.fire { background: #ff3d5722; color: var(--red); }
+
+  /* ── Heatmap ── */
+  .heatmap-grid { overflow-x: auto; }
+  .heatmap-table { border-collapse: separate; border-spacing: 3px; font-size: .65rem; }
+  .heatmap-table th {
+    font-family: 'Space Mono', monospace; font-size: .55rem; color: var(--muted);
+    padding: 2px 4px; text-align: center; white-space: nowrap;
+  }
+  .heatmap-table .day-label { text-align: right; padding-right: 8px; white-space: nowrap; color: var(--muted); }
+  .heatmap-cell {
+    width: 32px; height: 26px; border-radius: 3px; text-align: center;
+    vertical-align: middle; font-family: 'Space Mono', monospace; font-size: .55rem;
+    cursor: default; transition: transform .1s;
+  }
+  .heatmap-cell:hover { transform: scale(1.2); z-index: 10; position: relative; }
+
+  /* ── Animations ── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Scrollable table body ── */
+  .table-scroll { max-height: 340px; overflow-y: auto; }
+  .table-scroll::-webkit-scrollbar { width: 4px; }
+  .table-scroll::-webkit-scrollbar-track { background: var(--surface); }
+  .table-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+</style>
+
+<div class="dash-wrap">
+
+  <!-- ── Header ── -->
+  <div class="dash-header">
+    <div>
+      <div class="dash-logo">TEREX <span>ANALYTICS</span></div>
+      <div class="dash-sub">// VENTAS · INVENTARIO · VELOCIDAD — {{ days }} DÍAS</div>
+    </div>
+    <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
+      <!-- Quick ranges -->
+      <div class="range-toggle">
+        <a href="/dashboardterex?days=7"  class="range-btn {% if days==7 %}active{% endif %}">7D</a>
+        <a href="/dashboardterex?days=14" class="range-btn {% if days==14 %}active{% endif %}">14D</a>
+        <a href="/dashboardterex?days=30" class="range-btn {% if days==30 %}active{% endif %}">30D</a>
+        <a href="/dashboardterex?days=60" class="range-btn {% if days==60 %}active{% endif %}">60D</a>
+        <a href="/dashboardterex?days=90" class="range-btn {% if days==90 %}active{% endif %}">90D</a>
+      </div>
+      <!-- Custom range -->
+      <form class="custom-range" method="get" action="/dashboardterex" id="customRangeForm">
+        <input type="date" name="date_from" id="dateFrom" placeholder="Desde">
+        <input type="date" name="date_to"   id="dateTo"   placeholder="Hasta">
+        <button type="submit">→ IR</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ── KPI row ── -->
+  <div class="kpi-grid">
+    <div class="kpi-card" style="animation-delay:.05s">
+      <div class="kpi-label">Revenue Total</div>
+      <div class="kpi-value orange">${{ '{:,.0f}'.format(kpis.get('total_revenue', 0)|float) }}</div>
+      <div class="kpi-sub">últimos {{ days }} días</div>
+    </div>
+    <div class="kpi-card" style="animation-delay:.1s">
+      <div class="kpi-label">Unidades</div>
+      <div class="kpi-value">{{ '{:,}'.format(kpis.get('total_units', 0)|int) }}</div>
+      <div class="kpi-sub">piezas vendidas</div>
+    </div>
+    <div class="kpi-card" style="animation-delay:.15s">
+      <div class="kpi-label">Órdenes</div>
+      <div class="kpi-value">{{ '{:,}'.format(kpis.get('total_orders', 0)|int) }}</div>
+      <div class="kpi-sub">transacciones</div>
+    </div>
+    <div class="kpi-card" style="animation-delay:.2s">
+      <div class="kpi-label">Ticket Prom.</div>
+      <div class="kpi-value">${{ '{:,.0f}'.format(kpis.get('avg_order_value', 0)|float) }}</div>
+      <div class="kpi-sub">por orden</div>
+    </div>
+    <div class="kpi-card" style="animation-delay:.25s">
+      <div class="kpi-label">Top Modelo</div>
+      <div class="kpi-value" style="font-size:1rem; line-height:1.3;">{{ kpis.get('top_modelo', '—') }}</div>
+      <div class="kpi-sub">más vendido</div>
+    </div>
+    <div class="kpi-card" style="animation-delay:.3s">
+      <div class="kpi-label">Top Estilo</div>
+      <div class="kpi-value" style="font-size:.9rem; line-height:1.3;">{{ kpis.get('top_estilo', '—') }}</div>
+      <div class="kpi-sub">diseño líder</div>
+    </div>
+  </div>
+
+  <!-- ── Weekly trend ── -->
+  <div class="section-title">Tendencia Semanal</div>
+  <div class="card-dark" style="animation-delay:.35s">
+    <div class="chart-wrap">
+      <canvas id="weeklyChart"></canvas>
+    </div>
+  </div>
+
+  <!-- ── Two col: models + estilos ── -->
+  <div class="two-col">
+    <!-- Top Models -->
+    <div>
+      <div class="section-title">Top Modelos</div>
+      <div class="card-dark" style="animation-delay:.4s; padding:0; overflow:hidden;">
+        <div class="table-scroll">
+          <table class="dash-table">
+            <thead><tr>
+              <th>#</th><th>Modelo</th><th style="text-align:right">Unidades</th>
+              <th style="text-align:right">Revenue</th><th class="bar-cell"></th>
+            </tr></thead>
+            <tbody>
+              {% set max_units = top_models[0].units_sold if top_models else 1 %}
+              {% for m in top_models %}
+              <tr>
+                <td class="rank-num">{{ loop.index }}</td>
+                <td style="font-size:.82rem; font-weight:600;">{{ m.modelo }}</td>
+                <td class="num">{{ '{:,}'.format(m.units_sold|int) }}</td>
+                <td class="num" style="color:var(--orange)">${{ '{:,.0f}'.format(m.revenue|float) }}</td>
+                <td class="bar-cell">
+                  <div class="mini-bar-bg">
+                    <div class="mini-bar-fill" style="width:{{ (m.units_sold / max_units * 100)|int }}%"></div>
+                  </div>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Top Estilos -->
+    <div>
+      <div class="section-title">Top Estilos</div>
+      <div class="card-dark" style="animation-delay:.45s; padding:0; overflow:hidden;">
+        <div class="table-scroll">
+          <table class="dash-table">
+            <thead><tr>
+              <th>#</th><th>Estilo</th><th style="text-align:right">Uds</th>
+              <th style="text-align:right">Revenue</th><th style="text-align:right">Vel/día</th>
+            </tr></thead>
+            <tbody>
+              {% for e in top_estilos %}
+              <tr>
+                <td class="rank-num">{{ loop.index }}</td>
+                <td>
+                  <div style="font-size:.78rem; font-weight:600; line-height:1.2;">{{ e.estilo }}</div>
+                  <div style="font-family:'Space Mono',monospace; font-size:.6rem; color:var(--muted);">{{ e.modelo }}</div>
+                </td>
+                <td class="num">{{ '{:,}'.format(e.units_sold|int) }}</td>
+                <td class="num" style="color:var(--orange)">${{ '{:,.0f}'.format(e.revenue|float) }}</td>
+                <td class="num">
+                  <span class="vel-badge {% if e.velocity|float > 30 %}fire{% elif e.velocity|float > 15 %}hot{% endif %}">
+                    {{ e.velocity }}
+                  </span>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Velocity Leaderboard ── -->
+  <div class="section-title">Leaderboard de Velocidad</div>
+  <div class="card-dark" style="animation-delay:.5s; padding:0; overflow:hidden;">
+    <div class="table-scroll">
+      <table class="dash-table">
+        <thead><tr>
+          <th>#</th><th>Producto</th>
+          <th style="text-align:right">Vel/día</th>
+          <th style="text-align:right">Unidades</th>
+          <th style="text-align:right">Días activo</th>
+          <th style="text-align:right">Revenue</th>
+          <th style="text-align:right">Precio prom.</th>
+        </tr></thead>
+        <tbody>
+          {% for v in velocity %}
+          <tr>
+            <td class="rank-num">
+              {% if loop.index <= 3 %}
+                <span style="color:var(--orange)">{{ loop.index }}</span>
+              {% else %}{{ loop.index }}{% endif %}
+            </td>
+            <td>
+              <div style="font-size:.82rem; font-weight:600;">{{ v.estilo }}</div>
+              <div style="font-family:'Space Mono',monospace; font-size:.6rem; color:var(--muted);">{{ v.modelo }}</div>
+            </td>
+            <td class="num">
+              <span class="vel-badge {% if v.velocity|float > 40 %}fire{% elif v.velocity|float > 20 %}hot{% endif %}">
+                {{ v.velocity }} u/d
+              </span>
+            </td>
+            <td class="num">{{ '{:,}'.format(v.units_sold|int) }}</td>
+            <td class="num" style="color:var(--muted)">{{ v.days_with_sales }}</td>
+            <td class="num" style="color:var(--orange)">${{ '{:,.0f}'.format(v.revenue|float) }}</td>
+            <td class="num">${{ '{:,.0f}'.format(v.avg_price|float) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Peak Hours Heatmap ── -->
+  <div class="section-title">Heatmap — Horas Pico</div>
+  <div class="card-dark" style="animation-delay:.55s;">
+    <div class="heatmap-grid">
+      <table class="heatmap-table" id="heatmapTable">
+        <thead>
+          <tr>
+            <th class="day-label"></th>
+            {% for h in range(24) %}
+            <th>{{ '%02d'|format(h) }}h</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% set days_labels = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'] %}
+          {% for d in range(7) %}
+          <tr>
+            <th class="day-label">{{ days_labels[d] }}</th>
+            {% for h in range(24) %}
+            {% set val = heatmap[d][h] %}
+            {% set pct = (val / heatmap_max * 100)|int if heatmap_max > 0 else 0 %}
+            <td class="heatmap-cell"
+                data-val="{{ val }}"
+                title="{{ days_labels[d] }} {{ '%02d'|format(h) }}:00 — {{ val }} uds"
+                style="background: rgba(255,107,0,{{ '%.2f'|format(pct/100 * 0.9 + 0.02) }})">
+              {% if val > 0 %}{{ val }}{% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div style="display:flex; align-items:center; gap:8px; margin-top:14px;">
+      <span style="font-family:'Space Mono',monospace; font-size:.6rem; color:var(--muted);">BAJO</span>
+      <div style="width:120px; height:8px; border-radius:4px; background:linear-gradient(to right, #ff6b0010, #ff6b00ee);"></div>
+      <span style="font-family:'Space Mono',monospace; font-size:.6rem; color:var(--muted);">ALTO</span>
+    </div>
+  </div>
+
+</div><!-- end dash-wrap -->
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+
+  // ── Weekly trend chart ──────────────────────────────────────
+  const wData = {{ weekly_chart | tojson }};
+  const wCtx  = document.getElementById('weeklyChart').getContext('2d');
+
+  new Chart(wCtx, {
+    type: 'bar',
+    data: {
+      labels: wData.labels,
+      datasets: [
+        {
+          label: 'Revenue ($)',
+          data: wData.revenue,
+          backgroundColor: 'rgba(255,107,0,0.7)',
+          borderColor:     'rgba(255,107,0,1)',
+          borderWidth: 1,
+          borderRadius: 3,
+          yAxisID: 'yRevenue',
+          order: 2,
+        },
+        {
+          label: 'Unidades',
+          data: wData.units,
+          type: 'line',
+          borderColor:    'rgba(255,149,0,0.9)',
+          backgroundColor:'rgba(255,149,0,0.1)',
+          borderWidth: 2,
+          pointBackgroundColor: '#ff9500',
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          fill: false,
+          tension: 0.4,
+          yAxisID: 'yUnits',
+          order: 1,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          labels: {
+            color: '#888', font: { family: 'Space Mono', size: 11 },
+            boxWidth: 12, padding: 16
+          }
+        },
+        tooltip: {
+          backgroundColor: '#111',
+          borderColor: '#333', borderWidth: 1,
+          titleColor: '#ff6b00', titleFont: { family: 'Space Mono', size: 12 },
+          bodyColor:  '#ccc',   bodyFont:  { family: 'Space Mono', size: 11 },
+          callbacks: {
+            label: ctx => ctx.dataset.label === 'Revenue ($)'
+              ? ` $${ctx.raw.toLocaleString('es-MX', {maximumFractionDigits:0})}`
+              : ` ${ctx.raw.toLocaleString('es-MX')} uds`
+          }
+        }
+      },
+      scales: {
+        yRevenue: {
+          position: 'left',
+          grid: { color: '#1a1a1a' },
+          ticks: { color: '#666', font: { family: 'Space Mono', size: 10 },
+            callback: v => '$' + (v/1000).toFixed(0) + 'k' }
+        },
+        yUnits: {
+          position: 'right',
+          grid: { drawOnChartArea: false },
+          ticks: { color: '#888', font: { family: 'Space Mono', size: 10 } }
+        },
+        x: {
+          grid: { display: false },
+          ticks: { color: '#555', font: { family: 'Space Mono', size: 10 }, maxRotation: 45 }
+        }
+      }
+    }
+  });
+
+  // ── Custom date range — compute days_back from dates ────────
+  document.getElementById('customRangeForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const from = document.getElementById('dateFrom').value;
+    const to   = document.getElementById('dateTo').value;
+    if (from && to) {
+      const diff = Math.round((new Date(to) - new Date(from)) / 86400000);
+      if (diff > 0) {
+        window.location.href = '/dashboardterex?days=' + diff;
+      }
+    }
+  });
+
+});
+</script>
+{% endblock %}

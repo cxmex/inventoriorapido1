@@ -6869,6 +6869,97 @@ async def sync_prices():
         return {"success": False, "error": str(e)}
 
 
+@app.get("/dashboardterex", response_class=HTMLResponse)
+async def dashboardterex(
+    request: Request,
+    days: int = 14
+):
+    try:
+        import traceback
+
+        async with httpx.AsyncClient() as client:
+            # Fire all 6 requests concurrently
+            results = await asyncio.gather(
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_dashboard_kpis",
+                    headers=HEADERS, params={"days_back": days}
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_weekly_revenue",
+                    headers=HEADERS, params={"days_back": max(days, 90)}
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_top_models",
+                    headers=HEADERS, params={"days_back": days}
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_top_estilos",
+                    headers=HEADERS, params={"days_back": days}
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_peak_hours",
+                    headers=HEADERS, params={"days_back": days}
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_velocity_leaderboard",
+                    headers=HEADERS, params={"days_back": days}
+                ),
+            )
+
+        kpis_raw, weekly_raw, models_raw, estilos_raw, hours_raw, velocity_raw = results
+
+        # Parse responses
+        kpis      = kpis_raw.json()[0]     if kpis_raw.json()          else {}
+        weekly    = weekly_raw.json()       if weekly_raw.status_code   == 200 else []
+        top_models= models_raw.json()       if models_raw.status_code   == 200 else []
+        top_estilos= estilos_raw.json()     if estilos_raw.status_code  == 200 else []
+        peak_hours= hours_raw.json()        if hours_raw.status_code    == 200 else []
+        velocity  = velocity_raw.json()     if velocity_raw.status_code == 200 else []
+
+        # ── Weekly chart ─────────────────────────────────────────
+        weekly_sorted = sorted(weekly, key=lambda x: x['week_start'])
+        weekly_chart = {
+            "labels":  [w['week_start']        for w in weekly_sorted],
+            "revenue": [float(w['revenue'])     for w in weekly_sorted],
+            "units":   [int(w['units_sold'])    for w in weekly_sorted],
+            "orders":  [int(w['total_orders'])  for w in weekly_sorted],
+        }
+
+        # ── Heatmap (7 days × 24 hours) ─────────────────────────
+        heatmap = [[0] * 24 for _ in range(7)]
+        heatmap_max = 0
+        for row in peak_hours:
+            d = int(row['day_of_week'])
+            h = int(row['hour_of_day'])
+            v = int(row['units_sold'])
+            heatmap[d][h] = v
+            if v > heatmap_max:
+                heatmap_max = v
+
+        return templates.TemplateResponse(
+            "dashboardterex.html",
+            {
+                "request":      request,
+                "days":         days,
+                "kpis":         kpis,
+                "weekly_chart": weekly_chart,
+                "top_models":   top_models,
+                "top_estilos":  top_estilos,
+                "heatmap":      heatmap,
+                "heatmap_max":  heatmap_max,
+                "velocity":     velocity,
+            }
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "error_message": f"Dashboard error: {str(e)}"}
+        )
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
