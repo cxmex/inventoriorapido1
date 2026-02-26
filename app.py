@@ -65,8 +65,7 @@ templates = Jinja2Templates(directory="templates")
 SUPABASE_URL = "https://gbkhkbfbarsnpbdkxzii.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdia2hrYmZiYXJzbnBiZGt4emlpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQzODAzNzMsImV4cCI6MjA0OTk1NjM3M30.mcOcC2GVEu_wD3xNBzSCC3MwDck3CIdmz4D8adU-bpI"
 
-LOCAL_CAMERA_SERVICE = os.environ.get("CAMERA_SERVICE_URL", "http://192.168.1.71:5001")
-
+LOCAL_CAMERA_SERVICE = "https://fred-nonchalky-fatally.ngrok-free.dev"
 
 
 # Supabase client headershello world
@@ -275,6 +274,36 @@ user_sessions = {}
 
 TELEGRAM_TOKEN = "8487551934:AAGOw4FLIgXKolbeiFmAsRuyBS8mJ-3kSQk"
 TELEGRAM_CHAT_IDS = ["7204722077", "7145539843","8133878707"]
+
+
+async def send_telegram_picture(barcode: str = None, order_id: int = None):
+    """Trigger camera capture and send to Telegram"""
+    try:
+        # Determine which URL to use (local or ngrok)
+        # Use ngrok if running on server, local if testing locally
+        camera_url = "https://fred-nonchalky-fatally.ngrok-free.dev"  # Your ngrok URL
+        # camera_url = LOCAL_CAMERA_SERVICE  # Use this if running locally
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{camera_url}/capture_telegram",
+                json={
+                    "barcode": barcode,
+                    "order_id": order_id
+                }
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                print(f"📸 Camera capture: {len(data.get('telegram_sent', []))} photos sent to Telegram")
+                return data
+            else:
+                print(f"Camera service error: {response.status_code}")
+                return None
+                
+    except Exception as e:
+        print(f"Camera/Telegram error: {str(e)}")
+        return None
 
 def send_telegram_message(text: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -3636,6 +3665,13 @@ async def api_save(payload: SavePayload):
         )
     
         send_telegram_message(message)
+
+        import asyncio
+        asyncio.create_task(send_telegram_picture(
+            barcode=None,  # Skip barcode, just use order_id
+            order_id=next_order_id
+        ))
+        
     except Exception as e:
         print(f"Telegram error: {e}")
 
