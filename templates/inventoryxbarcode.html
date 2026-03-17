@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Inventario x Código</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0d0f14; --surface: #13161e; --surface2: #1a1e2a; --border: #232836;
+      --accent: #4f8ef7; --green: #22c55e; --red: #ef4444; --yellow: #f59e0b;
+      --text: #e2e8f0; --muted: #64748b;
+      --mono: 'IBM Plex Mono', monospace; --sans: 'IBM Plex Sans', sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: var(--sans); background: var(--bg); color: var(--text); min-height: 100vh; }
+
+    .header {
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      padding: 0 32px; display: flex; align-items: center; justify-content: space-between;
+      height: 64px; position: sticky; top: 0; z-index: 100;
+    }
+    .header-left { display: flex; align-items: center; gap: 14px; }
+    .logo-mark {
+      width: 36px; height: 36px; background: linear-gradient(135deg, #4f8ef7, #22c55e);
+      border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px;
+    }
+    .header-title { font-weight: 700; font-size: 16px; }
+    .header-sub { font-size: 12px; color: var(--muted); font-family: var(--mono); }
+    .live-clock {
+      font-family: var(--mono); font-size: 13px; color: var(--accent);
+      background: rgba(79,142,247,0.08); border: 1px solid rgba(79,142,247,0.2);
+      padding: 6px 14px; border-radius: 6px; letter-spacing: 1px;
+    }
+
+    .main { max-width: 620px; margin: 40px auto; padding: 0 20px 60px; }
+
+    /* INPUT CARD */
+    .input-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 16px; padding: 28px; margin-bottom: 20px;
+    }
+    .input-card h2 {
+      font-size: 11px; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 1.5px; font-family: var(--mono); margin-bottom: 20px;
+    }
+    .field { margin-bottom: 14px; }
+    .field label {
+      display: block; font-size: 11px; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 1.5px; font-family: var(--mono); margin-bottom: 7px;
+    }
+    .field input {
+      width: 100%; background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); padding: 13px 16px; border-radius: 8px;
+      font-size: 22px; font-family: var(--mono); font-weight: 600;
+      outline: none; transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .field input:focus {
+      border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,142,247,0.15);
+    }
+    .field input::placeholder { color: var(--muted); font-weight: 400; font-size: 16px; }
+
+    .btn-checar {
+      width: 100%; background: var(--accent); color: white; border: none;
+      padding: 15px; border-radius: 10px; font-size: 16px; font-weight: 700;
+      cursor: pointer; letter-spacing: 0.5px;
+      transition: opacity 0.2s, transform 0.1s; margin-top: 6px;
+    }
+    .btn-checar:hover:not(:disabled) { opacity: 0.88; }
+    .btn-checar:active:not(:disabled) { transform: scale(0.98); }
+    .btn-checar:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* RESULT CARD */
+    .result-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 16px; padding: 26px; margin-bottom: 20px;
+      animation: fadeIn 0.3s ease;
+    }
+    @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+
+    .product-name { font-size: 19px; font-weight: 700; margin-bottom: 4px; }
+    .product-meta { font-size: 12px; color: var(--muted); font-family: var(--mono); }
+    .divider { height: 1px; background: var(--border); margin: 18px 0; }
+
+    .stock-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 18px; }
+    .stock-box {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 14px; text-align: center;
+    }
+    .stock-box-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.5px; font-family: var(--mono); margin-bottom: 8px; }
+    .stock-box-value { font-size: 28px; font-weight: 700; font-family: var(--mono); }
+    .stock-box.prev  .stock-box-value { color: var(--yellow); }
+    .stock-box.count .stock-box-value { color: var(--accent); }
+    .stock-box.diff  .stock-box-value { color: var(--green); }
+    .stock-box.diff.neg .stock-box-value { color: var(--red); }
+
+    .verdict {
+      border-radius: 12px; padding: 18px 22px;
+      display: flex; align-items: center; gap: 14px;
+    }
+    .verdict.match   { background: rgba(34,197,94,0.1);  border: 1px solid rgba(34,197,94,0.3); }
+    .verdict.mismatch{ background: rgba(239,68,68,0.1);   border: 1px solid rgba(239,68,68,0.3); }
+    .verdict-icon { font-size: 34px; line-height: 1; flex-shrink: 0; }
+    .verdict-title { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+    .verdict.match    .verdict-title { color: var(--green); }
+    .verdict.mismatch .verdict-title { color: var(--red); }
+    .verdict-sub { font-size: 12px; color: var(--muted); font-family: var(--mono); }
+
+    /* HISTORY TABLE */
+    .history-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 16px; overflow: hidden; margin-bottom: 20px;
+      animation: fadeIn 0.3s ease;
+    }
+    .history-card-header {
+      padding: 14px 20px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .history-card-title {
+      font-size: 11px; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 1.5px; font-family: var(--mono);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .history-card-barcode {
+      font-family: var(--mono); font-size: 12px; color: var(--accent);
+      background: rgba(79,142,247,0.1); border: 1px solid rgba(79,142,247,0.2);
+      padding: 3px 10px; border-radius: 4px;
+    }
+
+    .history-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .history-table thead tr { background: var(--surface2); }
+    .history-table th {
+      padding: 9px 16px; text-align: left; font-size: 10px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted);
+      font-family: var(--mono); border-bottom: 1px solid var(--border);
+    }
+    .history-table tbody tr { border-bottom: 1px solid var(--border); transition: background 0.15s; }
+    .history-table tbody tr:last-child { border-bottom: none; }
+    .history-table tbody tr:hover { background: var(--surface2); }
+    .history-table td { padding: 11px 16px; vertical-align: middle; }
+
+    .badge-yes {
+      background: rgba(34,197,94,0.12); color: var(--green);
+      border: 1px solid rgba(34,197,94,0.3);
+      padding: 3px 10px; border-radius: 4px; font-family: var(--mono);
+      font-size: 11px; font-weight: 700;
+    }
+    .badge-no {
+      background: rgba(239,68,68,0.12); color: var(--red);
+      border: 1px solid rgba(239,68,68,0.3);
+      padding: 3px 10px; border-radius: 4px; font-family: var(--mono);
+      font-size: 11px; font-weight: 700;
+    }
+    .td-mono { font-family: var(--mono); font-size: 12px; }
+    .td-date { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+    .td-time { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+    .empty-hist {
+      padding: 28px; text-align: center; color: var(--muted);
+      font-size: 13px; font-style: italic;
+    }
+
+    /* SESSION HISTORY */
+    .session-history { margin-top: 8px; }
+    .session-title {
+      font-size: 11px; color: var(--muted); text-transform: uppercase;
+      letter-spacing: 1.5px; font-family: var(--mono); margin-bottom: 10px;
+    }
+    .session-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 14px; border-radius: 8px; background: var(--surface);
+      border: 1px solid var(--border); margin-bottom: 8px; font-size: 13px;
+      cursor: pointer; transition: border-color 0.2s;
+    }
+    .session-item:hover { border-color: var(--accent); }
+    .session-barcode { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+    .session-name { font-weight: 600; }
+    .session-badge {
+      font-family: var(--mono); font-size: 12px; font-weight: 700;
+      padding: 3px 9px; border-radius: 4px;
+    }
+    .session-badge.ok  { background: rgba(34,197,94,0.15);  color: var(--green); }
+    .session-badge.err { background: rgba(239,68,68,0.15);   color: var(--red); }
+
+    .error-card {
+      background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.3);
+      border-radius: 12px; padding: 18px 22px; color: var(--red);
+      font-weight: 600; font-size: 14px; animation: fadeIn 0.3s ease;
+      margin-bottom: 20px;
+    }
+
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+
+  <header class="header">
+    <div class="header-left">
+      <div class="logo-mark">📦</div>
+      <div>
+        <div class="header-title">Inventario x Código</div>
+        <div class="header-sub">inventario1 · terex1 · historial</div>
+      </div>
+    </div>
+    <div class="live-clock" id="clock">--:--:--</div>
+  </header>
+
+  <main class="main">
+
+    <!-- INPUT -->
+    <div class="input-card">
+      <h2>📷 Verificar Stock</h2>
+      <div class="field">
+        <label>Código de Barras</label>
+        <input id="barcode" type="number" placeholder="Escanea o escribe..." autofocus />
+      </div>
+      <div class="field">
+        <label>Cantidad Contada</label>
+        <input id="qty" type="number" placeholder="0" min="0" />
+      </div>
+      <button class="btn-checar" id="btn-checar" onclick="checar()">⚡ CHECAR</button>
+    </div>
+
+    <!-- RESULT -->
+    <div id="result"></div>
+
+    <!-- BARCODE HISTORY (from DB) -->
+    <div id="barcode-history" class="hidden"></div>
+
+    <!-- SESSION LOG -->
+    <div id="session-section" class="hidden session-history">
+      <div class="session-title">✅ Verificados esta sesión</div>
+      <div id="session-list"></div>
+    </div>
+
+  </main>
+
+  <script>
+    const barcodeInput   = document.getElementById('barcode');
+    const qtyInput       = document.getElementById('qty');
+    const resultEl       = document.getElementById('result');
+    const barcodeHistEl  = document.getElementById('barcode-history');
+    const sessionSection = document.getElementById('session-section');
+    const sessionList    = document.getElementById('session-list');
+    const btn            = document.getElementById('btn-checar');
+
+    let sessionLog = [];
+
+    /* Clock */
+    function tick() {
+      document.getElementById('clock').textContent = new Date().toLocaleTimeString('es-MX', {
+        timeZone: 'America/Mexico_City', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+      });
+    }
+    tick(); setInterval(tick, 1000);
+
+    /* Enter navigation */
+    barcodeInput.addEventListener('keypress', e => { if (e.key === 'Enter') qtyInput.focus(); });
+    qtyInput.addEventListener('keypress',     e => { if (e.key === 'Enter') checar(); });
+
+    async function checar() {
+      const barcode = barcodeInput.value.trim();
+      const qtyRaw  = qtyInput.value;
+
+      if (!barcode)               { showError('Ingresa un código de barras'); barcodeInput.focus(); return; }
+      if (qtyRaw === '' || qtyRaw === null) { showError('Ingresa una cantidad (0 es válido)'); qtyInput.focus(); return; }
+
+      const qty = parseInt(qtyRaw);
+      if (isNaN(qty) || qty < 0) { showError('Cantidad inválida'); qtyInput.focus(); return; }
+
+      btn.disabled = true;
+      btn.textContent = '⏳ Buscando...';
+      resultEl.innerHTML = '';
+      barcodeHistEl.innerHTML = '';
+      barcodeHistEl.className = 'hidden';
+
+      try {
+        /* 1 — Fetch product + history */
+        const fetchRes = await fetch(`/api/inventoryxbarcode?barcode=${encodeURIComponent(barcode)}`);
+        if (!fetchRes.ok) throw new Error('HTTP ' + fetchRes.status);
+        const product = await fetchRes.json();
+
+        if (!product) {
+          showError(`❌ Código ${barcode} no encontrado en inventario1`);
+          return;
+        }
+
+        const prevTerex1 = product.terex1 ?? 0;
+        const matches    = prevTerex1 === qty;
+        const diff       = qty - prevTerex1;
+
+        /* 2 — Update terex1 + log history */
+        const updateRes = await fetch('/api/inventoryxbarcode', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            barcode,
+            terex1:       qty,
+            qty_before:   prevTerex1,
+            product_name: product.name || product.estilo || barcode
+          })
+        });
+        if (!updateRes.ok) throw new Error('Error al actualizar');
+
+        /* 3 — Render result */
+        showResult(product, prevTerex1, qty, matches, diff);
+
+        /* 4 — Render DB history for this barcode (including just-saved) */
+        renderBarcodeHistory(barcode, product.history || [], prevTerex1, qty, matches, diff);
+
+        /* 5 — Session log */
+        addSessionEntry(barcode, product.name || product.estilo || barcode, prevTerex1, qty, matches, diff);
+
+        /* 6 — Reset */
+        barcodeInput.value = '';
+        qtyInput.value     = '';
+        barcodeInput.focus();
+
+      } catch (err) {
+        showError(`⚠️ ${err.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '⚡ CHECAR';
+      }
+    }
+
+    /* ── RESULT CARD ── */
+    function showResult(product, prev, counted, matches, diff) {
+      const name  = product.name || product.estilo || '—';
+      const meta  = [product.marca, product.color, product.estilo_id ? `Estilo ${product.estilo_id}` : null]
+                      .filter(Boolean).join(' · ');
+
+      const diffLabel = diff === 0 ? '0' : (diff > 0 ? `+${diff}` : `${diff}`);
+      const diffClass = diff < 0 ? 'diff neg' : 'diff';
+
+      const verdictClass = matches ? 'match' : 'mismatch';
+      const verdictIcon  = matches ? '✅' : '❌';
+      const verdictTitle = matches ? 'YES — Cantidad correcta' : `NO — Diferencia: ${diffLabel}`;
+      const verdictSub   = matches
+        ? `terex1 confirmado en ${counted}`
+        : `Sistema tenía ${prev} · Contaste ${counted} → actualizado a ${counted}`;
+
+      resultEl.innerHTML = `
+        <div class="result-card">
+          <div class="product-name">${name}</div>
+          <div class="product-meta">${meta}${meta ? ' · ' : ''}barcode: ${product.barcode}</div>
+          <div class="divider"></div>
+          <div class="stock-row">
+            <div class="stock-box prev">
+              <div class="stock-box-label">Sistema</div>
+              <div class="stock-box-value">${prev}</div>
+            </div>
+            <div class="stock-box count">
+              <div class="stock-box-label">Contado</div>
+              <div class="stock-box-value">${counted}</div>
+            </div>
+            <div class="stock-box ${diffClass}">
+              <div class="stock-box-label">Diferencia</div>
+              <div class="stock-box-value">${diffLabel}</div>
+            </div>
+          </div>
+          <div class="verdict ${verdictClass}">
+            <div class="verdict-icon">${verdictIcon}</div>
+            <div>
+              <div class="verdict-title">${verdictTitle}</div>
+              <div class="verdict-sub">${verdictSub}</div>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    /* ── BARCODE HISTORY TABLE ── */
+    function renderBarcodeHistory(barcode, history, latestPrev, latestCounted, latestMatches, latestDiff) {
+      // Prepend the current scan (not yet in DB response since it was just saved)
+      const now = new Date();
+      const currentEntry = {
+        created_at:  now.toISOString(),
+        qty_before:  latestPrev,
+        qty_counted: latestCounted,
+        matches:     latestMatches,
+        difference:  latestDiff,
+        _fresh: true
+      };
+      const rows = [currentEntry, ...history];
+
+      let rowsHtml = '';
+      if (rows.length === 0) {
+        rowsHtml = `<tr><td colspan="5" class="empty-hist">Sin historial previo</td></tr>`;
+      } else {
+        rowsHtml = rows.map((h, idx) => {
+          const dt = h.created_at ? new Date(h.created_at) : null;
+          const dateStr = dt ? dt.toLocaleDateString('es-MX', {day:'2-digit',month:'2-digit',year:'numeric'}) : '—';
+          const timeStr = dt ? dt.toLocaleTimeString('es-MX', {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}) : '';
+          const diff = h.difference ?? (h.qty_counted - h.qty_before);
+          const diffLabel = diff === 0 ? '0' : (diff > 0 ? `+${diff}` : `${diff}`);
+          const freshMark = idx === 0 ? ' 🆕' : '';
+          return `
+            <tr>
+              <td class="td-date">
+                <div>${dateStr}${freshMark}</div>
+                <div class="td-time">${timeStr}</div>
+              </td>
+              <td class="td-mono">${h.qty_before ?? '—'}</td>
+              <td class="td-mono">${h.qty_counted ?? '—'}</td>
+              <td class="td-mono" style="color:${diff < 0 ? 'var(--red)' : diff > 0 ? 'var(--yellow)' : 'var(--green)'}">${diffLabel}</td>
+              <td><span class="${h.matches ? 'badge-yes' : 'badge-no'}">${h.matches ? 'YES' : 'NO'}</span></td>
+            </tr>`;
+        }).join('');
+      }
+
+      barcodeHistEl.innerHTML = `
+        <div class="history-card">
+          <div class="history-card-header">
+            <span class="history-card-title">🕐 Historial del código</span>
+            <span class="history-card-barcode">#${barcode}</span>
+          </div>
+          <table class="history-table">
+            <thead>
+              <tr>
+                <th>Fecha / Hora</th>
+                <th>Antes</th>
+                <th>Contado</th>
+                <th>Dif</th>
+                <th>Match</th>
+              </tr>
+            </thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+        </div>`;
+      barcodeHistEl.className = '';
+    }
+
+    /* ── SESSION LOG ── */
+    function addSessionEntry(barcode, name, prev, counted, matches, diff) {
+      sessionLog.unshift({ barcode, name, prev, counted, matches, diff });
+      if (sessionLog.length > 10) sessionLog.pop();
+
+      const diffLabel = diff === 0 ? '0' : (diff > 0 ? `+${diff}` : `${diff}`);
+      sessionList.innerHTML = sessionLog.map(s => {
+        const dl = s.diff === 0 ? '0' : (s.diff > 0 ? `+${s.diff}` : `${s.diff}`);
+        return `
+          <div class="session-item">
+            <div>
+              <div class="session-name">${s.name}</div>
+              <div class="session-barcode">${s.barcode} · ${s.prev} → ${s.counted}</div>
+            </div>
+            <span class="session-badge ${s.matches ? 'ok' : 'err'}">${s.matches ? 'YES' : dl}</span>
+          </div>`;
+      }).join('');
+
+      sessionSection.className = 'session-history';
+    }
+
+    /* ── ERROR ── */
+    function showError(msg) {
+      resultEl.innerHTML = `<div class="error-card">${msg}</div>`;
+    }
+  </script>
+</body>
+</html>

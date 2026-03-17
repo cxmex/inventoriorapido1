@@ -6995,6 +6995,84 @@ async def dashboardterex(
             {"request": request, "error_message": f"Dashboard error: {str(e)}"}
         )
 
+@app.get("/transferencias", response_class=HTMLResponse)
+async def get_transferencias_page(request: Request):
+    return templates.TemplateResponse("transferencias.html", {"request": request})
+
+
+@app.get("/inventoryxbarcode", response_class=HTMLResponse)
+async def get_inventoryxbarcode_page(request: Request):
+    return templates.TemplateResponse("inventoryxbarcode.html", {"request": request})
+
+
+@app.get("/api/inventoryxbarcode")
+async def get_product_by_barcode(barcode: str):
+    """Fetch product + its full history from terex1_history"""
+    try:
+        # Product
+        url = (
+            f"{SUPABASE_URL}/rest/v1/inventario1"
+            f"?barcode=eq.{barcode}"
+            f"&select=barcode,name,estilo,estilo_id,marca,color,terex1"
+            f"&limit=1"
+        )
+        resp = requests.get(url, headers=HEADERS)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data:
+            return None
+        product = data[0]
+
+        # History for this barcode
+        hist_url = (
+            f"{SUPABASE_URL}/rest/v1/terex1_history"
+            f"?barcode=eq.{barcode}"
+            f"&order=created_at.desc"
+            f"&limit=20"
+        )
+        hist_resp = requests.get(hist_url, headers=HEADERS)
+        hist_resp.raise_for_status()
+        product["history"] = hist_resp.json()
+
+        return product
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/inventoryxbarcode")
+async def update_terex1(payload: dict):
+    """Update terex1 and log to terex1_history"""
+    try:
+        barcode      = payload.get("barcode")
+        terex1       = payload.get("terex1")
+        qty_before   = payload.get("qty_before", 0)
+        product_name = payload.get("product_name", "")
+
+        if barcode is None or terex1 is None:
+            raise HTTPException(status_code=400, detail="barcode and terex1 required")
+
+        # Update inventario1
+        url = f"{SUPABASE_URL}/rest/v1/inventario1?barcode=eq.{barcode}"
+        resp = requests.patch(url, headers=HEADERS, json={"terex1": terex1})
+        resp.raise_for_status()
+
+        # Insert into terex1_history
+        matches    = int(qty_before) == int(terex1)
+        difference = int(terex1) - int(qty_before)
+        hist_url   = f"{SUPABASE_URL}/rest/v1/terex1_history"
+        hist_payload = {
+            "barcode":      int(barcode),
+            "product_name": product_name,
+            "qty_before":   int(qty_before),
+            "qty_counted":  int(terex1),
+            "matches":      matches,
+            "difference":   difference,
+        }
+        requests.post(hist_url, headers=HEADERS, json=hist_payload)
+
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
