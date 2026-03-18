@@ -7074,6 +7074,24 @@ async def update_terex1(payload: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/api/pendientes1")
+async def get_pendientes1():
+    """Products in inventario1 where terex1 < 0"""
+    try:
+        url = (
+            f"{SUPABASE_URL}/rest/v1/inventario1"
+            f"?terex1=lt.0"
+            f"&select=barcode,name,estilo,marca,color,terex1"
+            f"&order=terex1.asc"
+            f"&limit=200"
+        )
+        resp = requests.get(url, headers=HEADERS)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

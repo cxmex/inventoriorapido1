@@ -37,62 +37,70 @@
             margin-right: 5px;
             font-weight: bold;
         }
-        .metric-total {
-            background-color: #E3F2FD;
-            color: #1565C0;
+        .metric-total    { background-color: #E3F2FD; color: #1565C0; }
+        .metric-sales    { background-color: #E8F5E9; color: #2E7D32; }
+        .metric-sales.inactive    { background-color: #EEEEEE; color: #757575; }
+        .metric-negative { background-color: #F44336; color: white; }
+        .metric-negative.inactive { background-color: #EEEEEE; color: #757575; }
+        .metric-label { font-size: 10px; margin-left: 2px; }
+        .turnover-rate { padding: 4px 8px; border-radius: 4px; font-weight: bold; }
+        .turnover-0 { background-color: #EEEEEE; color: #757575; }
+        .turnover-1 { background-color: #FFF9C4; color: #5D4037; }
+        .turnover-2 { background-color: #FFEB3B; color: #5D4037; }
+        .turnover-3 { background-color: #FFC107; color: white; }
+        .turnover-4 { background-color: #FF9800; color: white; }
+        .turnover-5 { background-color: #FF5722; color: white; }
+
+        /* ── PENDIENTES ── */
+        .section-title {
+            font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
+            letter-spacing: 2px; color: #888; margin: 24px 0 14px;
+            display: flex; align-items: center; gap: 10px;
         }
-        .metric-sales {
-            background-color: #E8F5E9;
-            color: #2E7D32;
+        .section-title::after { content: ''; flex: 1; height: 1px; background: #ddd; }
+
+        .pending-header {
+            background: #fff3e0; border: 1px solid #ffcc80;
+            border-radius: 12px; padding: 16px 20px; margin-bottom: 16px;
+            display: flex; align-items: center; justify-content: space-between;
         }
-        .metric-sales.inactive {
-            background-color: #EEEEEE;
-            color: #757575;
+        .pending-header-left { display: flex; align-items: center; gap: 12px; }
+        .pending-header h6 { margin: 0; font-weight: 700; color: #e65100; font-size: 1rem; }
+        .pending-header p  { margin: 0; font-size: 0.8rem; color: #bf360c; }
+        .pending-count {
+            background: #e65100; color: white; border-radius: 20px;
+            padding: 4px 12px; font-size: 0.85rem; font-weight: 700;
+            min-width: 36px; text-align: center;
         }
-        .metric-negative {
-            background-color: #F44336;
-            color: white;
+
+        .pending-item {
+            display: flex; align-items: center; justify-content: space-between;
+            background: white; border: 1px solid #eee; border-radius: 10px;
+            padding: 14px 16px; margin-bottom: 10px;
+            cursor: pointer; text-decoration: none; color: inherit;
+            transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
         }
-        .metric-negative.inactive {
-            background-color: #EEEEEE;
-            color: #757575;
+        .pending-item:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            border-color: #e65100; color: inherit;
         }
-        .metric-label {
-            font-size: 10px;
-            margin-left: 2px;
+        .pending-item-left { display: flex; flex-direction: column; gap: 3px; }
+        .pending-name { font-weight: 700; font-size: 0.95rem; color: #222; }
+        .pending-meta { font-size: 0.78rem; color: #888; font-family: monospace; }
+        .pending-right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+        .pending-qty {
+            background: #ffebee; color: #c62828; border: 1px solid #ef9a9a;
+            border-radius: 6px; padding: 4px 10px;
+            font-size: 0.9rem; font-weight: 700; font-family: monospace;
         }
-        .turnover-rate {
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-weight: bold;
-        }
-        .turnover-0 {
-            background-color: #EEEEEE;
-            color: #757575;
-        }
-        .turnover-1 {
-            background-color: #FFF9C4;
-            color: #5D4037;
-        }
-        .turnover-2 {
-            background-color: #FFEB3B;
-            color: #5D4037;
-        }
-        .turnover-3 {
-            background-color: #FFC107;
-            color: white;
-        }
-        .turnover-4 {
-            background-color: #FF9800;
-            color: white;
-        }
-        .turnover-5 {
-            background-color: #FF5722;
-            color: white;
-        }
+        .pending-arrow { color: #e65100; font-size: 1.1rem; }
+        .pending-loading { text-align: center; padding: 30px; color: #aaa; font-size: 0.9rem; }
+        .pending-empty  { text-align: center; padding: 30px; color: #4caf50; font-size: 0.9rem; font-weight: 600; }
     </style>
 </head>
 <body>
+
     <header class="app-header">
         <div class="container">
             <h1 class="text-center">Inventory Management</h1>
@@ -100,13 +108,14 @@
     </header>
 
     <div class="container">
+
+        <!-- ── ACTION BUTTONS ── -->
         <div class="row mb-4">
             <div class="col-md-4">
                 <a href="/entradamercancia" class="btn btn-primary btn-lg d-block action-button">
                     <i class="bi bi-list-ul"></i> Entrada Mercancia
                 </a>
             </div>
-           
             <div class="col-md-4">
                 <a href="/nota1" class="btn btn-primary btn-lg d-block action-button">
                     <i class="bi bi-pencil-square"></i> Nota1
@@ -124,7 +133,7 @@
             </div>
             <div class="col-md-4">
                 <a href="/inventoryxbarcode" class="btn btn-primary btn-lg d-block action-button">
-                    <i class="bi bi-list-ul"></i> Verificacion inventario por codigo 
+                    <i class="bi bi-list-ul"></i> Verificacion inventario por codigo
                 </a>
             </div>
             <div class="col-md-4">
@@ -137,13 +146,11 @@
                     <i class="bi bi-list-ul"></i> Ver Ventas por Semana
                 </a>
             </div>
-  
-            <div class="col-md-4">                 
-    <a href="/analytics" class="btn btn-primary btn-lg d-block action-button">                     
-        <i class="bi bi-list-ul"></i> Ver Detalle Estilos                 
-    </a>             
-</div>
-
+            <div class="col-md-4">
+                <a href="/analytics" class="btn btn-primary btn-lg d-block action-button">
+                    <i class="bi bi-list-ul"></i> Ver Detalle Estilos
+                </a>
+            </div>
             <div class="col-md-4">
                 <a href="/conteorapido" class="btn btn-primary btn-lg d-block action-button">
                     <i class="bi bi-list-ul"></i> Conteo Rapido
@@ -181,8 +188,27 @@
             </div>
         </div>
 
-        <h2 class="mb-3">Inventario Estilos (Prioridad 1)</h2>
-        
+        <!-- ── PENDIENTES DE CONTAR ── -->
+        <div class="section-title">⚠️ Pendientes de Contar</div>
+
+        <div class="pending-header">
+            <div class="pending-header-left">
+                <span style="font-size:1.8rem">🚨</span>
+                <div>
+                    <h6>Stock Negativo en Terex1</h6>
+                    <p>Haz clic en cualquier producto para verificarlo ahora</p>
+                </div>
+            </div>
+            <span class="pending-count" id="pending-count">...</span>
+        </div>
+
+        <div id="pending-list">
+            <div class="pending-loading">⏳ Cargando pendientes...</div>
+        </div>
+
+        <!-- ── INVENTORY STYLES ── -->
+        <h2 class="mb-3 mt-4">Inventario Estilos (Prioridad 1)</h2>
+
         {% if inventory_styles %}
             <div class="row">
                 {% for item in inventory_styles %}
@@ -191,27 +217,19 @@
                             <div class="card-body">
                                 <h5 class="card-title">{{ item.nombre }}</h5>
                                 <p class="card-text text-muted">ID: {{ item.id }}</p>
-                                
                                 <div class="mt-2">
-                                    <!-- Total terex1 -->
                                     <span class="metric metric-total">
                                         {{ item.total_terex1 }}
                                         <span class="metric-label">tot</span>
                                     </span>
-                                    
-                                    <!-- Sales count -->
                                     <span class="metric metric-sales {% if item.ventas_count == 0 %}inactive{% endif %}">
                                         {{ item.ventas_count }}
                                         <span class="metric-label">und</span>
                                     </span>
-                                    
-                                    <!-- Negative count -->
                                     <span class="metric metric-negative {% if item.negatives_count == 0 %}inactive{% endif %}">
                                         {{ item.negatives_count }}
                                         <span class="metric-label">neg</span>
                                     </span>
-                                    
-                                    <!-- Turnover rate -->
                                     {% set turnover_class = 0 %}
                                     {% if item.turnover_rate > 50 %}
                                         {% set turnover_class = 5 %}
@@ -224,7 +242,6 @@
                                     {% elif item.turnover_rate > 0 %}
                                         {% set turnover_class = 1 %}
                                     {% endif %}
-                                    
                                     <span class="turnover-rate turnover-{{ turnover_class }}">
                                         {{ "%.1f"|format(item.turnover_rate) }}%
                                     </span>
@@ -239,8 +256,51 @@
                 No inventory styles found with priority 1.
             </div>
         {% endif %}
+
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        async function loadPendientes() {
+            const listEl  = document.getElementById('pending-list');
+            const countEl = document.getElementById('pending-count');
+            try {
+                const res = await fetch('/api/pendientes1');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const items = await res.json();
+
+                countEl.textContent = items.length;
+
+                if (items.length === 0) {
+                    listEl.innerHTML = '<div class="pending-empty">✅ Sin pendientes — todo el stock es correcto</div>';
+                    return;
+                }
+
+                listEl.innerHTML = items.map(item => {
+                    const name = item.name || item.estilo || '—';
+                    const meta = [item.marca, item.color, item.barcode].filter(Boolean).join(' · ');
+                    return `
+                        <a class="pending-item"
+                           href="/inventoryxbarcode?barcode=${item.barcode}"
+                           title="Clic para verificar ${name}">
+                            <div class="pending-item-left">
+                                <span class="pending-name">${name}</span>
+                                <span class="pending-meta">${meta}</span>
+                            </div>
+                            <div class="pending-right">
+                                <span class="pending-qty">terex1: ${item.terex1}</span>
+                                <span class="pending-arrow">→</span>
+                            </div>
+                        </a>`;
+                }).join('');
+
+            } catch (err) {
+                countEl.textContent = '!';
+                listEl.innerHTML = `<div class="pending-loading" style="color:#f44336">⚠️ Error al cargar: ${err.message}</div>`;
+            }
+        }
+
+        loadPendientes();
+    </script>
 </body>
 </html>

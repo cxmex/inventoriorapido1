@@ -254,10 +254,19 @@
     }
     tick(); setInterval(tick, 1000);
 
+    /* Auto-fill barcode from URL ?barcode= param */
+    (function() {
+      const params = new URLSearchParams(window.location.search);
+      const bc = params.get('barcode');
+      if (bc) {
+        barcodeInput.value = bc;
+        qtyInput.focus();
+      }
+    })();
+
     /* Enter navigation */
     barcodeInput.addEventListener('keypress', e => { if (e.key === 'Enter') qtyInput.focus(); });
     qtyInput.addEventListener('keypress',     e => { if (e.key === 'Enter') checar(); });
-
     async function checar() {
       const barcode = barcodeInput.value.trim();
       const qtyRaw  = qtyInput.value;
