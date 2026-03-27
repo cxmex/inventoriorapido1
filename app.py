@@ -8,6 +8,8 @@ from datetime import datetime
 import time
 import hashlib
 from fastapi.responses import FileResponse
+import uuid
+
 
 import urllib.parse
 
@@ -15,7 +17,7 @@ import urllib.parse
 import qrcode
 import asyncio
 
-from fastapi import FastAPI, HTTPException, Request, Form, Depends
+from fastapi import FastAPI, HTTPException, Request, Form, Depends,UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -67,6 +69,8 @@ SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 
 LOCAL_CAMERA_SERVICE = "https://fred-nonchalky-fatally.ngrok-free.dev"
 
+logger = logging.getLogger(__name__)
+
 
 # Supabase client headershello world
 HEADERS = {
@@ -85,6 +89,12 @@ class ConteoEfectivoCreate(BaseModel):
     nombre: str
     amount: float
 
+class EntradaPayload(BaseModel):
+    qty:         int
+    barcode:     str
+    numero_caja: Optional[int]  = None
+    notas:       Optional[str]  = None
+    imagen_url:  Optional[str]  = None
 
 class ConteoEfectivoResponse(BaseModel):
     id: int
@@ -275,6 +285,8 @@ user_sessions = {}
 TELEGRAM_TOKEN = "8487551934:AAGOw4FLIgXKolbeiFmAsRuyBS8mJ-3kSQk"
 TELEGRAM_CHAT_IDS = ["7204722077", "7145539843","8133878707"]
 
+STORAGE_BUCKET   = "entrada-mercancia"          # bucket name (create in Supabase Dashboard)
+STORAGE_BASE_URL = "https://gbkhkbfbarsnpbdkxzii.supabase.co/storage/v1"
 
 async def send_telegram_picture(barcode: str = None, order_id: int = None):
     """Trigger camera capture and send to Telegram"""
@@ -2526,201 +2538,253 @@ async def generate_order_pdf(order_id: int):
         print(f"Error in PDF generation endpoint: {str(e)}", flush=True)
         raise HTTPException(status_code=500, detail=f"Error generating PDF: {str(e)}")
     
-
-# Entrada Mercancia Endpoints
 @app.get("/entradamercancia", response_class=HTMLResponse)
 async def get_entrada_mercancia_form(request: Request):
-    """Render the merchandise entry form"""
     try:
-        print("Loading entrada mercancia form", flush=True)
-        
-        return templates.TemplateResponse("entrada_mercancia.html", {
-            "request": request
-        })
-        
+        return templates.TemplateResponse("entrada_mercancia.html", {"request": request})
     except Exception as e:
-        print(f"Error loading entrada mercancia form: {str(e)}", flush=True)
-        raise HTTPException(status_code=500, detail=f"Error loading form: {str(e)}")
-
-@app.post("/entradamercancia")
-async def process_entrada_mercancia(
-    request: Request,
-    qty: int = Form(...),
-    barcode: str = Form(...)
-):
-    """Process merchandise entry form and save to entrada_mercancia"""
+        logger.error(f"Error loading entrada mercancia form: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
+# ─────────────────────────────────────────────────────────────
+# POST /entradamercancia/upload_imagen  – upload image to Storage
+# ─────────────────────────────────────────────────────────────
+@app.post("/entradamercancia/upload_imagen")
+async def upload_imagen(image: UploadFile = File(...)):
+    """
+    Receives a multipart image file, uploads it to Supabase Storage,
+    and returns the public URL.
+    """
     try:
-        print(f"Processing entrada mercancia: qty={qty}, barcode={barcode}", flush=True)
-        
-        # Validate inputs
+        # Validate type
+        if not image.content_type.startswith("image/"):
+            return JSONResponse({"success": False, "message": "El archivo no es una imagen."}, status_code=400)
+ 
+        # Read file bytes
+        file_bytes = await image.read()
+ 
+        # Max 10 MB
+        if len(file_bytes) > 10 * 1024 * 1024:
+            return JSONResponse({"success": False, "message": "La imagen excede 10 MB."}, status_code=400)
+ 
+        # Build a unique storage path
+        ext       = image.filename.rsplit(".", 1)[-1].lower() if "." in image.filename else "jpg"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename  = f"{timestamp}_{uuid.uuid4().hex[:8]}.{ext}"
+        path      = f"entradas/{filename}"
+ 
+        # Upload via Supabase Storage REST API
+        upload_url = f"{STORAGE_BASE_URL}/object/{STORAGE_BUCKET}/{path}"
+ 
+        import httpx
+        async with httpx.AsyncClient() as client:
+            upload_resp = await client.post(
+                upload_url,
+                content=file_bytes,
+                headers={
+                    "Authorization":  f"Bearer {SUPABASE_KEY}",   # your existing SUPABASE_KEY var
+                    "Content-Type":   image.content_type,
+                    "x-upsert":       "true",
+                }
+            )
+ 
+        if upload_resp.status_code not in (200, 201):
+            logger.error(f"Storage upload failed: {upload_resp.status_code} – {upload_resp.text}")
+            return JSONResponse({
+                "success": False,
+                "message": f"Error al subir imagen: {upload_resp.status_code}"
+            }, status_code=500)
+ 
+        # Build public URL
+        public_url = f"{STORAGE_BASE_URL}/object/public/{STORAGE_BUCKET}/{path}"
+        logger.info(f"Image uploaded: {public_url}")
+ 
+        return {"success": True, "url": public_url, "path": path}
+ 
+    except Exception as e:
+        logger.error(f"upload_imagen error: {e}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+ 
+ 
+# ─────────────────────────────────────────────────────────────
+# POST /entradamercancia  – register entry (JSON body)
+# ─────────────────────────────────────────────────────────────
+@app.post("/entradamercancia")
+async def process_entrada_mercancia(payload: EntradaPayload):
+    """
+    Register a merchandise entry.
+    Expects JSON: { qty, barcode, numero_caja?, notas?, imagen_url? }
+    """
+    try:
+        qty         = payload.qty
+        barcode     = payload.barcode.strip()
+        numero_caja = payload.numero_caja
+        notas       = payload.notas
+        imagen_url  = payload.imagen_url
+ 
+        logger.info(f"Entrada: qty={qty} barcode={barcode} caja={numero_caja}")
+ 
         if qty <= 0:
             raise HTTPException(status_code=400, detail="La cantidad debe ser mayor a 0")
-        
-        if not barcode or barcode.strip() == "":
+        if not barcode:
             raise HTTPException(status_code=400, detail="El código de barras es requerido")
-        
-        barcode = barcode.strip()
-        
-        # Convert barcode to integer if possible
+ 
+        # Convert barcode to int
         try:
             barcode_int = int(barcode)
         except ValueError:
             raise HTTPException(status_code=400, detail="El código de barras debe ser numérico")
-        
-        # Try to get product info from inventario1 table using barcode
-        product_info = None
+ 
+        # ── Fetch product info from inventario1 ────────────
+        product_info   = None
         current_terex1 = 0
         try:
             product_response = await supabase_request(
                 method="GET",
                 endpoint="/rest/v1/inventario1",
                 params={
-                    "select": "name,estilo_id,marca,terex1",
-                    "barcode": f"eq.{barcode}",
-                    "limit": "1"
+                    "select":  "name,estilo_id,marca,terex1",
+                    "barcode": f"eq.{barcode_int}",
+                    "limit":   "1"
                 }
             )
-            
-            if product_response and len(product_response) > 0:
-                product_info = product_response[0]
-                current_terex1 = product_info.get("terex1", 0) or 0  # Handle None values
-                print(f"Found product info: {product_info}, current terex1: {current_terex1}", flush=True)
-            else:
-                print(f"No product found with barcode {barcode}", flush=True)
-                
-        except Exception as product_error:
-            print(f"Error fetching product info: {str(product_error)}", flush=True)
-            # Continue without product info
-        
-        # Prepare data for entrada_mercancia table
+            if product_response:
+                product_info   = product_response[0]
+                current_terex1 = product_info.get("terex1") or 0
+        except Exception as e:
+            logger.warning(f"Could not fetch product info: {e}")
+ 
+        # ── Build entrada record ───────────────────────────
         entrada_data = {
-            "qty": qty,
-            "barcode": barcode_int,  # Use integer barcode
+            "qty":     qty,
+            "barcode": barcode_int,
         }
-        
-        # Add product info if found
         if product_info:
             if product_info.get("name"):
-                entrada_data["estilo"] = product_info.get("name", "")  # Use 'estilo' field for name
+                entrada_data["estilo"] = product_info["name"]
             if product_info.get("estilo_id"):
-                entrada_data["estilo_id"] = product_info.get("estilo_id")
-        
-        print(f"Inserting entrada data: {entrada_data}", flush=True)
-        
-        # Insert into entrada_mercancia table with error handling
-        entrada_success = False
+                entrada_data["estilo_id"] = product_info["estilo_id"]
+        if numero_caja is not None:
+            entrada_data["numero_caja"] = numero_caja
+        if notas:
+            entrada_data["notas"] = notas
+        if imagen_url:
+            entrada_data["imagen_url"] = imagen_url
+ 
+        # ── Insert into entrada_mercancia ──────────────────
         try:
-            response = await supabase_request(
+            await supabase_request(
                 method="POST",
                 endpoint="/rest/v1/entrada_mercancia",
                 json_data=entrada_data
             )
-            
-            print(f"Entrada mercancia insert response: {response}", flush=True)
-            entrada_success = True
-            
         except Exception as insert_error:
-            print(f"Insert error details: {str(insert_error)}", flush=True)
-            
-            # Try with minimal data if full insert fails
+            logger.error(f"Insert error: {insert_error}, retrying minimal…")
+            # Fallback: minimal insert
+            await supabase_request(
+                method="POST",
+                endpoint="/rest/v1/entrada_mercancia",
+                json_data={"qty": qty, "barcode": barcode_int}
+            )
+ 
+        # ── Update inventario1.terex1 ──────────────────────
+        if product_info:
             try:
-                minimal_data = {
-                    "qty": qty,
-                    "barcode": barcode_int
-                }
-                print(f"Trying minimal insert: {minimal_data}", flush=True)
-                
-                response = await supabase_request(
-                    method="POST",
-                    endpoint="/rest/v1/entrada_mercancia",
-                    json_data=minimal_data
-                )
-                
-                print(f"Minimal insert successful: {response}", flush=True)
-                entrada_success = True
-                
-            except Exception as minimal_error:
-                print(f"Minimal insert also failed: {str(minimal_error)}", flush=True)
-                raise HTTPException(status_code=500, detail=f"Database error: {str(minimal_error)}")
-        
-        # Update inventario1 terex1 column if entrada was successful and product exists
-        if entrada_success and product_info:
-            try:
-                new_terex1 = current_terex1 + qty
-                print(f"Updating terex1 from {current_terex1} to {new_terex1} for barcode {barcode}", flush=True)
-                
-                # Use the correct format for the PATCH request
-                update_response = await supabase_request(
+                await supabase_request(
                     method="PATCH",
                     endpoint=f"/rest/v1/inventario1?barcode=eq.{barcode_int}",
-                    json_data={
-                        "terex1": new_terex1
-                    }
+                    json_data={"terex1": current_terex1 + qty}
                 )
-                
-                print(f"Inventario1 terex1 update response: {update_response}", flush=True)
-                
-            except Exception as update_error:
-                print(f"Error updating terex1 in inventario1: {str(update_error)}", flush=True)
-                import traceback
-                print(f"Update error traceback: {traceback.format_exc()}", flush=True)
-                # Don't fail the entire operation if terex1 update fails
-                # Log the error but continue
-        
-        if entrada_success:
-            return {
-                "success": True,
-                "message": f"Entrada registrada exitosamente",
-                "qty": qty,
-                "barcode": barcode,  # Return original barcode string for display
-                "product_name": product_info.get("name", "Producto no identificado") if product_info else "Producto no identificado",
-                "terex1_updated": product_info is not None  # Indicate if terex1 was updated
-            }
-        else:
-            raise HTTPException(status_code=500, detail="Failed to insert entrada")
-            
+            except Exception as upd_err:
+                logger.error(f"terex1 update failed (non-fatal): {upd_err}")
+ 
+        return {
+            "success":        True,
+            "message":        "Entrada registrada exitosamente",
+            "qty":            qty,
+            "barcode":        barcode,
+            "product_name":   product_info.get("name", "Producto no identificado") if product_info else "Producto no identificado",
+            "numero_caja":    numero_caja,
+            "terex1_updated": product_info is not None,
+            "imagen_url":     imagen_url,
+        }
+ 
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Error in entrada mercancia: {str(e)}", flush=True)
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error processing entrada: {str(e)}")
-
-# Get recent entries endpoint
-@app.get("/entradamercancia/recientes")
-async def get_recent_entries():
-    """Get recent merchandise entries"""
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
+# ─────────────────────────────────────────────────────────────
+# GET /entradamercancia/con_imagenes  – entries with image + estilo_id
+# ─────────────────────────────────────────────────────────────
+@app.get("/entradamercancia/con_imagenes")
+async def get_entradas_con_imagenes():
+    """Returns all entries that have both imagen_url and estilo_id set."""
     try:
-        print("Fetching recent entrada mercancia records", flush=True)
-        
-        # Get last 20 entries
         entries = await supabase_request(
             method="GET",
             endpoint="/rest/v1/entrada_mercancia",
             params={
-                "select": "*",
-                "order": "created_at.desc",
-                "limit": "20"
+                "select":     "id,created_at,qty,barcode,estilo,estilo_id,numero_caja,notas,imagen_url",
+                "imagen_url": "not.is.null",
+                "estilo_id":  "not.is.null",
+                "order":      "created_at.desc",
+                "limit":      "200"
             }
         )
-        
-        print(f"Retrieved {len(entries)} recent entries", flush=True)
-        
-        return {
-            "success": True,
-            "entries": entries
-        }
-        
+        return {"success": True, "entries": entries}
     except Exception as e:
-        print(f"Error fetching recent entries: {str(e)}", flush=True)
-        return {
-            "success": False,
-            "error": str(e),
-            "entries": []
-        }
-
-# Set up logging to see detailed errors
-logger = logging.getLogger(__name__)
-
+        logger.error(f"get_entradas_con_imagenes error: {e}")
+        return {"success": False, "error": str(e), "entries": []}
+ 
+ 
+# ─────────────────────────────────────────────────────────────
+# GET /entradamercancia/recientes  – last 20 entries
+# ─────────────────────────────────────────────────────────────
+@app.get("/entradamercancia/recientes")
+async def get_recent_entries():
+    try:
+        entries = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/entrada_mercancia",
+            params={
+                "select": "id,created_at,qty,barcode,estilo,numero_caja,notas,imagen_url",
+                "order":  "created_at.desc",
+                "limit":  "20"
+            }
+        )
+        return {"success": True, "entries": entries}
+    except Exception as e:
+        logger.error(f"get_recent_entries error: {e}")
+        return {"success": False, "error": str(e), "entries": []}
+ 
+ 
+# ─────────────────────────────────────────────────────────────
+# GET /entradamercancia/ultima_caja  – last box number used
+# ─────────────────────────────────────────────────────────────
+@app.get("/entradamercancia/ultima_caja")
+async def get_ultima_caja():
+    """Returns the highest numero_caja stored in the DB."""
+    try:
+        result = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/entrada_mercancia",
+            params={
+                "select":       "numero_caja",
+                "order":        "numero_caja.desc.nullslast",
+                "limit":        "1",
+                "numero_caja":  "not.is.null"
+            }
+        )
+        if result:
+            return {"success": True, "numero_caja": result[0].get("numero_caja")}
+        return {"success": True, "numero_caja": None}
+    except Exception as e:
+        logger.error(f"get_ultima_caja error: {e}")
+        return {"success": False, "numero_caja": None}
 
 @app.get("/verimagenes", response_class=HTMLResponse)
 async def ver_imagenes(request: Request):
@@ -4289,6 +4353,8 @@ async def get_user_total_rewards(email: str):
 class SimpleRedeemRequest(BaseModel):
     email: str
     redemption_token: str
+
+
 
 # Add this to serve the redeem.html page
 @app.get("/redeem.html", response_class=HTMLResponse)

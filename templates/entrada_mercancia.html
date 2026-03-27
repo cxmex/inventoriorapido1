@@ -7,312 +7,814 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <style>
+        :root {
+            --green-dark:  #1B5E20;
+            --green-mid:   #2E7D32;
+            --green-light: #4CAF50;
+            --green-pale:  rgba(76, 175, 80, 0.08);
+            --radius:      14px;
+            --shadow:      0 8px 32px rgba(0,0,0,0.18);
+        }
+        * { box-sizing: border-box; }
+
         body {
-            background: linear-gradient(135deg, #4CAF50 0%, #2E7D32 100%);
+            background: linear-gradient(145deg, #1B5E20 0%, #2E7D32 50%, #388E3C 100%);
             min-height: 100vh;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            padding: 24px 12px 40px;
         }
-        .container {
-            padding: 20px 0;
-        }
+
+        /* ── Card ─────────────────────────────────────── */
         .card {
-            border-radius: 15px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
             border: none;
-            backdrop-filter: blur(10px);
-            background: rgba(255, 255, 255, 0.95);
+            background: #fff;
+            overflow: hidden;
         }
         .card-header {
-            background: linear-gradient(135deg, #4CAF50 0%, #2E7D32 100%);
-            color: white;
-            border-radius: 15px 15px 0 0 !important;
-            padding: 20px;
+            background: linear-gradient(135deg, var(--green-light) 0%, var(--green-dark) 100%);
+            color: #fff;
+            padding: 22px 24px 18px;
+            border-bottom: none;
         }
-        .form-control, .form-select {
+        .card-header h2 { font-size: 1.4rem; font-weight: 700; margin: 0; }
+        .card-header p  { opacity: .78; font-size: .9rem; margin: 4px 0 0; }
+        .card-body { padding: 28px 24px; }
+
+        /* ── Section label ───────────────────────────── */
+        .section-label {
+            font-size: .7rem;
+            font-weight: 700;
+            letter-spacing: .12em;
+            text-transform: uppercase;
+            color: var(--green-mid);
+            margin-bottom: 10px;
+            padding-bottom: 6px;
+            border-bottom: 2px solid var(--green-pale);
+        }
+
+        /* ── Form controls ───────────────────────────── */
+        .form-control, .form-select, textarea.form-control {
             border-radius: 10px;
             border: 2px solid #e9ecef;
-            transition: all 0.3s ease;
-            font-size: 1.1em;
-            padding: 12px 15px;
+            transition: border-color .25s, box-shadow .25s;
+            font-size: 1rem;
+            padding: 11px 14px;
         }
-        .form-control:focus, .form-select:focus {
-            border-color: #4CAF50;
-            box-shadow: 0 0 0 0.2rem rgba(76, 175, 80, 0.25);
-        }
-        .btn-primary {
-            background: linear-gradient(135deg, #4CAF50 0%, #2E7D32 100%);
-            border: none;
-            border-radius: 10px;
-            padding: 12px 30px;
-            font-weight: 600;
-            font-size: 1.1em;
-            transition: all 0.3s ease;
-        }
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(76, 175, 80, 0.4);
-        }
-        .btn-secondary {
-            background: linear-gradient(135deg, #6c757d 0%, #495057 100%);
-            border: none;
-            border-radius: 10px;
-            padding: 12px 30px;
-            font-weight: 600;
-        }
-        .input-group {
-            margin-bottom: 20px;
+        .form-control:focus, .form-select:focus, textarea.form-control:focus {
+            border-color: var(--green-light);
+            box-shadow: 0 0 0 .2rem rgba(76,175,80,.22);
+            outline: none;
         }
         .input-group-text {
-            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            background: #f4f6f4;
             border: 2px solid #e9ecef;
-            border-radius: 10px 0 0 10px;
+            color: var(--green-mid);
             font-weight: 600;
+            border-radius: 10px 0 0 10px !important;
         }
-        .recent-entry {
-            background: rgba(76, 175, 80, 0.1);
-            border-radius: 8px;
-            padding: 10px 15px;
-            margin-bottom: 10px;
-            border-left: 4px solid #4CAF50;
+        .input-group .form-control { border-radius: 0 10px 10px 0 !important; }
+
+        /* ── Box number stepper ──────────────────────── */
+        .box-stepper {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+            background: #fff;
         }
-        .loading {
-            display: none;
+        .box-stepper:focus-within { border-color: var(--green-light); box-shadow: 0 0 0 .2rem rgba(76,175,80,.22); }
+        .box-btn {
+            width: 48px;
+            height: 48px;
+            border: none;
+            background: #f4f6f4;
+            color: var(--green-mid);
+            font-size: 1.2rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background .2s, color .2s;
+            flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
         }
+        .box-btn:hover  { background: var(--green-light); color: #fff; }
+        .box-btn:active { background: var(--green-mid);   color: #fff; }
+        .box-num-input {
+            flex: 1;
+            border: none !important;
+            box-shadow: none !important;
+            text-align: center;
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--green-dark);
+            padding: 8px 4px;
+            outline: none;
+            background: transparent;
+        }
+        .box-num-input::-webkit-inner-spin-button,
+        .box-num-input::-webkit-outer-spin-button { -webkit-appearance: none; }
+        .box-badge {
+            font-size: .72rem;
+            color: #888;
+            margin-top: 4px;
+            padding-left: 2px;
+        }
+
+        /* ── Barcode & qty inputs ────────────────────── */
         .barcode-input {
             font-family: 'Courier New', monospace;
-            font-weight: bold;
+            font-weight: 700;
+            letter-spacing: .04em;
         }
-        @media (max-width: 768px) {
-            .container {
-                padding: 10px;
-            }
-            .card-header {
-                padding: 15px;
-            }
+
+        /* ── Image upload zone ───────────────────────── */
+        .upload-zone {
+            border: 2px dashed #c8d8c9;
+            border-radius: 12px;
+            padding: 20px 16px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color .25s, background .25s;
+            background: var(--green-pale);
+            position: relative;
+        }
+        .upload-zone:hover, .upload-zone.drag-over {
+            border-color: var(--green-light);
+            background: rgba(76,175,80,.13);
+        }
+        .upload-zone input[type="file"] {
+            position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+        }
+        .upload-zone i { font-size: 2rem; color: var(--green-mid); margin-bottom: 8px; }
+        .upload-zone p { margin: 0; color: #666; font-size: .88rem; }
+        .upload-zone .hint { font-size: .78rem; color: #999; margin-top: 4px; }
+
+        /* Image preview */
+        #imagePreviewWrap {
+            display: none;
+            margin-top: 12px;
+            position: relative;
+        }
+        #imagePreview {
+            width: 100%;
+            max-height: 180px;
+            object-fit: contain;
+            border-radius: 8px;
+            border: 2px solid #e9ecef;
+        }
+        #removeImage {
+            position: absolute;
+            top: 6px; right: 6px;
+            background: #dc3545;
+            color: #fff;
+            border: none;
+            border-radius: 50%;
+            width: 28px; height: 28px;
+            font-size: .8rem;
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .upload-progress {
+            display: none;
+            margin-top: 8px;
+        }
+
+        /* ── Notas ───────────────────────────────────── */
+        textarea#notasInput {
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        /* ── Buttons ─────────────────────────────────── */
+        .btn-submit {
+            background: linear-gradient(135deg, var(--green-light) 0%, var(--green-dark) 100%);
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            padding: 13px 32px;
+            font-weight: 700;
+            font-size: 1rem;
+            transition: transform .2s, box-shadow .2s;
+        }
+        .btn-submit:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 18px rgba(46,125,50,.38);
+            color: #fff;
+        }
+        .btn-submit:disabled { opacity: .65; }
+        .btn-clear {
+            background: #f0f0f0;
+            border: none;
+            border-radius: 10px;
+            padding: 13px 24px;
+            font-weight: 600;
+            color: #555;
+            transition: background .2s;
+        }
+        .btn-clear:hover { background: #e0e0e0; color: #333; }
+
+        /* ── Recent entries ──────────────────────────── */
+        .recent-entry {
+            background: var(--green-pale);
+            border-radius: 10px;
+            padding: 12px 16px;
+            margin-bottom: 10px;
+            border-left: 4px solid var(--green-light);
+            transition: box-shadow .2s;
+        }
+        .recent-entry:hover { box-shadow: 0 2px 10px rgba(0,0,0,.08); }
+        .recent-entry .thumb {
+            width: 52px; height: 52px;
+            object-fit: cover;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+            cursor: pointer;
+        }
+        .entry-meta { font-size: .8rem; color: #777; }
+        .badge-caja {
+            background: var(--green-mid);
+            color: #fff;
+            font-size: .72rem;
+            padding: 2px 8px;
+            border-radius: 20px;
+            font-weight: 600;
+        }
+
+        /* ── Alerts ──────────────────────────────────── */
+        .alert { border-radius: 10px; font-size: .92rem; }
+
+        /* ── Lightbox ────────────────────────────────── */
+        #lightbox {
+            display: none;
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,.82);
+            z-index: 2000;
+            align-items: center; justify-content: center;
+        }
+        #lightbox.open { display: flex; }
+        #lightbox img { max-width: 92vw; max-height: 88vh; border-radius: 8px; }
+        #lightbox button {
+            position: absolute; top: 16px; right: 20px;
+            background: none; border: none;
+            color: #fff; font-size: 2rem; cursor: pointer; line-height: 1;
+        }
+
+        @media (max-width: 576px) {
+            .card-body { padding: 20px 16px; }
+            .btn-submit, .btn-clear { width: 100%; margin-bottom: 8px; }
+        }
+
+        /* ── Galería modal ───────────────────────────────── */
+        #galeriaModal .modal-header {
+            background: linear-gradient(135deg, var(--green-light) 0%, var(--green-dark) 100%);
+            color: #fff;
+        }
+        #galeriaModal .modal-header .btn-close { filter: invert(1); }
+        #galeriaModal .modal-body { background: #f8faf8; padding: 20px; }
+
+        .gallery-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+            gap: 14px;
+        }
+        .gallery-card {
+            background: #fff;
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px solid #e0e9e0;
+            box-shadow: 0 2px 8px rgba(0,0,0,.07);
+            cursor: pointer;
+            transition: transform .2s, box-shadow .2s;
+        }
+        .gallery-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 18px rgba(46,125,50,.18);
+        }
+        .gallery-card img {
+            width: 100%; height: 130px;
+            object-fit: cover;
+            display: block;
+        }
+        .gallery-card .gc-info {
+            padding: 8px 10px;
+        }
+        .gallery-card .gc-estilo {
+            font-size: .78rem;
+            font-weight: 700;
+            color: var(--green-dark);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .gallery-card .gc-meta {
+            font-size: .7rem;
+            color: #888;
+            margin-top: 2px;
+        }
+        .gallery-card .gc-caja {
+            display: inline-block;
+            background: var(--green-mid);
+            color: #fff;
+            font-size: .65rem;
+            padding: 1px 6px;
+            border-radius: 20px;
+            margin-top: 4px;
+            font-weight: 600;
+        }
+        #galeriaEmpty {
+            display: none;
+            text-align: center;
+            padding: 40px 20px;
+            color: #888;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="row justify-content-center">
-            <div class="col-lg-8">
-                <div class="card">
-                    <div class="card-header text-center">
-                        <h2 class="mb-0">
-                            <i class="fas fa-boxes me-2"></i>
-                            Entrada de Mercancía
-                        </h2>
-                        <p class="mb-0 mt-2 opacity-75">Registro de nuevos productos</p>
-                    </div>
-                    <div class="card-body">
-                        <form id="entradaForm" method="POST" action="/entradamercancia">
-                            
-                            <!-- Quantity Input -->
-                            <div class="input-group mb-4">
-                                <span class="input-group-text">
-                                    <i class="fas fa-hashtag me-2"></i>Cantidad
-                                </span>
-                                <input type="number" 
-                                       class="form-control" 
-                                       id="qtyInput"
-                                       name="qty" 
-                                       min="1" 
-                                       value="1"
-                                       required
-                                       placeholder="Ingrese la cantidad">
-                            </div>
 
-                            <!-- Barcode Input -->
-                            <div class="input-group mb-4">
-                                <span class="input-group-text">
-                                    <i class="fas fa-barcode me-2"></i>Código
-                                </span>
-                                <input type="text" 
-                                       class="form-control barcode-input" 
-                                       id="barcodeInput"
-                                       name="barcode" 
-                                       required
-                                       placeholder="Escanee o ingrese el código de barras"
-                                       autofocus>
-                            </div>
+<!-- Lightbox -->
+<div id="lightbox">
+    <button onclick="closeLightbox()" title="Cerrar">&times;</button>
+    <img id="lightboxImg" src="" alt="Imagen adjunta">
+</div>
 
-                            <!-- Submit Button -->
-                            <div class="text-center mb-4">
-                                <button type="submit" class="btn btn-primary btn-lg me-3">
-                                    <i class="fas fa-plus me-2"></i>
-                                    <span class="btn-text">Registrar Entrada</span>
-                                    <span class="loading">
-                                        <i class="fas fa-spinner fa-spin me-2"></i>Registrando...
-                                    </span>
-                                </button>
-                                <button type="button" class="btn btn-secondary" onclick="clearForm()">
-                                    <i class="fas fa-trash me-2"></i>Limpiar
-                                </button>
-                            </div>
-                        </form>
+<!-- Galería Modal -->
+<div class="modal fade" id="galeriaModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold">
+                    <i class="fas fa-images me-2"></i>Entradas con Imagen
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="galeriaLoading" class="text-center py-4 text-muted">
+                    <i class="fas fa-spinner fa-spin me-1"></i> Cargando imágenes…
+                </div>
+                <div id="galeriaEmpty">
+                    <i class="fas fa-image fa-2x mb-2 d-block"></i>
+                    No hay entradas con imagen registradas aún.
+                </div>
+                <div class="gallery-grid" id="galeriaGrid"></div>
+            </div>
+        </div>
+    </div>
+</div>
 
-                        <!-- Recent Entries Section -->
-                        <div class="mt-4">
-                            <div class="d-flex justify-content-between align-items-center mb-3">
-                                <h5><i class="fas fa-history me-2"></i>Entradas Recientes</h5>
-                                <button class="btn btn-outline-success btn-sm" onclick="loadRecentEntries()">
-                                    <i class="fas fa-refresh me-1"></i>Actualizar
-                                </button>
-                            </div>
-                            <div id="recentEntries">
-                                <div class="text-center text-muted">
-                                    <i class="fas fa-spinner fa-spin me-2"></i>Cargando entradas recientes...
-                                </div>
-                            </div>
+<div class="container" style="max-width:780px">
+    <div class="card">
+        <!-- Header -->
+        <div class="card-header">
+            <h2><i class="fas fa-boxes me-2"></i>Entrada de Mercancía</h2>
+            <p>Registro de nuevos productos al inventario</p>
+        </div>
+
+        <div class="card-body">
+            <form id="entradaForm">
+
+                <!-- ── Row 1: Qty + Barcode ─────────────────── -->
+                <div class="row g-3 mb-4">
+                    <div class="col-sm-4">
+                        <div class="section-label"><i class="fas fa-hashtag me-1"></i>Cantidad</div>
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="fas fa-hashtag"></i></span>
+                            <input type="number" class="form-control"
+                                   id="qtyInput" name="qty"
+                                   min="1" value="1" required
+                                   placeholder="Piezas">
                         </div>
                     </div>
+                    <div class="col-sm-8">
+                        <div class="section-label"><i class="fas fa-barcode me-1"></i>Código de Barras</div>
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="fas fa-barcode"></i></span>
+                            <input type="text"
+                                   class="form-control barcode-input"
+                                   id="barcodeInput" name="barcode" required
+                                   placeholder="Escanear o escribir código"
+                                   autofocus>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── Row 2: Número de Caja ───────────────── -->
+                <div class="mb-4">
+                    <div class="section-label"><i class="fas fa-cube me-1"></i>Número de Caja</div>
+                    <div class="row align-items-start g-2">
+                        <div class="col-auto">
+                            <div class="box-stepper">
+                                <button type="button" class="box-btn" id="boxDown" title="Caja anterior">
+                                    <i class="fas fa-chevron-left"></i>
+                                </button>
+                                <input type="number" class="box-num-input"
+                                       id="numeroCajaInput" name="numero_caja"
+                                       min="1" value="1">
+                                <button type="button" class="box-btn" id="boxUp" title="Siguiente caja">
+                                    <i class="fas fa-chevron-right"></i>
+                                </button>
+                            </div>
+                            <div class="box-badge" id="cajaHint">Cargando última caja…</div>
+                        </div>
+                        <div class="col">
+                            <p class="text-muted mb-0" style="font-size:.82rem; padding-top:6px;">
+                                Usa las flechas para cambiar de caja.<br>
+                                El número se mantiene entre escaneos.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── Notas ───────────────────────────────── -->
+                <div class="mb-4">
+                    <div class="section-label"><i class="fas fa-sticky-note me-1"></i>Notas</div>
+                    <textarea class="form-control" id="notasInput" name="notas"
+                              rows="3" placeholder="Observaciones, condición del paquete, proveedor, etc."></textarea>
+                </div>
+
+                <!-- ── Imagen ──────────────────────────────── -->
+                <div class="mb-4">
+                    <div class="section-label"><i class="fas fa-camera me-1"></i>Imagen Adjunta</div>
+                    <div class="upload-zone" id="uploadZone">
+                        <input type="file" id="imageFile" name="image"
+                               accept="image/*" capture="environment">
+                        <i class="fas fa-cloud-upload-alt d-block"></i>
+                        <p>Toca para tomar foto o seleccionar imagen</p>
+                        <p class="hint">JPG, PNG, WEBP · máx 10 MB</p>
+                    </div>
+                    <div id="imagePreviewWrap">
+                        <img id="imagePreview" src="" alt="Vista previa">
+                        <button type="button" id="removeImage" title="Quitar imagen">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="upload-progress" id="uploadProgress">
+                        <div class="progress" style="height:6px; border-radius:4px;">
+                            <div class="progress-bar bg-success progress-bar-striped progress-bar-animated"
+                                 style="width:100%"></div>
+                        </div>
+                        <small class="text-muted mt-1 d-block">Subiendo imagen…</small>
+                    </div>
+                </div>
+
+                <!-- ── Botones ─────────────────────────────── -->
+                <div class="d-flex gap-2 flex-wrap mt-2">
+                    <button type="submit" class="btn btn-submit" id="submitBtn">
+                        <i class="fas fa-plus me-2"></i>
+                        <span class="btn-text">Registrar Entrada</span>
+                        <span class="btn-loading d-none">
+                            <i class="fas fa-spinner fa-spin me-2"></i>Registrando…
+                        </span>
+                    </button>
+                    <button type="button" class="btn btn-clear" onclick="clearForm()">
+                        <i class="fas fa-eraser me-2"></i>Limpiar
+                    </button>
+                </div>
+            </form>
+
+            <!-- ── Recent entries ──────────────────────── -->
+            <hr class="my-4">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h6 class="mb-0 fw-bold">
+                    <i class="fas fa-history me-2 text-success"></i>Entradas Recientes
+                </h6>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-success" onclick="openGaleria()"
+                            data-bs-toggle="modal" data-bs-target="#galeriaModal">
+                        <i class="fas fa-images me-1"></i>Ver Imágenes
+                    </button>
+                    <button class="btn btn-sm btn-outline-success" onclick="loadRecentEntries()">
+                        <i class="fas fa-sync-alt me-1"></i>Actualizar
+                    </button>
+                </div>
+            </div>
+            <div id="recentEntries">
+                <div class="text-center text-muted py-3">
+                    <i class="fas fa-spinner fa-spin me-1"></i> Cargando…
                 </div>
             </div>
         </div>
     </div>
+</div>
 
-    <!-- Success/Error Messages -->
-    <div class="position-fixed top-0 end-0 p-3" style="z-index: 1050">
-        <div id="alertContainer"></div>
-    </div>
+<!-- Toast container -->
+<div class="position-fixed top-0 end-0 p-3" style="z-index:1100">
+    <div id="alertContainer"></div>
+</div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
-    <script>
-        function showAlert(message, type = 'success') {
-            const alertContainer = document.getElementById('alertContainer');
-            const alert = document.createElement('div');
-            alert.className = `alert alert-${type} alert-dismissible fade show`;
-            alert.innerHTML = `
-                ${message}
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-            `;
-            alertContainer.appendChild(alert);
-            
-            setTimeout(() => {
-                alert.remove();
-            }, 5000);
+<script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+<script>
+// ── Helpers ───────────────────────────────────────────────────
+function showAlert(msg, type = 'success') {
+    const el = document.createElement('div');
+    el.className = `alert alert-${type} alert-dismissible fade show shadow-sm`;
+    el.innerHTML = `${msg}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>`;
+    document.getElementById('alertContainer').appendChild(el);
+    setTimeout(() => el.remove(), 6000);
+}
+
+// ── Box stepper ───────────────────────────────────────────────
+const boxInput = document.getElementById('numeroCajaInput');
+const cajaHint = document.getElementById('cajaHint');
+
+document.getElementById('boxDown').addEventListener('click', () => {
+    const v = parseInt(boxInput.value) || 1;
+    if (v > 1) { boxInput.value = v - 1; saveCaja(v - 1); }
+});
+document.getElementById('boxUp').addEventListener('click', () => {
+    const v = parseInt(boxInput.value) || 1;
+    boxInput.value = v + 1;
+    saveCaja(v + 1);
+});
+boxInput.addEventListener('change', () => saveCaja(parseInt(boxInput.value) || 1));
+
+function saveCaja(n) {
+    localStorage.setItem('lastNumeroCaja', n);
+}
+
+async function loadLastCaja() {
+    // First check localStorage for session preference
+    const local = localStorage.getItem('lastNumeroCaja');
+
+    try {
+        const res = await fetch('/entradamercancia/ultima_caja');
+        const data = await res.json();
+        if (data.success && data.numero_caja) {
+            const dbVal = data.numero_caja;
+            // Use whichever is higher: db or local session
+            const val = local ? Math.max(parseInt(local), dbVal) : dbVal;
+            boxInput.value = val;
+            localStorage.setItem('lastNumeroCaja', val);
+            cajaHint.textContent = `Última caja guardada: #${dbVal}`;
+        } else {
+            boxInput.value = local || 1;
+            cajaHint.textContent = local ? `Sesión activa: caja #${local}` : 'Primera caja';
         }
+    } catch {
+        boxInput.value = local || 1;
+        cajaHint.textContent = local ? `Sesión activa: caja #${local}` : 'Sin conexión';
+    }
+}
 
-        function clearForm() {
-            document.getElementById('qtyInput').value = '1';
-            document.getElementById('barcodeInput').value = '';
-            document.getElementById('barcodeInput').focus();
-        }
+// ── Image upload ──────────────────────────────────────────────
+const imageFile      = document.getElementById('imageFile');
+const imagePreview   = document.getElementById('imagePreview');
+const previewWrap    = document.getElementById('imagePreviewWrap');
+const uploadProgress = document.getElementById('uploadProgress');
+const uploadZone     = document.getElementById('uploadZone');
 
-        function loadRecentEntries() {
-            console.log('Loading recent entries...');
-            
-            const container = document.getElementById('recentEntries');
-            container.innerHTML = '<div class="text-center text-muted"><i class="fas fa-spinner fa-spin me-2"></i>Cargando...</div>';
-            
-            fetch('/entradamercancia/recientes')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success && data.entries.length > 0) {
-                        let html = '';
-                        data.entries.forEach(entry => {
-                            const fecha = new Date(entry.created_at).toLocaleString('es-ES');
-                            const productName = entry.name || 'Producto no identificado';
-                            
-                            html += `
-                                <div class="recent-entry">
-                                    <div class="row align-items-center">
-                                        <div class="col-md-8">
-                                            <strong>Qty: ${entry.qty}</strong> - ${productName}
-                                            <br><small class="text-muted">Código: ${entry.barcode}</small>
-                                        </div>
-                                        <div class="col-md-4 text-end">
-                                            <small class="text-muted">${fecha}</small>
-                                        </div>
-                                    </div>
-                                </div>
-                            `;
-                        });
-                        container.innerHTML = html;
-                    } else if (data.entries.length === 0) {
-                        container.innerHTML = '<div class="text-center text-muted">No hay entradas registradas</div>';
-                    } else {
-                        container.innerHTML = '<div class="text-center text-danger">Error al cargar entradas recientes</div>';
-                    }
-                })
-                .catch(error => {
-                    console.error('Error loading recent entries:', error);
-                    container.innerHTML = '<div class="text-center text-danger">Error de conexión</div>';
-                });
-        }
+imageFile.addEventListener('change', () => {
+    const file = imageFile.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+        imagePreview.src = e.target.result;
+        previewWrap.style.display = 'block';
+        uploadZone.style.display = 'none';
+    };
+    reader.readAsDataURL(file);
+});
 
-        // Form submission handling
-        document.getElementById('entradaForm').addEventListener('submit', function(e) {
-            e.preventDefault();
-            
-            console.log('Form submitted');
-            
-            const formData = new FormData(this);
-            const submitBtn = this.querySelector('button[type="submit"]');
-            const btnText = submitBtn.querySelector('.btn-text');
-            const loading = submitBtn.querySelector('.loading');
-            
-            // Show loading state
-            btnText.style.display = 'none';
-            loading.style.display = 'inline';
-            submitBtn.disabled = true;
-            
-            console.log('Sending form data:', {
-                qty: formData.get('qty'),
-                barcode: formData.get('barcode')
-            });
-            
-            fetch('/entradamercancia', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                console.log('Response received:', data);
-                
-                if (data.success) {
-                    showAlert(`¡Éxito! Entrada registrada: ${data.qty}x ${data.product_name}`, 'success');
-                    
-                    // Clear form and reload recent entries
-                    clearForm();
-                    loadRecentEntries();
-                    
-                } else {
-                    showAlert(`Error: ${data.message}`, 'danger');
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                showAlert(`Error de conexión: ${error.message}`, 'danger');
-            })
-            .finally(() => {
-                // Reset button state
-                btnText.style.display = 'inline';
-                loading.style.display = 'none';
-                submitBtn.disabled = false;
-            });
+document.getElementById('removeImage').addEventListener('click', () => {
+    imageFile.value = '';
+    previewWrap.style.display = 'none';
+    uploadZone.style.display = 'block';
+    imagePreview.src = '';
+});
+
+// Drag-and-drop
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+uploadZone.addEventListener('drop', e => {
+    e.preventDefault();
+    uploadZone.classList.remove('drag-over');
+    const f = e.dataTransfer.files[0];
+    if (f && f.type.startsWith('image/')) {
+        const dt = new DataTransfer();
+        dt.items.add(f);
+        imageFile.files = dt.files;
+        imageFile.dispatchEvent(new Event('change'));
+    }
+});
+
+async function uploadImageIfPresent() {
+    const file = imageFile.files[0];
+    if (!file) return null;
+
+    uploadProgress.style.display = 'block';
+    const fd = new FormData();
+    fd.append('image', file);
+
+    try {
+        const res = await fetch('/entradamercancia/upload_imagen', {
+            method: 'POST',
+            body: fd
         });
+        const data = await res.json();
+        uploadProgress.style.display = 'none';
+        if (data.success) return data.url;
+        showAlert(`Advertencia: imagen no subida – ${data.message}`, 'warning');
+        return null;
+    } catch (err) {
+        uploadProgress.style.display = 'none';
+        showAlert('Advertencia: no se pudo subir la imagen.', 'warning');
+        return null;
+    }
+}
 
-        // Load recent entries on page load
-        document.addEventListener('DOMContentLoaded', function() {
+// ── Form submit ───────────────────────────────────────────────
+document.getElementById('entradaForm').addEventListener('submit', async function (e) {
+    e.preventDefault();
+
+    const submitBtn = document.getElementById('submitBtn');
+    submitBtn.disabled = true;
+    submitBtn.querySelector('.btn-text').classList.add('d-none');
+    submitBtn.querySelector('.btn-loading').classList.remove('d-none');
+
+    // 1. Upload image first (if any)
+    const imagenUrl = await uploadImageIfPresent();
+
+    // 2. Build payload
+    const payload = {
+        qty:         parseInt(document.getElementById('qtyInput').value),
+        barcode:     document.getElementById('barcodeInput').value.trim(),
+        numero_caja: parseInt(boxInput.value) || null,
+        notas:       document.getElementById('notasInput').value.trim() || null,
+        imagen_url:  imagenUrl
+    };
+
+    try {
+        const res  = await fetch('/entradamercancia', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify(payload)
+        });
+        const data = await res.json();
+
+        if (data.success) {
+            showAlert(
+                `<i class="fas fa-check-circle me-2"></i>` +
+                `<strong>Registrado:</strong> ${data.qty}× ${data.product_name}` +
+                (data.numero_caja ? ` · Caja #${data.numero_caja}` : ''),
+                'success'
+            );
+            saveCaja(parseInt(boxInput.value) || 1);
+            clearForm(false); // keep box number
             loadRecentEntries();
-        });
+        } else {
+            showAlert(`<i class="fas fa-exclamation-triangle me-2"></i>${data.message}`, 'danger');
+        }
+    } catch (err) {
+        showAlert(`Error de conexión: ${err.message}`, 'danger');
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.querySelector('.btn-text').classList.remove('d-none');
+        submitBtn.querySelector('.btn-loading').classList.add('d-none');
+    }
+});
 
-        // Focus barcode input on Enter key from quantity input
-        document.getElementById('qtyInput').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                document.getElementById('barcodeInput').focus();
-            }
-        });
+// ── Clear form ────────────────────────────────────────────────
+function clearForm(resetCaja = true) {
+    document.getElementById('qtyInput').value  = '1';
+    document.getElementById('barcodeInput').value = '';
+    document.getElementById('notasInput').value   = '';
+    imageFile.value = '';
+    previewWrap.style.display = 'none';
+    uploadZone.style.display  = 'block';
+    imagePreview.src = '';
+    if (resetCaja) { boxInput.value = 1; localStorage.removeItem('lastNumeroCaja'); }
+    document.getElementById('barcodeInput').focus();
+}
 
-        // Auto-submit on Enter key from barcode input (for barcode scanners)
-        document.getElementById('barcodeInput').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                document.getElementById('entradaForm').dispatchEvent(new Event('submit'));
-            }
-        });
-    </script>
+// ── Recent entries ────────────────────────────────────────────
+async function loadRecentEntries() {
+    const container = document.getElementById('recentEntries');
+    container.innerHTML = '<div class="text-center text-muted py-3"><i class="fas fa-spinner fa-spin me-1"></i> Cargando…</div>';
+
+    try {
+        const res  = await fetch('/entradamercancia/recientes');
+        const data = await res.json();
+
+        if (data.success && data.entries.length > 0) {
+            container.innerHTML = data.entries.map(entry => {
+                const fecha   = new Date(entry.created_at).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
+                const nombre  = entry.estilo || 'Producto no identificado';
+                const thumb   = entry.imagen_url
+                    ? `<img class="thumb ms-2" src="${entry.imagen_url}" alt="img"
+                            onclick="openLightbox('${entry.imagen_url}')">`
+                    : '';
+                const cajaBadge = entry.numero_caja
+                    ? `<span class="badge-caja ms-1">Caja #${entry.numero_caja}</span>`
+                    : '';
+                const notas = entry.notas
+                    ? `<div class="mt-1 text-muted" style="font-size:.8rem">
+                           <i class="fas fa-sticky-note me-1"></i>${entry.notas}
+                       </div>`
+                    : '';
+                return `
+                <div class="recent-entry">
+                    <div class="d-flex align-items-start justify-content-between gap-2">
+                        <div class="flex-grow-1">
+                            <strong>${entry.qty} pz</strong> – ${nombre} ${cajaBadge}
+                            <div class="entry-meta">
+                                <i class="fas fa-barcode me-1"></i>${entry.barcode}
+                                &nbsp;·&nbsp;
+                                <i class="fas fa-clock me-1"></i>${fecha}
+                            </div>
+                            ${notas}
+                        </div>
+                        ${thumb}
+                    </div>
+                </div>`;
+            }).join('');
+        } else if (data.success) {
+            container.innerHTML = '<div class="text-center text-muted py-3">Sin entradas registradas aún.</div>';
+        } else {
+            container.innerHTML = '<div class="text-center text-danger py-2">Error al cargar entradas.</div>';
+        }
+    } catch {
+        container.innerHTML = '<div class="text-center text-danger py-2">Error de conexión.</div>';
+    }
+}
+
+// ── Lightbox ──────────────────────────────────────────────────
+function openLightbox(url) {
+    document.getElementById('lightboxImg').src = url;
+    document.getElementById('lightbox').classList.add('open');
+}
+function closeLightbox() {
+    document.getElementById('lightbox').classList.remove('open');
+}
+document.getElementById('lightbox').addEventListener('click', e => {
+    if (e.target === document.getElementById('lightbox')) closeLightbox();
+});
+
+// ── Galería con imágenes ──────────────────────────────────────
+async function openGaleria() {
+    const grid    = document.getElementById('galeriaGrid');
+    const loading = document.getElementById('galeriaLoading');
+    const empty   = document.getElementById('galeriaEmpty');
+
+    grid.innerHTML = '';
+    loading.style.display = 'block';
+    empty.style.display   = 'none';
+
+    try {
+        const res  = await fetch('/entradamercancia/con_imagenes');
+        const data = await res.json();
+
+        loading.style.display = 'none';
+
+        if (data.success && data.entries.length > 0) {
+            grid.innerHTML = data.entries.map(entry => {
+                const fecha  = new Date(entry.created_at).toLocaleString('es-MX', {
+                    timeZone: 'America/Mexico_City',
+                    day: '2-digit', month: '2-digit', year: '2-digit',
+                    hour: '2-digit', minute: '2-digit'
+                });
+                const nombre = entry.estilo || `ID: ${entry.estilo_id}`;
+                const caja   = entry.numero_caja
+                    ? `<span class="gc-caja">Caja #${entry.numero_caja}</span>` : '';
+                return `
+                <div class="gallery-card" onclick="openLightbox('${entry.imagen_url}')">
+                    <img src="${entry.imagen_url}" alt="${nombre}"
+                         loading="lazy"
+                         onerror="this.style.height='60px';this.style.background='#eee'">
+                    <div class="gc-info">
+                        <div class="gc-estilo" title="${nombre}">${nombre}</div>
+                        <div class="gc-meta">
+                            <i class="fas fa-hashtag" style="font-size:.6rem"></i> ${entry.estilo_id}
+                            &nbsp;·&nbsp; ${entry.qty} pz
+                        </div>
+                        <div class="gc-meta">${fecha}</div>
+                        ${caja}
+                    </div>
+                </div>`;
+            }).join('');
+        } else {
+            empty.style.display = 'block';
+        }
+    } catch (err) {
+        loading.style.display = 'none';
+        grid.innerHTML = `<div class="text-danger py-3">Error de conexión: ${err.message}</div>`;
+    }
+}
+
+// ── Keyboard shortcuts ────────────────────────────────────────
+document.getElementById('qtyInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); document.getElementById('barcodeInput').focus(); }
+});
+document.getElementById('barcodeInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); document.getElementById('entradaForm').dispatchEvent(new Event('submit')); }
+});
+
+// ── Init ──────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+    loadLastCaja();
+    loadRecentEntries();
+});
+</script>
 </body>
 </html>
