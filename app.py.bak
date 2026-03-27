@@ -604,9 +604,9 @@ async def home(request: Request):
         enhanced_items.sort(key=lambda x: x['turnover_rate'], reverse=True)
         
         return templates.TemplateResponse(
-            request=request,
-            name="menu.html",
-            context={
+            "menu.html", 
+            {
+                "request": request, 
                 "inventory_styles": enhanced_items
             }
         )
@@ -614,9 +614,9 @@ async def home(request: Request):
         print(f"Error loading menu: {str(e)}", flush=True)
         traceback.print_exc()  # Print stack trace for more details
         return templates.TemplateResponse(
-            request=request,
-            name="error.html",
-            context={
+            "error.html", 
+            {
+                "request": request, 
                 "error_message": f"Error loading menu: {str(e)}"
             }
         )
@@ -718,9 +718,9 @@ async def inventory_detail(request: Request, estilo_id: int):
             print(f"WARNING: Count mismatch! negative_count={negative_count}, actual_negative_items={len(actual_negative_items)}", flush=True)
         
         return templates.TemplateResponse(
-            request=request,
-            name="inventory_detail.html",
-            context={
+            "inventory_detail.html", 
+            {
+                "request": request, 
                 "inventory_items": processed_items,
                 "estilo_id": estilo_id,
                 "estilo_nombre": style_name,
@@ -738,9 +738,9 @@ async def inventory_detail(request: Request, estilo_id: int):
         print(f"Error loading inventory: {str(e)}", flush=True)
         traceback.print_exc()
         return templates.TemplateResponse(
-            request=request,
-            name="error.html",
-            context={
+            "error.html", 
+            {
+                "request": request, 
                 "error_message": f"Error loading inventory: {str(e)}"
             }
         )
@@ -831,9 +831,9 @@ async def inventory_detail_alternative(request: Request, estilo_id: int):
         print(f"Alternative method final counts: Negative: {final_negative}, Zero: {final_zero}, Positive: {final_positive}", flush=True)
         
         return templates.TemplateResponse(
-            request=request,
-            name="inventory_detail.html",
-            context={
+            "inventory_detail.html", 
+            {
+                "request": request, 
                 "inventory_items": processed_items,
                 "estilo_id": estilo_id,
                 "estilo_nombre": style_name,
@@ -851,9 +851,9 @@ async def inventory_detail_alternative(request: Request, estilo_id: int):
         print(f"Error in alternative method: {str(e)}", flush=True)
         traceback.print_exc()
         return templates.TemplateResponse(
-            request=request,
-            name="error.html",
-            context={
+            "error.html", 
+            {
+                "request": request, 
                 "error_message": f"Alternative method error: {str(e)}"
             }
         )
@@ -919,12 +919,12 @@ async def update_terex1(
                     error_detail = f"API error: Status {response.status_code}, {response.text}"
                     print(f"Error detail: {error_detail}", flush=True)
                     return templates.TemplateResponse(
-            request=request,
-            name="error.html",
-            context={
+                        "error.html", 
+                        {
+                            "request": request, 
                             "error_message": f"Failed to update inventory: {error_detail}"
                         }
-        )
+                    )
                     
                 update_response = response.json()
             
@@ -934,12 +934,12 @@ async def update_terex1(
             print(f"Error updating inventory: {error_msg}", flush=True)
             traceback.print_exc()
             return templates.TemplateResponse(
-            request=request,
-            name="error.html",
-            context={
+                "error.html", 
+                {
+                    "request": request, 
                     "error_message": f"Failed to update inventory: {error_msg}"
                 }
-        )
+            )
         
         # Make sure we have the name if it wasn't provided or was empty
         if not name or name.strip() == "":
@@ -995,9 +995,9 @@ async def update_terex1(
         print(f"Update error: {str(e)}", flush=True)
         traceback.print_exc()  # Print stack trace for more details
         return templates.TemplateResponse(
-            request=request,
-            name="error.html",
-            context={
+            "error.html", 
+            {
+                "request": request, 
                 "error_message": f"Error updating inventory: {str(e)}"
             }
         )
@@ -1371,35 +1371,35 @@ async def ver_ventas_por_dia(request: Request):
             print(f"Daily totals: {day_totals}", flush=True)
             
             return templates.TemplateResponse(
-            request=request,
-            name="ventas_por_dia.html",
-            context={
+                "ventas_por_dia.html",
+                {
+                    "request": request,
                     "day_totals": day_totals,
                     "chart_data": chart_data,
                     "chart_data_by_estilo": True  # Flag to indicate we have estilo data
                 }
-        )
+            )
             
         except Exception as fetch_error:
             print(f"Error fetching data: {str(fetch_error)}", flush=True)
             traceback.print_exc()
             return templates.TemplateResponse(
-            request=request,
-            name="ventas_por_dia.html",
-            context={
+                "ventas_por_dia.html",
+                {
+                    "request": request,
                     "day_totals": {},
                     "chart_data": {'labels': [], 'datasets': []},
                     "chart_data_by_estilo": False
                 }
-        )
+            )
             
     except Exception as e:
         import traceback
         traceback.print_exc()
         return templates.TemplateResponse(
-            request=request,
-            name="error.html",
-            context={
+            "error.html",
+            {
+                "request": request,
                 "error_message": f"Error loading daily sales: {str(e)}"
             }
         )
@@ -1506,35 +1506,35 @@ async def ver_ventas_por_semana(request: Request):
             print(f"Weekly totals: {week_totals}", flush=True)
             
             return templates.TemplateResponse(
-            request=request,
-            name="ventas_por_semana.html",
-            context={
+                "ventas_por_semana.html",
+                {
+                    "request": request,
                     "week_totals": week_totals,
                     "chart_data": chart_data,
                     "chart_data_by_estilo": True  # Flag to indicate we have estilo data
                 }
-        )
+            )
             
         except Exception as fetch_error:
             print(f"Error fetching data: {str(fetch_error)}", flush=True)
             traceback.print_exc()
             return templates.TemplateResponse(
-            request=request,
-            name="ventas_por_semana.html",
-            context={
+                "ventas_por_semana.html",
+                {
+                    "request": request,
                     "week_totals": {},
                     "chart_data": {'labels': [], 'datasets': []},
                     "chart_data_by_estilo": False
                 }
-        )
+            )
             
     except Exception as e:
         import traceback
         traceback.print_exc()
         return templates.TemplateResponse(
-            request=request,
-            name="error.html",
-            context={
+            "error.html",
+            {
+                "request": request,
                 "error_message": f"Error loading weekly sales: {str(e)}"
             }
         )
@@ -1575,15 +1575,15 @@ async def ver_ventas_por_semana(request: Request):
 
             if not weekly_results_by_estilo:
                 return templates.TemplateResponse(
-            request=request,
-            name="ventas_por_semana.html",
-            context={
+                    "ventas_por_semana.html",
+                    {
+                        "request": request,
                         "week_totals": {},
                         "chart_data": {"labels": [], "datasets": []},
                         "chart_data_by_estilo": False,
-                        "selected_week_start": None
-            }
-        )
+                        "selected_week_start": None,
+                    }
+                )
 
             # ---- pick the latest week_start present ----
             # your week_start format appears to be "%d/%m/%Y"
@@ -1641,39 +1641,39 @@ async def ver_ventas_por_semana(request: Request):
             }
 
             return templates.TemplateResponse(
-            request=request,
-            name="ventas_por_semana.html",
-            context={
+                "ventas_por_semana.html",
+                {
+                    "request": request,
                     "week_totals": {latest_week_start: week_totals.get(latest_week_start, last_week_total)},
                     "chart_data": chart_data,
                     "chart_data_by_estilo": True,
                     "selected_week_start": latest_week_start,
-                    "sorted_count": len(labels)
-            }
-        )
+                    "sorted_count": len(labels),
+                }
+            )
 
         except Exception as fetch_error:
             print(f"Error fetching data: {str(fetch_error)}", flush=True)
             traceback.print_exc()
             return templates.TemplateResponse(
-            request=request,
-            name="ventas_por_semana.html",
-            context={
+                "ventas_por_semana.html",
+                {
+                    "request": request,
                     "week_totals": {},
                     "chart_data": {"labels": [], "datasets": []},
                     "chart_data_by_estilo": False,
-                    "selected_week_start": None
-            }
-        )
+                    "selected_week_start": None,
+                }
+            )
 
     except Exception as e:
         import traceback
         traceback.print_exc()
         return templates.TemplateResponse(
-            request=request,
-            name="error.html",
-            context={
-                "error_message": f"Error loading weekly sales: {str(e)}"
+            "error.html",
+            {
+                "request": request,
+                "error_message": f"Error loading weekly sales: {str(e)}",
             }
         )
 
@@ -1711,34 +1711,34 @@ async def conteo_rapido(request: Request):
                 print(f"Retrieved {len(estilos_data)} items with prioridad=1", flush=True)
             
             return templates.TemplateResponse(
-            request=request,
-            name="conteo_rapido.html",
-            context={
+                "conteo_rapido.html",
+                {
+                    "request": request,
                     "estilos": estilos_data,
                     "total_items": len(estilos_data)
                 }
-        )
+            )
             
         except Exception as fetch_error:
             print(f"Error fetching data: {str(fetch_error)}", flush=True)
             traceback.print_exc()
             return templates.TemplateResponse(
-            request=request,
-            name="conteo_rapido.html",
-            context={
+                "conteo_rapido.html",
+                {
+                    "request": request,
                     "estilos": [],
                     "total_items": 0,
                     "error_message": f"Error loading data: {str(fetch_error)}"
                 }
-        )
+            )
             
     except Exception as e:
         import traceback
         traceback.print_exc()
         return templates.TemplateResponse(
-            request=request,
-            name="error.html",
-            context={
+            "error.html",
+            {
+                "request": request,
                 "error_message": f"Error loading conteo rapido: {str(e)}"
             }
         )
@@ -1854,12 +1854,12 @@ async def add_model(
             print(f"Error adding model: {error_msg}", flush=True)
             traceback.print_exc()
             return templates.TemplateResponse(
-            request=request,
-            name="error.html",
-            context={
+                "error.html", 
+                {
+                    "request": request, 
                     "error_message": f"Failed to add model: {error_msg}"
                 }
-        )
+            )
         
         # Redirect back to models page
         return RedirectResponse(url="/modelos?success=true", status_code=303)
@@ -1868,9 +1868,9 @@ async def add_model(
         print(f"Add model error: {str(e)}", flush=True)
         traceback.print_exc()  # Print stack trace for more details
         return templates.TemplateResponse(
-            request=request,
-            name="error.html",
-            context={
+            "error.html", 
+            {
+                "request": request, 
                 "error_message": f"Error adding model: {str(e)}"
             }
         )
@@ -1914,14 +1914,14 @@ async def ver_inventario_daily(request: Request):
             
             if not daily_data:
                 return templates.TemplateResponse(
-            request=request,
-            name="inventario_daily.html",
-            context={
+                    "inventario_daily.html",
+                    {
+                        "request": request,
                         "daily_totals": {},
                         "chart_data": {'labels': [], 'datasets': []},
                         "has_chart_data": False
                     }
-        )
+                )
             
             # Process data for chart
             daily_totals = {}
@@ -2000,34 +2000,34 @@ async def ver_inventario_daily(request: Request):
             print(f"Chart data has {len(datasets)} datasets", flush=True)
             
             return templates.TemplateResponse(
-            request=request,
-            name="inventario_daily.html",
-            context={
+                "inventario_daily.html",
+                {
+                    "request": request,
                     "daily_totals": daily_totals,
                     "chart_data": chart_data,
                     "has_chart_data": True
                 }
-        )
+            )
             
         except Exception as fetch_error:
             print(f"Error fetching inventory data: {str(fetch_error)}", flush=True)
             traceback.print_exc()
             return templates.TemplateResponse(
-            request=request,
-            name="inventario_daily.html",
-            context={
+                "inventario_daily.html",
+                {
+                    "request": request,
                     "daily_totals": {},
                     "chart_data": {'labels': [], 'datasets': []},
                     "has_chart_data": False
                 }
-        )
+            )
             
     except Exception as e:
         traceback.print_exc()
         return templates.TemplateResponse(
-            request=request,
-            name="error.html",
-            context={
+            "error.html",
+            {
+                "request": request,
                 "error_message": f"Error loading daily inventory: {str(e)}"
             }
         )
@@ -2056,14 +2056,11 @@ async def get_ventas_viaje_form(request: Request):
         import json
         estilos_json = json.dumps(estilos)
         
-        return templates.TemplateResponse(
-            request=request,
-            name="ventasviaje.html",
-            context={
+        return templates.TemplateResponse("ventasviaje.html", {
+            "request": request,
             "estilos": estilos,
             "estilos_json": estilos_json
-        }
-        )
+        })
     except Exception as e:
         print(f"Error in ventasviaje GET: {str(e)}", flush=True)
         import traceback
@@ -2306,13 +2303,10 @@ async def ver_ventas_viaje(request: Request):
         
         print(f"Grouped into {len(orders_list)} orders", flush=True)
         
-        return templates.TemplateResponse(
-            request=request,
-            name="ver_ventas_viaje.html",
-            context={
+        return templates.TemplateResponse("ver_ventas_viaje.html", {
+            "request": request,
             "orders": orders_list
-        }
-        )
+        })
         
     except Exception as e:
         print(f"Error loading travel sales: {str(e)}", flush=True)
@@ -2798,11 +2792,7 @@ async def get_ultima_caja():
 @app.get("/verimagenes", response_class=HTMLResponse)
 async def ver_imagenes(request: Request):
     """Main page to view images associated with estilos"""
-    return templates.TemplateResponse(
-            request=request,
-            name="verimagenes.html",
-            context={}
-        )
+    return templates.TemplateResponse("verimagenes.html", {"request": request})
 
 @app.get("/api/estilos-with-images")
 async def get_estilos_with_images():
@@ -3302,19 +3292,11 @@ async def compare_queries():
 
 @app.get("/nota", response_class=HTMLResponse)
 async def nota(request: Request):
-    return templates.TemplateResponse(
-            request=request,
-            name="nota.html",
-            context={}
-        )
+    return templates.TemplateResponse("nota.html", {"request": request})
 
 @app.get("/nota1", response_class=HTMLResponse)
 async def nota(request: Request):
-    return templates.TemplateResponse(
-            request=request,
-            name="nota1.html",
-            context={}
-        )
+    return templates.TemplateResponse("nota1.html", {"request": request})
 
 
 
@@ -4380,11 +4362,7 @@ class SimpleRedeemRequest(BaseModel):
 # Add this to serve the redeem.html page
 @app.get("/redeem.html", response_class=HTMLResponse)
 async def redeem_page(request: Request):
-    return templates.TemplateResponse(
-            request=request,
-            name="redeem.html",
-            context={}
-        )
+    return templates.TemplateResponse("redeem.html", {"request": request})
 
 
 @app.post("/api/redeem")
@@ -4863,11 +4841,7 @@ async def logout_user(session_token: str):
 # Serve the dashboard page
 @app.get("/dashboard.html", response_class=HTMLResponse)
 async def dashboard_page(request: Request):
-    return templates.TemplateResponse(
-            request=request,
-            name="dashboard.html",
-            context={}
-        )
+    return templates.TemplateResponse("dashboard.html", {"request": request})
 
 
 @app.post("/api/apply/rewards")
@@ -4998,11 +4972,7 @@ async def test_session(session_token: str = None):
 
 @app.get("/debug.html", response_class=HTMLResponse)
 async def debug_page(request: Request):
-    return templates.TemplateResponse(
-            request=request,
-            name="debug.html",
-            context={}
-        )
+    return templates.TemplateResponse("debug.html", {"request": request})
 
 
 @app.get("/verdetalleestilos.html", response_class=HTMLResponse)
@@ -5033,14 +5003,15 @@ async def ver_detalle_estilos(request: Request):
         if resp.status_code >= 400:
             print(f"[ver_detalle_estilos] Supabase error: {resp.status_code} - {resp.text}", flush=True)
             return templates.TemplateResponse(
-            request=request,
-            name="verdetalleestilos.html",
-            context={
+                "verdetalleestilos.html",
+                {
+                    "request": request,
                     "step": "select_estilo",
                     "inventario_data": [],
-                    "error_message": f"Error al cargar estilos ({resp.status_code})."
-            }
-        )
+                    "error_message": f"Error al cargar estilos ({resp.status_code}).",
+                },
+                status_code=resp.status_code,
+            )
 
         rows = resp.json() or []
         print(f"[ver_detalle_estilos] Retrieved {len(rows)} rows", flush=True)
@@ -5063,26 +5034,26 @@ async def ver_detalle_estilos(request: Request):
         print(f"[ver_detalle_estilos] Processed {len(inventario_data)} items for display", flush=True)
 
         return templates.TemplateResponse(
-            request=request,
-            name="verdetalleestilos.html",
-            context={
+            "verdetalleestilos.html",
+            {
+                "request": request,
                 "step": "select_estilo",  # This tells the template which section to show
                 "inventario_data": inventario_data,  # Changed from 'estilos' to 'inventario_data'
-                "error_message": None
-            }
+                "error_message": None,
+            },
         )
 
     except Exception as e:
         print(f"[ver_detalle_estilos] Unexpected error: {e}", flush=True)
         return templates.TemplateResponse(
-            request=request,
-            name="verdetalleestilos.html",
-            context={
+            "verdetalleestilos.html",
+            {
+                "request": request,
                 "step": "select_estilo",
                 "inventario_data": [],
-                "error_message": "Ocurrió un error al cargar el menú de estilos."
+                "error_message": "Ocurrió un error al cargar el menú de estilos.",
             },
-            status_code=500
+            status_code=500,
         )
 
 @app.get("/verdetalleestilos/analytics", response_class=HTMLResponse)
@@ -5286,9 +5257,9 @@ async def ver_detalle_estilos_analytics(
         print(f"[Analytics] Generated analytics for {len(summary_data)} models, {len(daily_data)} daily records", flush=True)
         
         return templates.TemplateResponse(
-            request=request,
-            name="verdetalleestilos.html",
-            context={
+            "verdetalleestilos.html",
+            {
+                "request": request,
                 "step": "analytics",
                 "estilo": estilo,
                 "available_modelos": available_modelos,
@@ -5298,8 +5269,8 @@ async def ver_detalle_estilos_analytics(
                 "sort_order": sort_order,
                 "analytics_data": analytics_data,
                 "chart_data": json.dumps(chart_data),
-                "error_message": None
-            }
+                "error_message": None,
+            },
         )
         
     except Exception as e:
@@ -5308,9 +5279,9 @@ async def ver_detalle_estilos_analytics(
         traceback.print_exc()
         
         return templates.TemplateResponse(
-            request=request,
-            name="verdetalleestilos.html",
-            context={
+            "verdetalleestilos.html",
+            {
+                "request": request,
                 "step": "analytics", 
                 "estilo": estilo,
                 "available_modelos": [],
@@ -5320,8 +5291,8 @@ async def ver_detalle_estilos_analytics(
                 "sort_order": sort_order,
                 "analytics_data": {"summary_data": [], "daily_data": []},
                 "chart_data": "{}",
-                "error_message": "Error al cargar el análisis de ventas."
-            }
+                "error_message": "Error al cargar el análisis de ventas.",
+            },
         )
 
 @app.get("/flores3-analytics", response_class=HTMLResponse)
@@ -5447,13 +5418,13 @@ async def flores3_analytics(request: Request):
     except Exception as e:
         print(f"[FLORES3] Error: {e}", flush=True)
         return templates.TemplateResponse(
-            request=request,
-            name="flores3_analytics.html",
-            context={
+            "flores3_analytics.html",
+            {
+                "request": request,
                 "analytics_data": {"summary_data": [], "daily_data": []},
                 "estilo": "FUN FLORES 3",
                 "error_message": "Error al cargar el análisis de ventas."
-            }
+            },
         )
 
 
@@ -5482,14 +5453,14 @@ async def analytics_main(request: Request, estilo: str = None):
 
             if resp.status_code >= 400:
                 return templates.TemplateResponse(
-            request=request,
-            name="analytics_dynamic.html",
-            context={
+                    "analytics_dynamic.html",
+                    {
+                        "request": request,
                         "step": "select_estilo",
                         "inventario_data": [],
-                        "error_message": f"Error al cargar estilos ({resp.status_code})."
-            }
-        )
+                        "error_message": f"Error al cargar estilos ({resp.status_code}).",
+                    },
+                )
 
             rows = resp.json() or []
             
@@ -5509,14 +5480,14 @@ async def analytics_main(request: Request, estilo: str = None):
                     inventario_data.append(item)
 
             return templates.TemplateResponse(
-            request=request,
-            name="analytics_dynamic.html",
-            context={
+                "analytics_dynamic.html",
+                {
+                    "request": request,
                     "step": "select_estilo",
                     "inventario_data": inventario_data,
-                    "error_message": None
-            }
-        )
+                    "error_message": None,
+                },
+            )
         
         else:
             # Show analytics for specific estilo
@@ -5621,29 +5592,29 @@ async def analytics_main(request: Request, estilo: str = None):
             print(f"[Analytics] Generated analytics: {len(summary_data)} models, {len(daily_data)} daily records", flush=True)
             
             return templates.TemplateResponse(
-            request=request,
-            name="analytics_dynamic.html",
-            context={
+                "analytics_dynamic.html",
+                {
+                    "request": request,
                     "step": "analytics",
                     "analytics_data": analytics_data,
                     "estilo": estilo,
                     "start_date": start_date,
                     "end_date": end_date
-                }
-        )
+                },
+            )
         
     except Exception as e:
         print(f"[Analytics] Error: {e}", flush=True)
         return templates.TemplateResponse(
-            request=request,
-            name="analytics_dynamic.html",
-            context={
+            "analytics_dynamic.html",
+            {
+                "request": request,
                 "step": "analytics" if estilo else "select_estilo",
                 "analytics_data": {"summary_data": [], "daily_data": []},
                 "estilo": estilo or "",
                 "error_message": "Error al cargar el análisis de ventas.",
                 "inventario_data": [] if not estilo else None
-            }
+            },
         )
 
 @app.get("/analyticstravel", response_class=HTMLResponse)
@@ -5668,14 +5639,14 @@ async def analytics_travel(request: Request, lugar: str = None):
 
             if resp.status_code >= 400:
                 return templates.TemplateResponse(
-            request=request,
-            name="travel_analytics.html",
-            context={
+                    "travel_analytics.html",
+                    {
+                        "request": request,
                         "step": "select_lugar",
                         "lugares_data": [],
-                        "error_message": f"Error al cargar lugares ({resp.status_code})."
-            }
-        )
+                        "error_message": f"Error al cargar lugares ({resp.status_code}).",
+                    },
+                )
 
             rows = resp.json() or []
             print(f"[Travel Analytics] Retrieved {len(rows)} travel records", flush=True)
@@ -5716,14 +5687,14 @@ async def analytics_travel(request: Request, lugar: str = None):
             print(f"[Travel Analytics] Processed {len(lugares_data)} lugares", flush=True)
 
             return templates.TemplateResponse(
-            request=request,
-            name="travel_analytics.html",
-            context={
+                "travel_analytics.html",
+                {
+                    "request": request,
                     "step": "select_lugar",
                     "lugares_data": lugares_data,
-                    "error_message": None
-            }
-        )
+                    "error_message": None,
+                },
+            )
         
         else:
             # Show analytics for specific lugar
@@ -5829,16 +5800,16 @@ async def analytics_travel(request: Request, lugar: str = None):
             print(f"[Travel Analytics] Generated analytics: {len(summary_data)} estilos, {len(daily_data)} records", flush=True)
             
             return templates.TemplateResponse(
-            request=request,
-            name="travel_analytics.html",
-            context={
+                "travel_analytics.html",
+                {
+                    "request": request,
                     "step": "analytics",
                     "analytics_data": analytics_data,
                     "lugar": lugar,
                     "start_date": start_date,
                     "end_date": end_date
-                }
-        )
+                },
+            )
         
     except Exception as e:
         print(f"[Travel Analytics] Error: {e}", flush=True)
@@ -5846,15 +5817,15 @@ async def analytics_travel(request: Request, lugar: str = None):
         traceback.print_exc()
         
         return templates.TemplateResponse(
-            request=request,
-            name="travel_analytics.html",
-            context={
+            "travel_analytics.html",
+            {
+                "request": request,
                 "step": "analytics" if lugar else "select_lugar",
                 "analytics_data": {"summary_data": [], "daily_data": []},
                 "lugar": lugar or "",
                 "error_message": "Error al cargar el análisis de ventas travel.",
                 "lugares_data": [] if not lugar else None
-            }
+            },
         )
 
 
@@ -6185,17 +6156,17 @@ async def modelos_anuales(
             
             if not all_records:
                 return templates.TemplateResponse(
-            request=request,
-            name="modelosanuales.html",
-            context={
+                    "modelosanuales.html",
+                    {
+                        "request": request,
                         "year": year,
                         "chart_data": {"labels": [], "datasets": []},
                         "summary_data": [],
                         "monthly_details": [],
                         "available_years": ["2022", "2023", "2024", "2025"],
-                        "error_message": f"No se encontraron datos para el año {year}."
-            }
-        )
+                        "error_message": f"No se encontraron datos para el año {year}.",
+                    },
+                )
             
             # Debug: Check date distribution
             if all_records:
@@ -6278,17 +6249,17 @@ async def modelos_anuales(
         
         if not monthly_aggregates:
             return templates.TemplateResponse(
-            request=request,
-            name="modelosanuales.html",
-            context={
+                "modelosanuales.html",
+                {
+                    "request": request,
                     "year": year,
                     "chart_data": {"labels": [], "datasets": []},
                     "summary_data": [],
                     "monthly_details": [],
                     "available_years": ["2022", "2023", "2024", "2025"],
-                    "error_message": f"No se encontraron ventas para el año {year}."
-            }
-        )
+                    "error_message": f"No se encontraron ventas para el año {year}.",
+                },
+            )
         
         # Convert to chart format
         modelo_monthly = defaultdict(dict)
@@ -6473,17 +6444,17 @@ async def modelos_anuales(
             print(f"[Yearly Models] WARNING: summary_data is empty!")
         
         return templates.TemplateResponse(
-            request=request,
-            name="modelosanuales.html",
-            context={
+            "modelosanuales.html",
+            {
+                "request": request,
                 "year": year,
                 "chart_data": chart_data,
                 "summary_data": summary_data,
                 "monthly_details": monthly_details,
                 "monthly_lookup": monthly_lookup,  # Add this for easier template lookup
                 "available_years": ["2022", "2023", "2024", "2025"],
-                "error_message": None
-            }
+                "error_message": None,
+            },
         )
         
     except Exception as e:
@@ -6492,16 +6463,16 @@ async def modelos_anuales(
         traceback.print_exc()
         
         return templates.TemplateResponse(
-            request=request,
-            name="modelosanuales.html",
-            context={
+            "modelosanuales.html",
+            {
+                "request": request,
                 "year": year,
                 "chart_data": {"labels": [], "datasets": []},
                 "summary_data": [],
                 "monthly_details": [],
                 "available_years": ["2022", "2023", "2024", "2025"],
-                "error_message": f"Error al cargar los datos: {str(e)}"
-            }
+                "error_message": f"Error al cargar los datos: {str(e)}",
+            },
         )
 
 @app.get("/api/balance-data")
@@ -6533,11 +6504,7 @@ async def serve_html():
 
 @app.get("/metertelefonos", response_class=HTMLResponse)
 async def metertelefonos_get(request: Request):
-    return templates.TemplateResponse(
-            request=request,
-            name="metertelefonos.html",
-            context={}
-        )
+    return templates.TemplateResponse("metertelefonos.html", {"request": request})
 
 def normalize_phone(raw: str) -> str:
     return re.sub(r"\D+", "", raw or "")
@@ -7075,9 +7042,9 @@ async def dashboardterex(
                 heatmap_max = v
 
         return templates.TemplateResponse(
-            request=request,
-            name="dashboardterex.html",
-            context={
+            "dashboardterex.html",
+            {
+                "request":      request,
                 "days":         days,
                 "kpis":         kpis,
                 "weekly_chart": weekly_chart,
@@ -7085,7 +7052,7 @@ async def dashboardterex(
                 "top_estilos":  top_estilos,
                 "heatmap":      heatmap,
                 "heatmap_max":  heatmap_max,
-                "velocity":     velocity
+                "velocity":     velocity,
             }
         )
 
@@ -7093,27 +7060,18 @@ async def dashboardterex(
         import traceback
         traceback.print_exc()
         return templates.TemplateResponse(
-            request=request,
-            name="error.html",
-            context={"error_message": f"Dashboard error: {str(e)}"}
+            "error.html",
+            {"request": request, "error_message": f"Dashboard error: {str(e)}"}
         )
 
 @app.get("/transferencias", response_class=HTMLResponse)
 async def get_transferencias_page(request: Request):
-    return templates.TemplateResponse(
-            request=request,
-            name="transferencias.html",
-            context={}
-        )
+    return templates.TemplateResponse("transferencias.html", {"request": request})
 
 
 @app.get("/inventoryxbarcode", response_class=HTMLResponse)
 async def get_inventoryxbarcode_page(request: Request):
-    return templates.TemplateResponse(
-            request=request,
-            name="inventoryxbarcode.html",
-            context={}
-        )
+    return templates.TemplateResponse("inventoryxbarcode.html", {"request": request})
 
 
 @app.get("/api/inventoryxbarcode")
