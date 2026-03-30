@@ -1699,6 +1699,182 @@ async def ver_inventario_stock(request: Request):
         )
 
 
+@app.get("/secretmenu", response_class=HTMLResponse)
+async def secret_menu(request: Request):
+    return templates.TemplateResponse(request=request, name="secret_menu.html", context={})
+
+
+@app.get("/secretmenu/estilos", response_class=HTMLResponse)
+async def secret_menu_estilos(request: Request):
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/inventario_estilos",
+                headers={**HEADERS, "Range": "0-9999"},
+                params={
+                    "select": "*",
+                    "order": "nombre.asc"
+                }
+            )
+
+        if resp.status_code >= 400:
+            print(f"Error response: {resp.text}", flush=True)
+            raise Exception(f"Error fetching estilos: {resp.status_code}")
+
+        estilos_raw = resp.json()
+
+        # Remove unwanted columns
+        exclude = {"nombre_embedding", "sold30", "saldos"}
+        estilos = [
+            {k: v for k, v in row.items() if k not in exclude}
+            for row in estilos_raw
+        ]
+
+        return templates.TemplateResponse(
+            request=request,
+            name="secret_estilos.html",
+            context={"estilos": estilos}
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return templates.TemplateResponse(
+            request=request,
+            name="error.html",
+            context={"error_message": f"Error loading estilos: {str(e)}"}
+        )
+
+
+@app.post("/secretmenu/estilos/create")
+async def secret_menu_create_estilo(request: Request):
+    try:
+        body = await request.json()
+        nombre = body.get("nombre", "").strip()
+        if not nombre:
+            raise HTTPException(status_code=400, detail="nombre is required")
+
+        # Check if nombre already exists
+        async with httpx.AsyncClient(timeout=10) as client:
+            check_resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/inventario_estilos",
+                headers=HEADERS,
+                params={"select": "id", "nombre": f"eq.{nombre}", "limit": "1"}
+            )
+        if check_resp.status_code < 400 and check_resp.json():
+            raise HTTPException(status_code=409, detail="Ya existe un estilo con ese nombre")
+
+        new_row = {"nombre": nombre}
+        if body.get("prioridad") is not None:
+            new_row["prioridad"] = int(body["prioridad"])
+        if body.get("precio") is not None and body["precio"] != "":
+            new_row["precio"] = int(body["precio"])
+        if body.get("cost") is not None and body["cost"] != "":
+            new_row["cost"] = int(body["cost"])
+        if body.get("supplier"):
+            new_row["supplier"] = body["supplier"].strip()
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"{SUPABASE_URL}/rest/v1/inventario_estilos",
+                headers=HEADERS,
+                json=new_row
+            )
+
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+        created = resp.json()
+        return JSONResponse({"ok": True, "data": created})
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/secretmenu/estilos/{estilo_id}/images")
+async def secret_menu_list_images(estilo_id: int):
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{SUPABASE_URL}/storage/v1/object/list/images_estilos",
+                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
+                json={"prefix": f"{estilo_id}/", "limit": 20}
+            )
+        if resp.status_code >= 400:
+            return JSONResponse({"urls": []})
+        files = resp.json()
+        urls = [
+            f"{SUPABASE_URL}/storage/v1/object/public/images_estilos/{estilo_id}/{f['name']}"
+            for f in files if f.get("name") and f.get("id")
+        ]
+        return JSONResponse({"urls": urls})
+    except Exception:
+        return JSONResponse({"urls": []})
+
+
+@app.post("/secretmenu/estilos/{estilo_id}/upload")
+async def secret_menu_upload_image(estilo_id: int, file: UploadFile = File(...)):
+    try:
+        contents = await file.read()
+        ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
+        filename = f"{uuid.uuid4().hex[:8]}.{ext}"
+        storage_path = f"{estilo_id}/{filename}"
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{SUPABASE_URL}/storage/v1/object/images_estilos/{storage_path}",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": file.content_type or "image/jpeg",
+                },
+                content=contents
+            )
+
+        print(f"Upload response: status={resp.status_code} body={resp.text}", flush=True)
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+        public_url = f"{SUPABASE_URL}/storage/v1/object/public/images_estilos/{storage_path}"
+        return JSONResponse({"ok": True, "url": public_url})
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/secretmenu/estilos/updatecost")
+async def secret_menu_update_cost(request: Request):
+    try:
+        body = await request.json()
+        estilo_id = body.get("id")
+        new_cost = body.get("cost")
+
+        if estilo_id is None or new_cost is None:
+            raise HTTPException(status_code=400, detail="Missing id or cost")
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.patch(
+                f"{SUPABASE_URL}/rest/v1/inventario_estilos",
+                headers=HEADERS,
+                params={"id": f"eq.{estilo_id}"},
+                json={"cost": int(new_cost)}
+            )
+
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+        return JSONResponse({"ok": True, "cost": int(new_cost)})
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/verinventariodaily", response_class=HTMLResponse)
 async def ver_ventas_por_semana(request: Request):
     try:
