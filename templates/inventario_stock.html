@@ -1,0 +1,310 @@
+{% extends "base.html" %}
+
+{% block title %}Inventario Stock Diario{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center">
+                <h2>Niveles de Inventario Diario</h2>
+                <div>
+                    {% if snapshot_taken %}
+                        <span class="badge bg-success me-2">Snapshot de hoy tomado</span>
+                    {% else %}
+                        <span class="badge bg-secondary me-2">Snapshot de hoy ya existia</span>
+                    {% endif %}
+                    <button class="btn btn-outline-primary" onclick="window.print()">
+                        <i class="bi bi-printer"></i> Imprimir
+                    </button>
+                </div>
+            </div>
+            <p class="text-muted mt-1">Stock disponible (unidades con stock > 0) para estilos y modelos con ventas recientes</p>
+        </div>
+    </div>
+
+    <!-- ============ DETAILED STOCK BY ESTILO > MODELO ============ -->
+    {% if stock_by_estilo and stock_by_estilo|length > 0 %}
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-dark text-white">
+            <h5 class="mb-0">Stock Actual por Estilo / Modelo</h5>
+        </div>
+        <div class="card-body p-0">
+            <div class="input-group p-3 pb-0">
+                <span class="input-group-text"><i class="bi bi-search"></i></span>
+                <input type="text" class="form-control" id="estiloSearch" placeholder="Buscar estilo...">
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover mb-0" id="estiloDetailTable">
+                    <thead class="table-secondary">
+                        <tr>
+                            <th style="width:40px;"></th>
+                            <th>Estilo</th>
+                            <th class="text-end">Terex 1</th>
+                            <th class="text-end">Terex 2</th>
+                            <th class="text-end">Total</th>
+                            <th class="text-end">SKUs</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in stock_by_estilo %}
+                        {% set est = row.estilo or row.get("estilo","") %}
+                        {% set t1 = row.terex1_stock if row.terex1_stock is defined else row.get("terex1_stock", 0) %}
+                        {% set t2 = row.terex2_stock if row.terex2_stock is defined else row.get("terex2_stock", 0) %}
+                        {% set tot = row.total_stock if row.total_stock is defined else row.get("total_stock", 0) %}
+                        {% set ni = row.num_items if row.num_items is defined else row.get("num_items", 0) %}
+                        <tr class="estilo-row" data-estilo="{{ est }}" style="cursor:pointer;" onclick="toggleDetail('{{ est|replace("'", "\\'") }}')">
+                            <td class="text-center"><i class="bi bi-chevron-right" id="icon-{{ loop.index }}"></i></td>
+                            <td class="fw-bold">{{ est }}</td>
+                            <td class="text-end">{{ t1 }}</td>
+                            <td class="text-end">{{ t2 }}</td>
+                            <td class="text-end fw-bold">{{ tot }}</td>
+                            <td class="text-end text-muted">{{ ni }}</td>
+                        </tr>
+                        <!-- Detail rows (hidden by default) -->
+                        {% if stock_detail.get(est) %}
+                        {% for m in stock_detail[est] %}
+                        <tr class="detail-row detail-{{ est|replace(' ', '_')|replace("'", "_") }}" style="display:none; background-color: #f8f9fa;">
+                            <td></td>
+                            <td class="ps-4 text-muted"><small>{{ m.modelo }}</small></td>
+                            <td class="text-end"><small>{{ m.t1 }}</small></td>
+                            <td class="text-end"><small>{{ m.t2 }}</small></td>
+                            <td class="text-end"><small class="fw-bold">{{ m.total }}</small></td>
+                            <td class="text-end text-muted"><small>{{ m.items }}</small></td>
+                        </tr>
+                        {% endfor %}
+                        {% endif %}
+                        {% endfor %}
+                    </tbody>
+                    <tfoot class="table-dark">
+                        <tr>
+                            <td></td>
+                            <th>TOTAL</th>
+                            <th class="text-end">
+                                {% set st1 = namespace(v=0) %}
+                                {% for r in stock_by_estilo %}{% set st1.v = st1.v + (r.terex1_stock if r.terex1_stock is defined else r.get("terex1_stock",0)) %}{% endfor %}
+                                {{ st1.v }}
+                            </th>
+                            <th class="text-end">
+                                {% set st2 = namespace(v=0) %}
+                                {% for r in stock_by_estilo %}{% set st2.v = st2.v + (r.terex2_stock if r.terex2_stock is defined else r.get("terex2_stock",0)) %}{% endfor %}
+                                {{ st2.v }}
+                            </th>
+                            <th class="text-end">
+                                {% set stt = namespace(v=0) %}
+                                {% for r in stock_by_estilo %}{% set stt.v = stt.v + (r.total_stock if r.total_stock is defined else r.get("total_stock",0)) %}{% endfor %}
+                                {{ stt.v }}
+                            </th>
+                            <th class="text-end">
+                                {% set sni = namespace(v=0) %}
+                                {% for r in stock_by_estilo %}{% set sni.v = sni.v + (r.num_items if r.num_items is defined else r.get("num_items",0)) %}{% endfor %}
+                                {{ sni.v }}
+                            </th>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ============ TREND CHARTS ============ -->
+
+    <!-- Modelo Chart -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light">
+            <h5 class="mb-0">Tendencia Stock por Modelo</h5>
+        </div>
+        <div class="card-body">
+            {% if modelo_dates and modelo_dates|length > 0 %}
+                <div class="d-flex flex-wrap gap-3 mb-3 align-items-center">
+                    <strong>Sucursal:</strong>
+                    <div class="btn-group" role="group" id="modeloBranchGroup">
+                        <button type="button" class="btn btn-sm btn-outline-primary active" data-branch="t1">Terex 1</button>
+                        <button type="button" class="btn btn-sm btn-outline-warning" data-branch="t2">Terex 2</button>
+                        <button type="button" class="btn btn-sm btn-outline-success" data-branch="total">Total</button>
+                    </div>
+                    <strong class="ms-3">Top:</strong>
+                    <select id="modeloTopN" class="form-select form-select-sm" style="width:auto;">
+                        <option value="5">5</option>
+                        <option value="10" selected>10</option>
+                        <option value="15">15</option>
+                        <option value="20">20</option>
+                    </select>
+                </div>
+                <div class="chart-container" style="position: relative; height:450px;">
+                    <canvas id="modeloChart"></canvas>
+                </div>
+            {% else %}
+                <div class="alert alert-info">No hay datos de tendencia aun. Los datos se acumulan dia a dia.</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Estilo Chart -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light">
+            <h5 class="mb-0">Tendencia Stock por Estilo</h5>
+        </div>
+        <div class="card-body">
+            {% if estilo_dates and estilo_dates|length > 0 %}
+                <div class="d-flex flex-wrap gap-3 mb-3 align-items-center">
+                    <strong>Sucursal:</strong>
+                    <div class="btn-group" role="group" id="estiloBranchGroup">
+                        <button type="button" class="btn btn-sm btn-outline-primary active" data-branch="t1">Terex 1</button>
+                        <button type="button" class="btn btn-sm btn-outline-warning" data-branch="t2">Terex 2</button>
+                        <button type="button" class="btn btn-sm btn-outline-success" data-branch="total">Total</button>
+                    </div>
+                    <strong class="ms-3">Top:</strong>
+                    <select id="estiloTopN" class="form-select form-select-sm" style="width:auto;">
+                        <option value="5">5</option>
+                        <option value="10" selected>10</option>
+                        <option value="15">15</option>
+                        <option value="20">20</option>
+                    </select>
+                </div>
+                <div class="chart-container" style="position: relative; height:450px;">
+                    <canvas id="estiloChart"></canvas>
+                </div>
+            {% else %}
+                <div class="alert alert-info">No hay datos de tendencia aun. Los datos se acumulan dia a dia.</div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+
+    // ========== EXPAND/COLLAPSE DETAIL ROWS ==========
+    const openEstilos = new Set();
+
+    window.toggleDetail = function(estilo) {
+        const safeClass = 'detail-' + estilo.replace(/ /g, '_').replace(/'/g, '_');
+        const rows = document.querySelectorAll('.' + CSS.escape(safeClass));
+        const isOpen = openEstilos.has(estilo);
+
+        rows.forEach(r => r.style.display = isOpen ? 'none' : 'table-row');
+
+        if (isOpen) openEstilos.delete(estilo);
+        else openEstilos.add(estilo);
+
+        // Toggle icon
+        const estiloRow = document.querySelector(`tr[data-estilo="${estilo}"]`);
+        if (estiloRow) {
+            const icon = estiloRow.querySelector('i');
+            if (icon) {
+                icon.className = isOpen ? 'bi bi-chevron-right' : 'bi bi-chevron-down';
+            }
+        }
+    };
+
+    // ========== SEARCH FILTER ==========
+    const searchInput = document.getElementById('estiloSearch');
+    if (searchInput) {
+        searchInput.addEventListener('input', function() {
+            const q = this.value.toLowerCase();
+            document.querySelectorAll('.estilo-row').forEach(row => {
+                const estilo = row.dataset.estilo.toLowerCase();
+                const match = !q || estilo.includes(q);
+                row.style.display = match ? '' : 'none';
+                // Also hide detail rows if parent hidden
+                const safeClass = 'detail-' + row.dataset.estilo.replace(/ /g, '_').replace(/'/g, '_');
+                document.querySelectorAll('.' + CSS.escape(safeClass)).forEach(dr => {
+                    dr.style.display = match && openEstilos.has(row.dataset.estilo) ? 'table-row' : 'none';
+                });
+            });
+        });
+    }
+
+    // ========== TREND CHARTS ==========
+    const COLORS = [
+        '#e6194b','#3cb44b','#4363d8','#f58231','#911eb4',
+        '#42d4f4','#f032e6','#bfef45','#fabed4','#469990',
+        '#dcbeff','#9A6324','#fffac8','#800000','#aaffc3',
+        '#808000','#ffd8b1','#000075','#a9a9a9','#e6beff'
+    ];
+
+    const modeloData = {{ modelo_data|tojson }};
+    const modeloDates = {{ modelo_dates|tojson }};
+    const modeloRanked = {{ modelo_ranked|tojson }};
+    const estiloData = {{ estilo_data|tojson }};
+    const estiloDates = {{ estilo_dates|tojson }};
+    const estiloRanked = {{ estilo_ranked|tojson }};
+
+    function buildStockChart(canvasId, rawData, dates, ranked, branch, topN, titlePrefix) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas || dates.length === 0) return;
+        const existing = Chart.getChart(canvas);
+        if (existing) existing.destroy();
+
+        const topItems = ranked.slice(0, topN);
+        const datasets = topItems.map((name, i) => {
+            const data = dates.map(d => {
+                const dayVals = (rawData[name] || {})[d] || {t1:0, t2:0, total:0};
+                return dayVals[branch] || 0;
+            });
+            return {
+                label: name, data: data,
+                borderColor: COLORS[i % COLORS.length],
+                backgroundColor: COLORS[i % COLORS.length] + '33',
+                borderWidth: 2, fill: false,
+                pointBackgroundColor: COLORS[i % COLORS.length],
+                pointBorderColor: '#fff', pointBorderWidth: 1,
+                pointRadius: 4, pointHoverRadius: 6, tension: 0.3
+            };
+        });
+
+        const branchLabel = branch === 't1' ? 'Terex 1' : branch === 't2' ? 'Terex 2' : 'Total';
+
+        return new Chart(canvas.getContext('2d'), {
+            type: 'line',
+            data: { labels: dates, datasets: datasets },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: true, position: 'top', labels: { boxWidth: 12, font: { size: 11 } } },
+                    title: { display: true, text: titlePrefix + ' - ' + branchLabel + ' (Top ' + topN + ')', font: { size: 15, weight: 'bold' } },
+                    tooltip: {
+                        backgroundColor: 'rgba(0,0,0,0.8)',
+                        callbacks: { label: ctx => ctx.dataset.label + ': ' + ctx.raw + ' uds' }
+                    }
+                },
+                scales: {
+                    y: { beginAtZero: true, title: { display: true, text: 'Unidades en Stock' }, ticks: { callback: v => v.toFixed(0) } },
+                    x: { grid: { display: false }, title: { display: true, text: 'Fecha' } }
+                },
+                interaction: { mode: 'index', intersect: false }
+            }
+        });
+    }
+
+    // Modelo chart
+    let modeloBranch = 't1', modeloTopN = 10;
+    function rebuildModelo() { buildStockChart('modeloChart', modeloData, modeloDates, modeloRanked, modeloBranch, modeloTopN, 'Stock por Modelo'); }
+    if (modeloDates.length > 0) {
+        rebuildModelo();
+        document.getElementById('modeloBranchGroup').addEventListener('click', function(e) {
+            const btn = e.target.closest('[data-branch]'); if (!btn) return;
+            this.querySelectorAll('.btn').forEach(b => b.classList.remove('active')); btn.classList.add('active');
+            modeloBranch = btn.dataset.branch; rebuildModelo();
+        });
+        document.getElementById('modeloTopN').addEventListener('change', function() { modeloTopN = parseInt(this.value); rebuildModelo(); });
+    }
+
+    // Estilo chart
+    let estiloBranch = 't1', estiloTopN = 10;
+    function rebuildEstilo() { buildStockChart('estiloChart', estiloData, estiloDates, estiloRanked, estiloBranch, estiloTopN, 'Stock por Estilo'); }
+    if (estiloDates.length > 0) {
+        rebuildEstilo();
+        document.getElementById('estiloBranchGroup').addEventListener('click', function(e) {
+            const btn = e.target.closest('[data-branch]'); if (!btn) return;
+            this.querySelectorAll('.btn').forEach(b => b.classList.remove('active')); btn.classList.add('active');
+            estiloBranch = btn.dataset.branch; rebuildEstilo();
+        });
+        document.getElementById('estiloTopN').addEventListener('change', function() { estiloTopN = parseInt(this.value); rebuildEstilo(); });
+    }
+});
+</script>
+{% endblock %}

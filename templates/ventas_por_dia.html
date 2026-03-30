@@ -1,65 +1,126 @@
 {% extends "base.html" %}
 
-{% block title %}Ventas Diarias (últimos 14 días){% endblock %}
+{% block title %}Ventas Diarias (ultimos 14 dias){% endblock %}
 
 {% block content %}
 <div class="container mt-4">
     <div class="row mb-4">
         <div class="col-12">
             <div class="d-flex justify-content-between align-items-center">
-                <h2>Ventas Diarias (últimos 14 días)</h2>
+                <h2>Ventas Diarias (ultimos 14 dias)</h2>
                 <button class="btn btn-outline-primary" onclick="window.print()">
                     <i class="bi bi-printer"></i> Imprimir
                 </button>
             </div>
         </div>
     </div>
-    
-    <!-- Chart -->
+
+    <!-- Branch Totals Chart -->
     <div class="card shadow-sm mb-4">
         <div class="card-header bg-light">
-            <h5 class="mb-0">Gráfico de Ventas por Estilo</h5>
+            <h5 class="mb-0">Ventas por Sucursal</h5>
         </div>
         <div class="card-body">
             {% if chart_data and chart_data.labels and chart_data.labels|length > 0 %}
+                <div class="d-flex flex-wrap gap-3 mb-3 align-items-center">
+                    <strong>Mostrar:</strong>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="toggleT1" checked>
+                        <label class="form-check-label" for="toggleT1">
+                            <span class="badge" style="background-color: rgba(54, 162, 235, 1);">Terex 1</span>
+                        </label>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="toggleT2" checked>
+                        <label class="form-check-label" for="toggleT2">
+                            <span class="badge" style="background-color: rgba(255, 159, 64, 1);">Terex 2</span>
+                        </label>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="toggleTotal" checked>
+                        <label class="form-check-label" for="toggleTotal">
+                            <span class="badge" style="background-color: rgba(75, 192, 192, 1);">Total</span>
+                        </label>
+                    </div>
+                </div>
                 <div class="chart-container" style="position: relative; height:400px;">
                     <canvas id="salesChart"></canvas>
                 </div>
                 <div class="text-center mt-3">
-                    <div class="btn-group" role="group">
-                        <button type="button" class="btn btn-outline-primary" id="barChartBtn">Barras</button>
-                        <button type="button" class="btn btn-outline-primary active" id="lineChartBtn">Línea</button>
-                        <button type="button" class="btn btn-outline-secondary" id="stackedBarBtn">Barras Apiladas</button>
+                    <div class="btn-group" role="group" id="chartTypeGroup">
+                        <button type="button" class="btn btn-outline-primary" data-type="bar">Barras</button>
+                        <button type="button" class="btn btn-outline-primary active" data-type="line">Linea</button>
+                        <button type="button" class="btn btn-outline-secondary" data-type="stackedBar">Barras Apiladas</button>
                     </div>
                 </div>
             {% else %}
-                <div class="alert alert-info">
-                    No hay datos disponibles para mostrar en el gráfico.
-                </div>
+                <div class="alert alert-info">No hay datos disponibles.</div>
             {% endif %}
         </div>
     </div>
-    
+
+    <!-- Estilo Breakdown Chart -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light">
+            <h5 class="mb-0">% Revenue por Estilo</h5>
+        </div>
+        <div class="card-body">
+            <div class="d-flex flex-wrap gap-3 mb-3 align-items-center">
+                <strong>Sucursal:</strong>
+                <div class="btn-group" role="group" id="estiloBranchGroup">
+                    <button type="button" class="btn btn-sm btn-outline-primary active" data-branch="Terex 1">Terex 1</button>
+                    <button type="button" class="btn btn-sm btn-outline-warning" data-branch="Terex 2">Terex 2</button>
+                </div>
+            </div>
+            <div class="chart-container" style="position: relative; height:400px;">
+                <canvas id="estiloChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modelo Breakdown Chart -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light">
+            <h5 class="mb-0">% Revenue por Modelo</h5>
+        </div>
+        <div class="card-body">
+            <div class="d-flex flex-wrap gap-3 mb-3 align-items-center">
+                <strong>Sucursal:</strong>
+                <div class="btn-group" role="group" id="modeloBranchGroup">
+                    <button type="button" class="btn btn-sm btn-outline-primary active" data-branch="Terex 1">Terex 1</button>
+                    <button type="button" class="btn btn-sm btn-outline-warning" data-branch="Terex 2">Terex 2</button>
+                </div>
+            </div>
+            <div class="chart-container" style="position: relative; height:400px;">
+                <canvas id="modeloChart"></canvas>
+            </div>
+        </div>
+    </div>
+
     <!-- Data Table -->
     <div class="card shadow-sm mb-4">
         <div class="card-header bg-light">
-            <h5 class="mb-0">Tabla de Ventas Totales</h5>
+            <h5 class="mb-0">Tabla de Ventas por Sucursal</h5>
         </div>
         <div class="card-body">
-            {% if day_totals and day_totals|length > 0 %}
+            {% if day_totals_total and day_totals_total|length > 0 %}
                 <div class="table-responsive">
                     <table class="table table-striped table-hover">
                         <thead class="table-dark">
                             <tr>
                                 <th>Fecha</th>
-                                <th class="text-end">Total Ventas</th>
+                                <th class="text-end">Terex 1</th>
+                                <th class="text-end">Terex 2</th>
+                                <th class="text-end">Total</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {% for fecha, total in day_totals.items() %}
+                            {% for fecha, total in day_totals_total.items() %}
                             <tr>
                                 <td>{{ fecha }}</td>
-                                <td class="text-end">${{ '%.2f' | format(total) }}</td>
+                                <td class="text-end">${{ '%.2f' | format(day_totals_t1.get(fecha, 0)) }}</td>
+                                <td class="text-end">${{ '%.2f' | format(day_totals_t2.get(fecha, 0)) }}</td>
+                                <td class="text-end fw-bold">${{ '%.2f' | format(total) }}</td>
                             </tr>
                             {% endfor %}
                         </tbody>
@@ -67,294 +128,276 @@
                             <tr>
                                 <th>Total General</th>
                                 <th class="text-end">
-                                    {% set grand_total = 0 %}
-                                    {% for total in day_totals.values() %}
-                                        {% set grand_total = grand_total + total %}
-                                    {% endfor %}
-                                    ${{ '%.2f' | format(grand_total) }}
+                                    {% set gt1 = namespace(v=0) %}
+                                    {% for v in day_totals_t1.values() %}{% set gt1.v = gt1.v + v %}{% endfor %}
+                                    ${{ '%.2f' | format(gt1.v) }}
+                                </th>
+                                <th class="text-end">
+                                    {% set gt2 = namespace(v=0) %}
+                                    {% for v in day_totals_t2.values() %}{% set gt2.v = gt2.v + v %}{% endfor %}
+                                    ${{ '%.2f' | format(gt2.v) }}
+                                </th>
+                                <th class="text-end">
+                                    {% set gtt = namespace(v=0) %}
+                                    {% for v in day_totals_total.values() %}{% set gtt.v = gtt.v + v %}{% endfor %}
+                                    ${{ '%.2f' | format(gtt.v) }}
                                 </th>
                             </tr>
                         </tfoot>
                     </table>
                 </div>
             {% else %}
-                <div class="alert alert-info">
-                    No se encontraron datos de ventas para el período seleccionado.
-                </div>
+                <div class="alert alert-info">No se encontraron datos de ventas.</div>
             {% endif %}
         </div>
     </div>
-    
+
     <!-- Summary Card -->
-    {% if day_totals and day_totals|length > 0 %}
+    {% if day_totals_total and day_totals_total|length > 0 %}
+        {% set gt1 = namespace(v=0) %}
+        {% for v in day_totals_t1.values() %}{% set gt1.v = gt1.v + v %}{% endfor %}
+        {% set gt2 = namespace(v=0) %}
+        {% for v in day_totals_t2.values() %}{% set gt2.v = gt2.v + v %}{% endfor %}
+        {% set gtt = namespace(v=0) %}
+        {% for v in day_totals_total.values() %}{% set gtt.v = gtt.v + v %}{% endfor %}
+        {% set num_days = day_totals_total|length %}
         <div class="card shadow-sm">
-            <div class="card-header bg-light">
-                <h5 class="mb-0">Resumen</h5>
-            </div>
+            <div class="card-header bg-light"><h5 class="mb-0">Resumen</h5></div>
             <div class="card-body">
-                <div class="row">
-                    {% set grand_total = 0 %}
-                    {% for total in day_totals.values() %}
-                        {% set grand_total = grand_total + total %}
-                    {% endfor %}
-                    
-                    <div class="col-md-4">
-                        <div class="card bg-primary text-white">
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <div class="card text-white" style="background-color: rgba(54, 162, 235, 1);">
                             <div class="card-body text-center">
-                                <h6 class="card-title">Total de Ventas</h6>
-                                <h3>${{ '%.2f' | format(grand_total) }}</h3>
+                                <h6 class="card-title">Terex 1</h6>
+                                <h3>${{ '%.2f' | format(gt1.v) }}</h3>
+                                <small>Prom: ${{ '%.2f' | format(gt1.v / num_days) }}/dia</small>
                             </div>
                         </div>
                     </div>
-                    
-                    <div class="col-md-4">
+                    <div class="col-md-3">
+                        <div class="card text-white" style="background-color: rgba(255, 159, 64, 1);">
+                            <div class="card-body text-center">
+                                <h6 class="card-title">Terex 2</h6>
+                                <h3>${{ '%.2f' | format(gt2.v) }}</h3>
+                                <small>Prom: ${{ '%.2f' | format(gt2.v / num_days) }}/dia</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
                         <div class="card bg-success text-white">
                             <div class="card-body text-center">
-                                <h6 class="card-title">Promedio Diario</h6>
-                                <h3>${{ '%.2f' | format(grand_total / day_totals|length) }}</h3>
+                                <h6 class="card-title">Total Ambas</h6>
+                                <h3>${{ '%.2f' | format(gtt.v) }}</h3>
+                                <small>Prom: ${{ '%.2f' | format(gtt.v / num_days) }}/dia</small>
                             </div>
                         </div>
                     </div>
-                    
-                    <div class="col-md-4">
+                    <div class="col-md-3">
                         <div class="card bg-info text-white">
                             <div class="card-body text-center">
-                                <h6 class="card-title">Período</h6>
-                                <h3>{{ day_totals|length }} Días</h3>
+                                <h6 class="card-title">Periodo</h6>
+                                <h3>{{ num_days }} Dias</h3>
                             </div>
                         </div>
                     </div>
                 </div>
-                
-                <!-- Estilo Legend -->
-                {% if chart_data and chart_data.datasets %}
-                <div class="row mt-3">
-                    <div class="col-12">
-                        <h6>Estilos:</h6>
-                        <div class="d-flex flex-wrap gap-2">
-                            {% for dataset in chart_data.datasets %}
-                            <span class="badge" style="background-color: {{ dataset.borderColor }}; color: white;">
-                                {{ dataset.label }}
-                            </span>
-                            {% endfor %}
-                        </div>
-                    </div>
-                </div>
-                {% endif %}
             </div>
         </div>
     {% endif %}
 </div>
 
-<!-- Chart.js -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
 <script>
-
 document.addEventListener('DOMContentLoaded', function() {
-    // Check if we have chart data
-    const chartData = {{ chart_data|tojson }};
-    
-    if (chartData && chartData.labels && chartData.labels.length > 0) {
-        console.log('Chart data loaded:', chartData); // Debug log
-        
-        // Get the chart canvas
+
+    // ========== COLORS PALETTE ==========
+    const COLORS = [
+        '#e6194b','#3cb44b','#4363d8','#f58231','#911eb4',
+        '#42d4f4','#f032e6','#bfef45','#fabed4','#469990',
+        '#dcbeff','#9A6324','#fffac8','#800000','#aaffc3',
+        '#808000','#ffd8b1','#000075','#a9a9a9','#000000'
+    ];
+
+    // ========== 1. BRANCH TOTALS CHART ==========
+    const fullChartData = {{ chart_data|tojson }};
+    if (fullChartData && fullChartData.labels && fullChartData.labels.length > 0) {
         const ctx = document.getElementById('salesChart').getContext('2d');
-        
-        // Chart configuration with legend disabled
+        const visible = [true, true, true];
+
+        function getVisibleData() {
+            return { labels: fullChartData.labels, datasets: fullChartData.datasets.filter((_, i) => visible[i]) };
+        }
+
         const chartOptions = {
-            responsive: true,
-            maintainAspectRatio: false,
+            responsive: true, maintainAspectRatio: false,
             plugins: {
-                legend: {
-                    display: false  // Hide the legend completely
-                },
-                title: {
-                    display: true,
-                    text: 'Ventas Diarias por Estilo (últimos 14 días)',
-                    font: {
-                        size: 16,
-                        weight: 'bold'
-                    }
-                },
+                legend: { display: true, position: 'top' },
+                title: { display: true, text: 'Ventas Diarias por Sucursal', font: { size: 16, weight: 'bold' } },
                 tooltip: {
-                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                    titleFont: { size: 14 },
-                    bodyFont: { size: 14 },
-                    filter: function(tooltipItem) {
-                        // Only show tooltip if value is greater than 0
-                        return tooltipItem.raw > 0;
-                    },
-                    callbacks: {
-                        label: function(context) {
-                            // Show dataset label (style name) and value for positive values
-                            if (context.raw > 0) {
-                                return context.dataset.label + ': $' + context.raw.toFixed(2);
-                            }
-                            return null;
-                        },
-                        afterBody: function(context) {
-                            // Calculate total for this day (only positive values)
-                            let total = 0;
-                            context.forEach(function(tooltipItem) {
-                                if (tooltipItem.raw > 0) {
-                                    total += tooltipItem.raw;
-                                }
-                            });
-                            return total > 0 ? 'Total: $' + total.toFixed(2) : '';
-                        }
-                    }
+                    backgroundColor: 'rgba(0,0,0,0.8)', titleFont: { size: 14 }, bodyFont: { size: 14 },
+                    callbacks: { label: ctx => ctx.dataset.label + ': $' + ctx.raw.toFixed(2) }
                 }
             },
             scales: {
-                y: {
-                    beginAtZero: true,
-                    grid: { color: 'rgba(200, 200, 200, 0.2)' },
-                    ticks: {
-                        font: { size: 12 },
-                        callback: function(value) {
-                            return '$' + value.toFixed(2);
+                y: { beginAtZero: true, ticks: { callback: v => '$' + v.toFixed(0) }, title: { display: true, text: 'Ventas ($)' } },
+                x: { grid: { display: false }, title: { display: true, text: 'Dia' } }
+            },
+            interaction: { mode: 'index', intersect: false }
+        };
+
+        let currentType = 'line';
+        function makeDS(type) {
+            const ds = getVisibleData();
+            if (type === 'line') ds.datasets = ds.datasets.map(d => ({
+                ...d, fill: false, borderWidth: 3, pointBackgroundColor: d.borderColor,
+                pointBorderColor: '#fff', pointBorderWidth: 2, pointRadius: 5, pointHoverRadius: 7, tension: 0.4
+            }));
+            return ds;
+        }
+        let salesChart = new Chart(ctx, { type: 'line', data: makeDS('line'), options: chartOptions });
+
+        function rebuildMain() {
+            salesChart.destroy();
+            const opts = JSON.parse(JSON.stringify(chartOptions));
+            if (currentType === 'stackedBar') { opts.scales.x.stacked = true; opts.scales.y.stacked = true; }
+            salesChart = new Chart(ctx, { type: currentType === 'stackedBar' ? 'bar' : currentType, data: makeDS(currentType), options: opts });
+        }
+
+        document.getElementById('toggleT1').addEventListener('change', function() { visible[0] = this.checked; rebuildMain(); });
+        document.getElementById('toggleT2').addEventListener('change', function() { visible[1] = this.checked; rebuildMain(); });
+        document.getElementById('toggleTotal').addEventListener('change', function() { visible[2] = this.checked; rebuildMain(); });
+
+        document.getElementById('chartTypeGroup').addEventListener('click', function(e) {
+            const btn = e.target.closest('[data-type]');
+            if (!btn) return;
+            this.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            currentType = btn.dataset.type;
+            rebuildMain();
+        });
+    }
+
+    // ========== 2. BREAKDOWN CHART BUILDER ==========
+    const estiloData = {{ estilo_data|tojson }};
+    const modeloData = {{ modelo_data|tojson }};
+    const chartLabels = {{ chart_labels|tojson }};
+
+    // Build a 100% stacked bar chart for a given breakdown dataset and branch
+    function buildBreakdownChart(canvasId, rawData, branch, titlePrefix) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) return null;
+
+        // Destroy existing chart on this canvas
+        const existing = Chart.getChart(canvas);
+        if (existing) existing.destroy();
+
+        const branchData = rawData[branch] || {};
+
+        // Collect all unique names across all days
+        const allNames = new Set();
+        chartLabels.forEach(day => {
+            const dayData = branchData[day] || {};
+            Object.keys(dayData).forEach(n => allNames.add(n));
+        });
+
+        // Rank names by total revenue across all days, keep top 10 + "Otros"
+        const nameRevenue = {};
+        allNames.forEach(name => {
+            nameRevenue[name] = 0;
+            chartLabels.forEach(day => {
+                nameRevenue[name] += (branchData[day] || {})[name] || 0;
+            });
+        });
+        const sorted = Object.entries(nameRevenue).sort((a, b) => b[1] - a[1]);
+        const topNames = sorted.slice(0, 10).map(e => e[0]);
+        const hasOtros = sorted.length > 10;
+
+        // Build percentage datasets
+        const datasets = [];
+        const displayNames = hasOtros ? [...topNames, 'Otros'] : topNames;
+
+        displayNames.forEach((name, i) => {
+            const data = chartLabels.map(day => {
+                const dayData = branchData[day] || {};
+                const dayTotal = Object.values(dayData).reduce((s, v) => s + v, 0);
+                if (dayTotal === 0) return 0;
+                let val;
+                if (name === 'Otros') {
+                    const topSum = topNames.reduce((s, n) => s + ((dayData[n] || 0)), 0);
+                    val = dayTotal - topSum;
+                } else {
+                    val = dayData[name] || 0;
+                }
+                return Math.round((val / dayTotal) * 10000) / 100; // percentage
+            });
+            datasets.push({
+                label: name,
+                data: data,
+                backgroundColor: COLORS[i % COLORS.length],
+                borderColor: '#fff',
+                borderWidth: 1
+            });
+        });
+
+        return new Chart(canvas.getContext('2d'), {
+            type: 'bar',
+            data: { labels: chartLabels, datasets: datasets },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: true, position: 'top', labels: { boxWidth: 12, font: { size: 11 } } },
+                    title: { display: true, text: titlePrefix + ' - ' + branch, font: { size: 15, weight: 'bold' } },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                // Also show absolute value
+                                const day = chartLabels[ctx.dataIndex];
+                                const dayData = (rawData[branch] || {})[day] || {};
+                                let absVal;
+                                if (ctx.dataset.label === 'Otros') {
+                                    const dayTotal = Object.values(dayData).reduce((s, v) => s + v, 0);
+                                    const topSum = topNames.reduce((s, n) => s + ((dayData[n] || 0)), 0);
+                                    absVal = dayTotal - topSum;
+                                } else {
+                                    absVal = dayData[ctx.dataset.label] || 0;
+                                }
+                                return ctx.dataset.label + ': ' + ctx.raw.toFixed(1) + '% ($' + absVal.toFixed(0) + ')';
+                            }
                         }
-                    },
-                    title: {
-                        display: true,
-                        text: 'Ventas ($)',
-                        font: { size: 14, weight: 'bold' }
                     }
                 },
-                x: {
-                    grid: { display: false },
-                    ticks: { font: { size: 12 } },
-                    title: {
-                        display: true,
-                        text: 'Día',
-                        font: { size: 14, weight: 'bold' }
-                    }
-                }
-            },
-            interaction: {
-                mode: 'index',
-                intersect: false
+                scales: {
+                    x: { stacked: true, grid: { display: false }, title: { display: true, text: 'Dia' } },
+                    y: { stacked: true, min: 0, max: 100, ticks: { callback: v => v + '%' }, title: { display: true, text: '% del Revenue' } }
+                },
+                interaction: { mode: 'index', intersect: false }
             }
-        };
-        
-        // Prepare data for line chart with enhanced styling
-        const lineChartData = {
-            ...chartData,
-            datasets: chartData.datasets.map(dataset => ({
-                ...dataset,
-                fill: false,
-                borderWidth: 3,
-                pointBackgroundColor: dataset.borderColor,
-                pointBorderColor: '#fff',
-                pointBorderWidth: 2,
-                pointRadius: 6,
-                pointHoverRadius: 8,
-                tension: 0.4
-            }))
-        };
-        
-        // Create the line chart by default
-        let salesChart = new Chart(ctx, {
-            type: 'line',
-            data: lineChartData,
-            options: chartOptions
         });
-        
-        console.log('Line chart created successfully'); // Debug log
-        
-        // Function to switch to bar chart
-        document.getElementById('barChartBtn').addEventListener('click', function() {
-            // Update active button
-            document.querySelectorAll('.btn-group .btn').forEach(btn => btn.classList.remove('active'));
-            this.classList.add('active');
-            
-            // Destroy current chart
-            salesChart.destroy();
-            
-            // Create bar chart
-            salesChart = new Chart(ctx, {
-                type: 'bar',
-                data: chartData,
-                options: {
-                    ...chartOptions,
-                    scales: {
-                        ...chartOptions.scales,
-                        x: {
-                            ...chartOptions.scales.x,
-                            stacked: false
-                        },
-                        y: {
-                            ...chartOptions.scales.y,
-                            stacked: false
-                        }
-                    }
-                }
-            });
+    }
+
+    // Initial builds
+    if (chartLabels && chartLabels.length > 0) {
+        buildBreakdownChart('estiloChart', estiloData, 'Terex 1', '% Revenue por Estilo');
+        buildBreakdownChart('modeloChart', modeloData, 'Terex 1', '% Revenue por Modelo');
+
+        // Branch switch for estilo chart
+        document.getElementById('estiloBranchGroup').addEventListener('click', function(e) {
+            const btn = e.target.closest('[data-branch]');
+            if (!btn) return;
+            this.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            buildBreakdownChart('estiloChart', estiloData, btn.dataset.branch, '% Revenue por Estilo');
         });
-        
-        // Function to switch to stacked bar chart
-        document.getElementById('stackedBarBtn').addEventListener('click', function() {
-            // Update active button
-            document.querySelectorAll('.btn-group .btn').forEach(btn => btn.classList.remove('active'));
-            this.classList.add('active');
-            
-            // Destroy current chart
-            salesChart.destroy();
-            
-            // Create stacked bar chart
-            salesChart = new Chart(ctx, {
-                type: 'bar',
-                data: chartData,
-                options: {
-                    ...chartOptions,
-                    scales: {
-                        ...chartOptions.scales,
-                        x: {
-                            ...chartOptions.scales.x,
-                            stacked: true
-                        },
-                        y: {
-                            ...chartOptions.scales.y,
-                            stacked: true
-                        }
-                    }
-                }
-            });
+
+        // Branch switch for modelo chart
+        document.getElementById('modeloBranchGroup').addEventListener('click', function(e) {
+            const btn = e.target.closest('[data-branch]');
+            if (!btn) return;
+            this.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            buildBreakdownChart('modeloChart', modeloData, btn.dataset.branch, '% Revenue por Modelo');
         });
-        
-        // Function to switch to line chart (reload line chart)
-        document.getElementById('lineChartBtn').addEventListener('click', function() {
-            // Update active button
-            document.querySelectorAll('.btn-group .btn').forEach(btn => btn.classList.remove('active'));
-            this.classList.add('active');
-            
-            // Destroy current chart
-            salesChart.destroy();
-            
-            // Create line chart
-            salesChart = new Chart(ctx, {
-                type: 'line',
-                data: lineChartData,
-                options: {
-                    ...chartOptions,
-                    scales: {
-                        ...chartOptions.scales,
-                        x: {
-                            ...chartOptions.scales.x,
-                            stacked: false
-                        },
-                        y: {
-                            ...chartOptions.scales.y,
-                            stacked: false
-                        }
-                    }
-                }
-            });
-        });
-    } else {
-        console.error('No chart data available or chart data is invalid');
     }
 });
-
 </script>
 {% endblock %}

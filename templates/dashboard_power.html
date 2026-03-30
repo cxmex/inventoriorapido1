@@ -1,0 +1,1004 @@
+{% extends "base.html" %}
+{% block title %}Dashboard Power — Ambas Sucursales{% endblock %}
+
+{% block content %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --bg:        #0a0a0a;
+    --surface:   #111111;
+    --surface2:  #1a1a1a;
+    --border:    #222222;
+    --orange:    #ff6b00;
+    --orange2:   #ff9500;
+    --orange-dim:#ff6b0022;
+    --text:      #e8e8e8;
+    --muted:     #666666;
+    --green:     #00e676;
+    --red:       #ff3d57;
+    --blue:      #4a9eff;
+    --purple:    #b57aff;
+  }
+
+  body { background: var(--bg) !important; color: var(--text); font-family: 'Syne', sans-serif; }
+
+  .dash-wrap { max-width: 1440px; margin: 0 auto; padding: 24px 20px 60px; }
+
+  /* Header */
+  .dash-header {
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 28px;
+    flex-wrap: wrap; gap: 12px;
+  }
+  .dash-logo { font-size: 1.6rem; font-weight: 800; letter-spacing: -1px; }
+  .dash-logo span { color: var(--orange); }
+  .dash-sub { font-family: 'Space Mono', monospace; font-size: .7rem; color: var(--muted); margin-top: 2px; }
+
+  /* Range toggle */
+  .range-toggle { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .range-btn {
+    font-family: 'Space Mono', monospace; font-size: .7rem; font-weight: 700;
+    padding: 6px 14px; border-radius: 4px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--muted); cursor: pointer;
+    text-decoration: none; transition: all .15s;
+  }
+  .range-btn:hover { border-color: var(--orange); color: var(--orange); }
+  .range-btn.active { background: var(--orange); border-color: var(--orange); color: #000; }
+
+  /* KPI Cards */
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 24px; }
+  .kpi-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px 18px; position: relative; overflow: hidden;
+    animation: fadeUp .4s ease both;
+  }
+  .kpi-card::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  }
+  .kpi-card.t1::before { background: var(--orange); }
+  .kpi-card.t2::before { background: var(--blue); }
+  .kpi-card.combined::before { background: linear-gradient(90deg, var(--orange), var(--blue)); }
+  .kpi-label { font-family: 'Space Mono', monospace; font-size: .6rem; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+  .kpi-value { font-size: 1.5rem; font-weight: 800; line-height: 1; }
+  .kpi-value.t1-color { color: var(--orange); }
+  .kpi-value.t2-color { color: var(--blue); }
+  .kpi-value.combined-color { color: var(--green); }
+  .kpi-sub { font-family: 'Space Mono', monospace; font-size: .6rem; color: var(--muted); margin-top: 5px; }
+
+  /* Branch badges */
+  .branch-badge {
+    font-family: 'Space Mono', monospace; font-size: .6rem; font-weight: 700;
+    padding: 2px 6px; border-radius: 3px; display: inline-block;
+  }
+  .branch-badge.t1 { background: rgba(255,107,0,.15); color: var(--orange); }
+  .branch-badge.t2 { background: rgba(74,158,255,.15); color: var(--blue); }
+
+  /* Section titles */
+  .section-title {
+    font-family: 'Space Mono', monospace; font-size: .7rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 2px; color: var(--orange);
+    margin-bottom: 14px; margin-top: 8px; display: flex; align-items: center; gap: 8px;
+  }
+  .section-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+  /* Card */
+  .card-dark {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 20px; margin-bottom: 20px; animation: fadeUp .5s ease both;
+  }
+
+  /* Chart */
+  .chart-wrap { position: relative; height: 300px; }
+
+  /* Two column */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+  @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+
+  /* Tables */
+  .dash-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  .dash-table th {
+    font-family: 'Space Mono', monospace; font-size: .58rem; text-transform: uppercase;
+    letter-spacing: 1px; color: var(--muted); padding: 8px 10px;
+    border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap;
+    cursor: pointer; user-select: none;
+  }
+  .dash-table th:hover { color: var(--orange); }
+  .dash-table th .sort-arrow { font-size: .5rem; margin-left: 3px; }
+  .dash-table td { padding: 8px 10px; border-bottom: 1px solid #161616; vertical-align: middle; }
+  .dash-table tr:last-child td { border-bottom: none; }
+  .dash-table tr:hover td { background: var(--surface2); }
+  .dash-table .num { font-family: 'Space Mono', monospace; font-size: .78rem; text-align: right; }
+  .rank-num { font-family: 'Space Mono', monospace; font-size: .7rem; color: var(--muted); width: 28px; }
+
+  /* Velocity badge */
+  .vel-badge {
+    font-family: 'Space Mono', monospace; font-size: .65rem; font-weight: 700;
+    padding: 2px 8px; border-radius: 3px; white-space: nowrap;
+  }
+  .vel-badge.normal { background: var(--orange-dim); color: var(--orange2); }
+  .vel-badge.hot { background: #ff6b0033; color: #ff9500; }
+  .vel-badge.fire { background: #ff3d5722; color: var(--red); }
+  .vel-badge.cold { background: rgba(74,158,255,.12); color: var(--blue); }
+
+  /* Sell-through bar */
+  .st-bar-bg { background: var(--border); border-radius: 2px; height: 6px; width: 80px; display: inline-block; vertical-align: middle; }
+  .st-bar-fill { height: 6px; border-radius: 2px; transition: width .6s ease; }
+  .st-bar-fill.good { background: var(--green); }
+  .st-bar-fill.mid { background: var(--orange); }
+  .st-bar-fill.low { background: var(--red); }
+
+  /* Scrollable table */
+  .table-scroll { max-height: 500px; overflow-y: auto; }
+  .table-scroll::-webkit-scrollbar { width: 4px; }
+  .table-scroll::-webkit-scrollbar-track { background: var(--surface); }
+  .table-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  /* Negative row */
+  .neg-row { cursor: pointer; }
+  .neg-row:hover td { background: #1a0000 !important; }
+  .neg-val { color: var(--red); font-weight: 700; }
+  .neg-ok { color: var(--muted); }
+
+  /* Drilldown panel */
+  .drilldown-panel {
+    display: none; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 12px 16px; margin: 4px 0 8px;
+    animation: fadeUp .3s ease;
+  }
+  .drilldown-panel.open { display: block; }
+  .drilldown-title {
+    font-family: 'Space Mono', monospace; font-size: .65rem; color: var(--orange);
+    margin-bottom: 8px; font-weight: 700;
+  }
+  .drilldown-table { width: 100%; border-collapse: collapse; font-size: .75rem; }
+  .drilldown-table th {
+    font-family: 'Space Mono', monospace; font-size: .55rem; color: var(--muted);
+    padding: 4px 8px; border-bottom: 1px solid var(--border); text-align: left;
+  }
+  .drilldown-table td { padding: 4px 8px; border-bottom: 1px solid #1a1a1a; }
+  .drilldown-loading { font-family: 'Space Mono', monospace; font-size: .65rem; color: var(--muted); }
+
+  /* Three column layout */
+  .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+  @media (max-width: 1100px) { .three-col { grid-template-columns: 1fr; } }
+
+  /* Chart heights */
+  .chart-wrap-md { position: relative; height: 260px; }
+  .chart-wrap-lg { position: relative; height: 340px; }
+  .chart-wrap-xl { position: relative; height: 400px; }
+
+  /* Donut center text */
+  .donut-center {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    text-align: center; pointer-events: none;
+  }
+  .donut-center .pct { font-size: 1.4rem; font-weight: 800; color: var(--text); }
+  .donut-center .lbl { font-family: 'Space Mono', monospace; font-size: .55rem; color: var(--muted); }
+
+  /* Search/filter */
+  .filter-input {
+    font-family: 'Space Mono', monospace; font-size: .7rem;
+    background: var(--surface); border: 1px solid var(--border); color: var(--text);
+    padding: 6px 12px; border-radius: 4px; width: 220px;
+    margin-bottom: 12px;
+  }
+  .filter-input:focus { outline: none; border-color: var(--orange); }
+  .filter-input::placeholder { color: var(--muted); }
+
+  /* Animations */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Nav link */
+  .nav-back {
+    font-family: 'Space Mono', monospace; font-size: .7rem; color: var(--muted);
+    text-decoration: none; transition: color .15s;
+  }
+  .nav-back:hover { color: var(--orange); }
+</style>
+
+<div class="dash-wrap">
+
+  <!-- Header -->
+  <div class="dash-header">
+    <div>
+      <div class="dash-logo">POWER <span>DASHBOARD</span></div>
+      <div class="dash-sub">// T1 + T2 · NEGATIVOS · TURNOVER · DEMANDA — {{ days }} DIAS</div>
+      <a href="/dashboardterex" class="nav-back" style="margin-top:4px;display:inline-block;">&larr; Dashboard Terex</a>
+    </div>
+    <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
+      <div class="range-toggle">
+        <a href="/dashboard-power?days=7"  class="range-btn {% if days==7 %}active{% endif %}">7D</a>
+        <a href="/dashboard-power?days=14" class="range-btn {% if days==14 %}active{% endif %}">14D</a>
+        <a href="/dashboard-power?days=30" class="range-btn {% if days==30 %}active{% endif %}">30D</a>
+        <a href="/dashboard-power?days=60" class="range-btn {% if days==60 %}active{% endif %}">60D</a>
+        <a href="/dashboard-power?days=90" class="range-btn {% if days==90 %}active{% endif %}">90D</a>
+        <a href="/dashboard-power?days=180" class="range-btn {% if days==180 %}active{% endif %}">180D</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ KPI ROW: COMBINED ═══ -->
+  <div class="section-title">Combinado (T1 + T2)</div>
+  <div class="kpi-grid">
+    <div class="kpi-card combined" style="animation-delay:.05s">
+      <div class="kpi-label">Revenue Total</div>
+      <div class="kpi-value combined-color">${{ '{:,.0f}'.format(kpis_combined.revenue|float) }}</div>
+      <div class="kpi-sub">{{ days }} dias</div>
+    </div>
+    <div class="kpi-card combined" style="animation-delay:.1s">
+      <div class="kpi-label">Unidades</div>
+      <div class="kpi-value combined-color">{{ '{:,}'.format(kpis_combined.units|int) }}</div>
+    </div>
+    <div class="kpi-card combined" style="animation-delay:.15s">
+      <div class="kpi-label">Ordenes</div>
+      <div class="kpi-value combined-color">{{ '{:,}'.format(kpis_combined.orders|int) }}</div>
+    </div>
+    <div class="kpi-card combined" style="animation-delay:.2s">
+      <div class="kpi-label">Ticket Prom.</div>
+      <div class="kpi-value combined-color">${{ '{:,.0f}'.format(kpis_combined.avg_ticket|float) }}</div>
+    </div>
+  </div>
+
+  <!-- KPI ROW: PER BRANCH -->
+  <div class="two-col">
+    <div>
+      <div class="section-title"><span class="branch-badge t1">TEREX 1</span></div>
+      <div class="kpi-grid">
+        <div class="kpi-card t1"><div class="kpi-label">Revenue</div><div class="kpi-value t1-color">${{ '{:,.0f}'.format(kpis_t1.revenue|float) }}</div></div>
+        <div class="kpi-card t1"><div class="kpi-label">Unidades</div><div class="kpi-value t1-color">{{ '{:,}'.format(kpis_t1.units|int) }}</div></div>
+        <div class="kpi-card t1"><div class="kpi-label">Ordenes</div><div class="kpi-value t1-color">{{ '{:,}'.format(kpis_t1.orders|int) }}</div></div>
+        <div class="kpi-card t1"><div class="kpi-label">Ticket</div><div class="kpi-value t1-color">${{ '{:,.0f}'.format(kpis_t1.avg_ticket|float) }}</div></div>
+      </div>
+    </div>
+    <div>
+      <div class="section-title"><span class="branch-badge t2">TEREX 2</span></div>
+      <div class="kpi-grid">
+        <div class="kpi-card t2"><div class="kpi-label">Revenue</div><div class="kpi-value t2-color">${{ '{:,.0f}'.format(kpis_t2.revenue|float) }}</div></div>
+        <div class="kpi-card t2"><div class="kpi-label">Unidades</div><div class="kpi-value t2-color">{{ '{:,}'.format(kpis_t2.units|int) }}</div></div>
+        <div class="kpi-card t2"><div class="kpi-label">Ordenes</div><div class="kpi-value t2-color">{{ '{:,}'.format(kpis_t2.orders|int) }}</div></div>
+        <div class="kpi-card t2"><div class="kpi-label">Ticket</div><div class="kpi-value t2-color">${{ '{:,.0f}'.format(kpis_t2.avg_ticket|float) }}</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ DAILY SALES CHART ═══ -->
+  <div class="section-title">Ventas Diarias por Sucursal</div>
+  <div class="card-dark" style="animation-delay:.3s">
+    <div class="chart-wrap">
+      <canvas id="dailyChart"></canvas>
+    </div>
+  </div>
+
+  <!-- ═══ COMPARATIVE CHARTS ROW 1: Cumulative + Weekly ═══ -->
+  <div class="two-col">
+    <div>
+      <div class="section-title">Revenue Acumulado</div>
+      <div class="card-dark" style="animation-delay:.32s">
+        <div class="chart-wrap-md">
+          <canvas id="cumulativeChart"></canvas>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="section-title">Tendencia Semanal</div>
+      <div class="card-dark" style="animation-delay:.33s">
+        <div class="chart-wrap-md">
+          <canvas id="weeklyTrendChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ COMPARATIVE CHARTS ROW 2: Donut + Units comparison ═══ -->
+  <div class="three-col">
+    <div>
+      <div class="section-title">Revenue Split</div>
+      <div class="card-dark" style="animation-delay:.34s">
+        <div class="chart-wrap-md" style="position:relative;">
+          <canvas id="donutChart"></canvas>
+          <div class="donut-center">
+            <div class="pct" id="donutT1Pct"></div>
+            <div class="lbl">T1 share</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="section-title">Units Split</div>
+      <div class="card-dark" style="animation-delay:.35s">
+        <div class="chart-wrap-md" style="position:relative;">
+          <canvas id="donutUnitsChart"></canvas>
+          <div class="donut-center">
+            <div class="pct" id="donutUnitsT1Pct"></div>
+            <div class="lbl">T1 share</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="section-title">Ticket Promedio / Dia</div>
+      <div class="card-dark" style="animation-delay:.36s">
+        <div class="chart-wrap-md">
+          <canvas id="avgTicketChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ TOP ESTILOS COMPARISON: T1 vs T2 ═══ -->
+  <div class="section-title">Top 15 Estilos — T1 vs T2</div>
+  <div class="card-dark" style="animation-delay:.37s">
+    <div class="chart-wrap-xl">
+      <canvas id="estilosCompareChart"></canvas>
+    </div>
+  </div>
+
+  <!-- ═══ UNITS OVER TIME PER TOP ESTILO ═══ -->
+  <div class="section-title">Ventas por Dia — Top 5 Estilos</div>
+  <div class="card-dark" style="animation-delay:.38s">
+    <div class="chart-wrap" style="height:320px;">
+      <canvas id="estilosTrendChart"></canvas>
+    </div>
+  </div>
+
+  <!-- ═══ NEGATIVE INVENTORY ═══ -->
+  <div class="section-title">Inventario Negativo — Errores a Investigar ({{ negative_items|length }})</div>
+  <div class="card-dark" style="animation-delay:.35s; padding:0; overflow:hidden;">
+    {% if negative_items %}
+    <div style="padding: 12px 16px 0;">
+      <input type="text" class="filter-input" id="negFilter" placeholder="Buscar barcode, nombre, estilo...">
+    </div>
+    <div class="table-scroll" style="max-height:400px;">
+      <table class="dash-table" id="negTable">
+        <thead><tr>
+          <th>Barcode</th><th>Nombre</th><th>Estilo</th><th>Color</th>
+          <th style="text-align:right">T1</th><th style="text-align:right">T2</th>
+          <th>Sucursal</th>
+        </tr></thead>
+        <tbody>
+          {% for item in negative_items %}
+          <tr class="neg-row" data-barcode="{{ item.barcode }}" onclick="toggleDrilldown(this, '{{ item.barcode }}')">
+            <td><span style="font-family:'Space Mono',monospace; font-size:.75rem;">{{ item.barcode }}</span></td>
+            <td style="font-size:.78rem;">{{ item.name }}</td>
+            <td style="font-size:.78rem;">{{ item.estilo }}</td>
+            <td style="font-size:.75rem; color:var(--muted);">{{ item.color }}</td>
+            <td class="num">
+              <span class="{% if item.terex1 < 0 %}neg-val{% else %}neg-ok{% endif %}">{{ item.terex1 }}</span>
+            </td>
+            <td class="num">
+              <span class="{% if item.terex2 < 0 %}neg-val{% else %}neg-ok{% endif %}">{{ item.terex2 }}</span>
+            </td>
+            <td>
+              {% if item.terex1 < 0 %}<span class="branch-badge t1">T1</span>{% endif %}
+              {% if item.terex2 < 0 %}<span class="branch-badge t2">T2</span>{% endif %}
+            </td>
+          </tr>
+          <tr class="drilldown-row" id="dd-{{ item.barcode }}" style="display:none;">
+            <td colspan="7" style="padding:0 10px 10px;">
+              <div class="drilldown-panel" id="ddp-{{ item.barcode }}">
+                <div class="drilldown-title">Historial de ventas &mdash; {{ item.barcode }}</div>
+                <div class="drilldown-loading" id="ddl-{{ item.barcode }}">Cargando...</div>
+                <div id="ddc-{{ item.barcode }}"></div>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div style="padding:30px; text-align:center; font-family:'Space Mono',monospace; font-size:.8rem; color:var(--green);">
+      Sin inventario negativo. Todo en orden.
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ═══ FULL TURNOVER TABLE ═══ -->
+  <div class="section-title">Turnover — Todos los Estilos Prioridad 1 ({{ turnover_table|length }})</div>
+  <div class="card-dark" style="animation-delay:.4s; padding:0; overflow:hidden;">
+    <div style="padding: 12px 16px 0;">
+      <input type="text" class="filter-input" id="turnoverFilter" placeholder="Buscar estilo o modelo...">
+    </div>
+    <div class="table-scroll" style="max-height:600px;">
+      <table class="dash-table" id="turnoverTable">
+        <thead><tr>
+          <th data-sort="rank">#</th>
+          <th data-sort="estilo">Estilo</th>
+          <th data-sort="velocity" style="text-align:right">Vel/dia</th>
+          <th data-sort="total_units" style="text-align:right">Total Uds</th>
+          <th data-sort="t1_units" style="text-align:right">T1 Uds</th>
+          <th data-sort="t2_units" style="text-align:right">T2 Uds</th>
+          <th data-sort="total_revenue" style="text-align:right">Revenue</th>
+          <th data-sort="days_active" style="text-align:right">Dias</th>
+        </tr></thead>
+        <tbody>
+          {% for t in turnover_table %}
+          <tr>
+            <td class="rank-num">
+              {% if loop.index <= 3 %}<span style="color:var(--orange)">{{ loop.index }}</span>
+              {% else %}{{ loop.index }}{% endif %}
+            </td>
+            <td>
+              <div style="font-size:.78rem; font-weight:600;">{{ t.estilo }}</div>
+              <div style="font-family:'Space Mono',monospace; font-size:.58rem; color:var(--muted);">{{ t.modelo }}</div>
+            </td>
+            <td class="num">
+              <span class="vel-badge {% if t.velocity > 5 %}fire{% elif t.velocity > 2 %}hot{% elif t.velocity > 0 %}normal{% else %}cold{% endif %}">
+                {{ t.velocity }} u/d
+              </span>
+            </td>
+            <td class="num" style="font-weight:700;">{{ '{:,}'.format(t.total_units|int) }}</td>
+            <td class="num" style="color:var(--orange)">{{ '{:,}'.format(t.t1_units|int) }}</td>
+            <td class="num" style="color:var(--blue)">{{ '{:,}'.format(t.t2_units|int) }}</td>
+            <td class="num" style="color:var(--green)">${{ '{:,.0f}'.format(t.total_revenue|float) }}</td>
+            <td class="num" style="color:var(--muted)">{{ t.days_active }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══ NEW DEMAND TRACKER ═══ -->
+  <div class="section-title">Demanda Nuevos Estilos (Entradas Recientes)</div>
+  <div class="card-dark" style="animation-delay:.45s; padding:0; overflow:hidden;">
+    {% if new_demand %}
+    <div style="padding: 12px 16px 0;">
+      <input type="text" class="filter-input" id="demandFilter" placeholder="Buscar estilo...">
+    </div>
+    <div class="table-scroll" style="max-height:500px;">
+      <table class="dash-table" id="demandTable">
+        <thead><tr>
+          <th>#</th>
+          <th>Estilo</th>
+          <th style="text-align:right">Vel/dia</th>
+          <th style="text-align:right">Vendidos</th>
+          <th style="text-align:right">Ingresados</th>
+          <th style="text-align:right">Sell-Through</th>
+          <th style="text-align:right">Dias</th>
+          <th style="text-align:right">Entrada</th>
+        </tr></thead>
+        <tbody>
+          {% for d in new_demand %}
+          <tr>
+            <td class="rank-num">
+              {% if loop.index <= 3 %}<span style="color:var(--orange)">{{ loop.index }}</span>
+              {% else %}{{ loop.index }}{% endif %}
+            </td>
+            <td>
+              <div style="font-size:.78rem; font-weight:600;">{{ d.estilo }}</div>
+              <div style="font-family:'Space Mono',monospace; font-size:.58rem; color:var(--muted);">{{ d.modelo }}</div>
+            </td>
+            <td class="num">
+              <span class="vel-badge {% if d.velocity > 5 %}fire{% elif d.velocity > 2 %}hot{% elif d.velocity > 0 %}normal{% else %}cold{% endif %}">
+                {{ d.velocity }} u/d
+              </span>
+            </td>
+            <td class="num" style="font-weight:700;">{{ '{:,}'.format(d.total_sold|int) }}</td>
+            <td class="num">{{ '{:,}'.format(d.qty_entered|int) }}</td>
+            <td class="num">
+              <div style="display:flex; align-items:center; justify-content:flex-end; gap:6px;">
+                <span style="font-family:'Space Mono',monospace; font-size:.7rem;">{{ d.sell_through }}%</span>
+                <div class="st-bar-bg">
+                  <div class="st-bar-fill {% if d.sell_through >= 70 %}good{% elif d.sell_through >= 40 %}mid{% else %}low{% endif %}"
+                       style="width:{{ [d.sell_through, 100]|min }}%"></div>
+                </div>
+              </div>
+            </td>
+            <td class="num" style="color:var(--muted)">{{ d.days_since_entry }}</td>
+            <td class="num" style="font-size:.7rem; color:var(--muted);">{{ d.first_entry }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div style="padding:30px; text-align:center; font-family:'Space Mono',monospace; font-size:.8rem; color:var(--muted);">
+      Sin entradas recientes.
+    </div>
+    {% endif %}
+  </div>
+
+</div><!-- end dash-wrap -->
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+
+  // ═══ DAILY SALES CHART ═══
+  const dData = {{ daily_chart | tojson }};
+  const dCtx  = document.getElementById('dailyChart').getContext('2d');
+
+  new Chart(dCtx, {
+    type: 'bar',
+    data: {
+      labels: dData.labels,
+      datasets: [
+        {
+          label: 'T1 Revenue ($)',
+          data: dData.t1_revenue,
+          backgroundColor: 'rgba(255,107,0,0.6)',
+          borderColor:     'rgba(255,107,0,1)',
+          borderWidth: 1, borderRadius: 3,
+          yAxisID: 'yRevenue', order: 3,
+          stack: 'revenue',
+        },
+        {
+          label: 'T2 Revenue ($)',
+          data: dData.t2_revenue,
+          backgroundColor: 'rgba(74,158,255,0.6)',
+          borderColor:     'rgba(74,158,255,1)',
+          borderWidth: 1, borderRadius: 3,
+          yAxisID: 'yRevenue', order: 4,
+          stack: 'revenue',
+        },
+        {
+          label: 'T1 Unidades',
+          data: dData.t1_units,
+          type: 'line',
+          borderColor: 'rgba(255,149,0,0.9)',
+          backgroundColor: 'transparent',
+          borderWidth: 2, pointRadius: 3, pointHoverRadius: 5,
+          pointBackgroundColor: '#ff9500',
+          tension: 0.4, yAxisID: 'yUnits', order: 1,
+        },
+        {
+          label: 'T2 Unidades',
+          data: dData.t2_units,
+          type: 'line',
+          borderColor: 'rgba(74,158,255,0.9)',
+          backgroundColor: 'transparent',
+          borderWidth: 2, pointRadius: 3, pointHoverRadius: 5,
+          pointBackgroundColor: '#4a9eff',
+          borderDash: [5, 3],
+          tension: 0.4, yAxisID: 'yUnits', order: 2,
+        }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#888', font: { family: 'Space Mono', size: 10 }, boxWidth: 12, padding: 12 } },
+        tooltip: {
+          backgroundColor: '#111', borderColor: '#333', borderWidth: 1,
+          titleColor: '#ff6b00', titleFont: { family: 'Space Mono', size: 11 },
+          bodyColor: '#ccc', bodyFont: { family: 'Space Mono', size: 10 },
+          callbacks: {
+            label: ctx => {
+              if (ctx.dataset.label.includes('Revenue'))
+                return ` ${ctx.dataset.label}: $${ctx.raw.toLocaleString('es-MX',{maximumFractionDigits:0})}`;
+              return ` ${ctx.dataset.label}: ${ctx.raw.toLocaleString('es-MX')} uds`;
+            }
+          }
+        }
+      },
+      scales: {
+        yRevenue: {
+          position: 'left', stacked: true,
+          grid: { color: '#1a1a1a' },
+          ticks: { color: '#666', font: { family: 'Space Mono', size: 10 },
+            callback: v => '$' + (v/1000).toFixed(0) + 'k' }
+        },
+        yUnits: {
+          position: 'right',
+          grid: { drawOnChartArea: false },
+          ticks: { color: '#888', font: { family: 'Space Mono', size: 10 } }
+        },
+        x: {
+          stacked: true,
+          grid: { display: false },
+          ticks: { color: '#555', font: { family: 'Space Mono', size: 9 }, maxRotation: 45 }
+        }
+      }
+    }
+  });
+
+  // ═══ NEGATIVE DRILLDOWN ═══
+  const drilldownCache = {};
+  window.toggleDrilldown = async function(row, barcode) {
+    const ddRow = document.getElementById('dd-' + barcode);
+    const ddPanel = document.getElementById('ddp-' + barcode);
+    const ddContent = document.getElementById('ddc-' + barcode);
+    const ddLoading = document.getElementById('ddl-' + barcode);
+
+    // Toggle
+    if (ddRow.style.display !== 'none') {
+      ddRow.style.display = 'none';
+      ddPanel.classList.remove('open');
+      return;
+    }
+
+    ddRow.style.display = '';
+    ddPanel.classList.add('open');
+
+    // Fetch if not cached
+    if (!drilldownCache[barcode]) {
+      ddLoading.style.display = '';
+      ddContent.innerHTML = '';
+      try {
+        const resp = await fetch('/api/dashboard-power/negative-sales/' + barcode);
+        const data = await resp.json();
+        drilldownCache[barcode] = data;
+      } catch(e) {
+        ddLoading.textContent = 'Error al cargar';
+        return;
+      }
+    }
+
+    ddLoading.style.display = 'none';
+    const sales = drilldownCache[barcode];
+
+    if (!sales.length) {
+      ddContent.innerHTML = '<div style="padding:8px;font-family:Space Mono,monospace;font-size:.7rem;color:#666;">Sin ventas registradas para este barcode.</div>';
+      return;
+    }
+
+    let html = '<table class="drilldown-table"><thead><tr><th>Fecha</th><th>Hora</th><th>Sucursal</th><th style="text-align:right">Qty</th><th style="text-align:right">Precio</th><th style="text-align:right">Order</th></tr></thead><tbody>';
+    sales.forEach(s => {
+      const brClass = s.branch === 'T1' ? 't1' : 't2';
+      html += `<tr>
+        <td>${s.fecha || ''}</td>
+        <td style="color:#666;">${(s.hora || '').substring(0,5)}</td>
+        <td><span class="branch-badge ${brClass}">${s.branch}</span></td>
+        <td class="num">${s.qty}</td>
+        <td class="num" style="color:var(--orange)">$${Number(s.price||0).toLocaleString('es-MX',{maximumFractionDigits:0})}</td>
+        <td class="num" style="color:#666;">${s.order_id || ''}</td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+    ddContent.innerHTML = html;
+  };
+
+  // ═══ TABLE FILTERS ═══
+  function setupFilter(inputId, tableId) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    input.addEventListener('input', function() {
+      const q = this.value.toLowerCase();
+      const rows = document.querySelectorAll('#' + tableId + ' tbody tr');
+      rows.forEach(row => {
+        if (row.classList.contains('drilldown-row')) return;
+        row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+        // Also hide drilldown if parent is hidden
+        const ddRow = row.nextElementSibling;
+        if (ddRow && ddRow.classList.contains('drilldown-row') && row.style.display === 'none') {
+          ddRow.style.display = 'none';
+        }
+      });
+    });
+  }
+  setupFilter('negFilter', 'negTable');
+  setupFilter('turnoverFilter', 'turnoverTable');
+  setupFilter('demandFilter', 'demandTable');
+
+  // ═══ TABLE SORTING ═══
+  document.querySelectorAll('#turnoverTable th[data-sort]').forEach(th => {
+    th.addEventListener('click', function() {
+      const table = document.getElementById('turnoverTable');
+      const tbody = table.querySelector('tbody');
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      const col = this.cellIndex;
+      const key = this.dataset.sort;
+      const isNum = ['velocity','total_units','t1_units','t2_units','total_revenue','days_active','rank'].includes(key);
+
+      const asc = this.dataset.dir === 'asc';
+      this.dataset.dir = asc ? 'desc' : 'asc';
+
+      rows.sort((a, b) => {
+        let va = a.cells[col].textContent.trim().replace(/[$,%,u\/d]/g, '').replace(/,/g, '');
+        let vb = b.cells[col].textContent.trim().replace(/[$,%,u\/d]/g, '').replace(/,/g, '');
+        if (isNum) { va = parseFloat(va) || 0; vb = parseFloat(vb) || 0; }
+        if (asc) return va > vb ? 1 : va < vb ? -1 : 0;
+        return va < vb ? 1 : va > vb ? -1 : 0;
+      });
+
+      rows.forEach(r => tbody.appendChild(r));
+    });
+  });
+
+  // ═══ SHARED CHART STYLING ═══
+  const chartFont = { family: 'Space Mono', size: 10 };
+  const chartTooltip = {
+    backgroundColor: '#111', borderColor: '#333', borderWidth: 1,
+    titleColor: '#ff6b00', titleFont: { family: 'Space Mono', size: 11 },
+    bodyColor: '#ccc', bodyFont: { family: 'Space Mono', size: 10 },
+  };
+
+  // ═══ CUMULATIVE REVENUE CHART ═══
+  (function() {
+    const labels = dData.labels;
+    let cumT1 = 0, cumT2 = 0;
+    const t1Cum = dData.t1_revenue.map(v => cumT1 += v);
+    const t2Cum = dData.t2_revenue.map(v => cumT2 += v);
+    const totalCum = t1Cum.map((v, i) => v + t2Cum[i] - v + t2Cum[i]);
+
+    new Chart(document.getElementById('cumulativeChart').getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: 'T1 Acumulado',
+            data: t1Cum,
+            borderColor: 'rgba(255,107,0,0.9)', backgroundColor: 'rgba(255,107,0,0.05)',
+            borderWidth: 2, pointRadius: 0, fill: true, tension: 0.3,
+          },
+          {
+            label: 'T2 Acumulado',
+            data: t2Cum,
+            borderColor: 'rgba(74,158,255,0.9)', backgroundColor: 'rgba(74,158,255,0.05)',
+            borderWidth: 2, pointRadius: 0, fill: true, tension: 0.3,
+          },
+          {
+            label: 'Total Acumulado',
+            data: t1Cum.map((v, i) => v + t2Cum[i]),
+            borderColor: 'rgba(0,230,118,0.7)', backgroundColor: 'transparent',
+            borderWidth: 1.5, pointRadius: 0, borderDash: [4, 3], tension: 0.3,
+          },
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { labels: { color: '#888', font: chartFont, boxWidth: 10, padding: 10 } },
+          tooltip: { ...chartTooltip, callbacks: {
+            label: ctx => ` ${ctx.dataset.label}: $${ctx.raw.toLocaleString('es-MX',{maximumFractionDigits:0})}`
+          }}
+        },
+        scales: {
+          y: { grid: { color: '#1a1a1a' }, ticks: { color: '#666', font: chartFont, callback: v => '$'+(v/1000).toFixed(0)+'k' } },
+          x: { grid: { display: false }, ticks: { color: '#555', font: { ...chartFont, size: 8 }, maxRotation: 45, maxTicksLimit: 15 } }
+        }
+      }
+    });
+  })();
+
+  // ═══ WEEKLY TREND CHART ═══
+  (function() {
+    // Aggregate daily into weekly buckets
+    const weekMap = {};
+    dData.labels.forEach((date, i) => {
+      const d = new Date(date + 'T00:00:00');
+      const weekStart = new Date(d);
+      weekStart.setDate(d.getDate() - d.getDay());
+      const key = weekStart.toISOString().substring(0, 10);
+      if (!weekMap[key]) weekMap[key] = { t1: 0, t2: 0, t1u: 0, t2u: 0 };
+      weekMap[key].t1 += dData.t1_revenue[i];
+      weekMap[key].t2 += dData.t2_revenue[i];
+      weekMap[key].t1u += dData.t1_units[i];
+      weekMap[key].t2u += dData.t2_units[i];
+    });
+    const weeks = Object.keys(weekMap).sort();
+
+    new Chart(document.getElementById('weeklyTrendChart').getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: weeks,
+        datasets: [
+          {
+            label: 'T1 Revenue', data: weeks.map(w => weekMap[w].t1),
+            backgroundColor: 'rgba(255,107,0,0.7)', borderRadius: 3, stack: 'rev',
+          },
+          {
+            label: 'T2 Revenue', data: weeks.map(w => weekMap[w].t2),
+            backgroundColor: 'rgba(74,158,255,0.7)', borderRadius: 3, stack: 'rev',
+          },
+          {
+            label: 'T1 Uds', data: weeks.map(w => weekMap[w].t1u), type: 'line',
+            borderColor: '#ff9500', borderWidth: 2, pointRadius: 3,
+            pointBackgroundColor: '#ff9500', yAxisID: 'yU', tension: 0.4,
+          },
+          {
+            label: 'T2 Uds', data: weeks.map(w => weekMap[w].t2u), type: 'line',
+            borderColor: '#4a9eff', borderWidth: 2, pointRadius: 3, borderDash: [4,3],
+            pointBackgroundColor: '#4a9eff', yAxisID: 'yU', tension: 0.4,
+          },
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { labels: { color: '#888', font: chartFont, boxWidth: 10, padding: 8 } },
+          tooltip: chartTooltip,
+        },
+        scales: {
+          y: { stacked: true, grid: { color: '#1a1a1a' }, ticks: { color: '#666', font: chartFont, callback: v => '$'+(v/1000).toFixed(0)+'k' } },
+          yU: { position: 'right', grid: { drawOnChartArea: false }, ticks: { color: '#888', font: chartFont } },
+          x: { stacked: true, grid: { display: false }, ticks: { color: '#555', font: { ...chartFont, size: 8 }, maxRotation: 45 } }
+        }
+      }
+    });
+  })();
+
+  // ═══ REVENUE DONUT ═══
+  (function() {
+    const t1Rev = dData.t1_revenue.reduce((a, b) => a + b, 0);
+    const t2Rev = dData.t2_revenue.reduce((a, b) => a + b, 0);
+    const total = t1Rev + t2Rev || 1;
+    document.getElementById('donutT1Pct').textContent = Math.round(t1Rev / total * 100) + '%';
+
+    new Chart(document.getElementById('donutChart').getContext('2d'), {
+      type: 'doughnut',
+      data: {
+        labels: ['Terex 1', 'Terex 2'],
+        datasets: [{
+          data: [t1Rev, t2Rev],
+          backgroundColor: ['rgba(255,107,0,0.8)', 'rgba(74,158,255,0.8)'],
+          borderColor: ['#ff6b00', '#4a9eff'],
+          borderWidth: 2, hoverOffset: 8,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, cutout: '65%',
+        plugins: {
+          legend: { position: 'bottom', labels: { color: '#888', font: chartFont, padding: 12 } },
+          tooltip: { ...chartTooltip, callbacks: {
+            label: ctx => ` ${ctx.label}: $${ctx.raw.toLocaleString('es-MX',{maximumFractionDigits:0})} (${Math.round(ctx.raw/total*100)}%)`
+          }}
+        }
+      }
+    });
+  })();
+
+  // ═══ UNITS DONUT ═══
+  (function() {
+    const t1U = dData.t1_units.reduce((a, b) => a + b, 0);
+    const t2U = dData.t2_units.reduce((a, b) => a + b, 0);
+    const total = t1U + t2U || 1;
+    document.getElementById('donutUnitsT1Pct').textContent = Math.round(t1U / total * 100) + '%';
+
+    new Chart(document.getElementById('donutUnitsChart').getContext('2d'), {
+      type: 'doughnut',
+      data: {
+        labels: ['Terex 1', 'Terex 2'],
+        datasets: [{
+          data: [t1U, t2U],
+          backgroundColor: ['rgba(255,107,0,0.8)', 'rgba(74,158,255,0.8)'],
+          borderColor: ['#ff6b00', '#4a9eff'],
+          borderWidth: 2, hoverOffset: 8,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, cutout: '65%',
+        plugins: {
+          legend: { position: 'bottom', labels: { color: '#888', font: chartFont, padding: 12 } },
+          tooltip: { ...chartTooltip, callbacks: {
+            label: ctx => ` ${ctx.label}: ${ctx.raw.toLocaleString('es-MX')} uds (${Math.round(ctx.raw/total*100)}%)`
+          }}
+        }
+      }
+    });
+  })();
+
+  // ═══ AVG TICKET PER DAY CHART ═══
+  (function() {
+    const atData = {{ avg_ticket_chart | tojson }};
+
+    new Chart(document.getElementById('avgTicketChart').getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: atData.labels,
+        datasets: [
+          {
+            label: 'T1 Ticket Prom.',
+            data: atData.t1,
+            borderColor: 'rgba(255,107,0,0.9)', backgroundColor: 'rgba(255,107,0,0.05)',
+            borderWidth: 2, pointRadius: 0, fill: true, tension: 0.4,
+          },
+          {
+            label: 'T2 Ticket Prom.',
+            data: atData.t2,
+            borderColor: 'rgba(74,158,255,0.9)', backgroundColor: 'rgba(74,158,255,0.05)',
+            borderWidth: 2, pointRadius: 0, fill: true, tension: 0.4, borderDash: [4, 3],
+          },
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { labels: { color: '#888', font: chartFont, boxWidth: 10, padding: 8 } },
+          tooltip: { ...chartTooltip, callbacks: {
+            label: ctx => ` ${ctx.dataset.label}: $${ctx.raw.toLocaleString('es-MX',{maximumFractionDigits:0})}`
+          }}
+        },
+        scales: {
+          y: { grid: { color: '#1a1a1a' }, ticks: { color: '#666', font: chartFont, callback: v => '$'+v.toLocaleString() } },
+          x: { grid: { display: false }, ticks: { color: '#555', font: { ...chartFont, size: 8 }, maxRotation: 45, maxTicksLimit: 12 } }
+        }
+      }
+    });
+  })();
+
+  // ═══ TOP 15 ESTILOS COMPARISON (Horizontal Bar) ═══
+  (function() {
+    const top15 = {{ top15_chart | tojson }};
+
+    new Chart(document.getElementById('estilosCompareChart').getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: top15.labels,
+        datasets: [
+          {
+            label: 'T1 Unidades', data: top15.t1_units,
+            backgroundColor: 'rgba(255,107,0,0.75)', borderRadius: 3,
+          },
+          {
+            label: 'T2 Unidades', data: top15.t2_units,
+            backgroundColor: 'rgba(74,158,255,0.75)', borderRadius: 3,
+          },
+        ]
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: '#888', font: chartFont, boxWidth: 10, padding: 10 } },
+          tooltip: { ...chartTooltip, callbacks: {
+            afterLabel: (ctx) => {
+              const rev = ctx.datasetIndex === 0 ? top15.t1_revenue[ctx.dataIndex] : top15.t2_revenue[ctx.dataIndex];
+              return `Revenue: $${rev.toLocaleString('es-MX',{maximumFractionDigits:0})}`;
+            }
+          }}
+        },
+        scales: {
+          x: { grid: { color: '#1a1a1a' }, ticks: { color: '#666', font: chartFont } },
+          y: { grid: { display: false }, ticks: { color: '#aaa', font: { ...chartFont, size: 9 } } }
+        }
+      }
+    });
+  })();
+
+  // ═══ TOP 5 ESTILOS DAILY TREND ═══
+  (function() {
+    const etData = {{ estilo_trend_chart | tojson }};
+    const colors = [
+      { border: '#ff6b00', bg: 'rgba(255,107,0,0.08)' },
+      { border: '#4a9eff', bg: 'rgba(74,158,255,0.08)' },
+      { border: '#00e676', bg: 'rgba(0,230,118,0.08)' },
+      { border: '#b57aff', bg: 'rgba(181,122,255,0.08)' },
+      { border: '#ff3d57', bg: 'rgba(255,61,87,0.08)' },
+    ];
+
+    new Chart(document.getElementById('estilosTrendChart').getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: etData.labels,
+        datasets: etData.datasets.map((ds, i) => ({
+          label: ds.label,
+          data: ds.data,
+          borderColor: colors[i % colors.length].border,
+          backgroundColor: colors[i % colors.length].bg,
+          borderWidth: 2, pointRadius: 2, pointHoverRadius: 5,
+          fill: true, tension: 0.4,
+        }))
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { labels: { color: '#888', font: chartFont, boxWidth: 10, padding: 10 } },
+          tooltip: { ...chartTooltip, callbacks: {
+            label: ctx => ` ${ctx.dataset.label}: ${ctx.raw} uds`
+          }}
+        },
+        scales: {
+          y: { grid: { color: '#1a1a1a' }, ticks: { color: '#666', font: chartFont }, beginAtZero: true },
+          x: { grid: { display: false }, ticks: { color: '#555', font: { ...chartFont, size: 8 }, maxRotation: 45, maxTicksLimit: 15 } }
+        }
+      }
+    });
+  })();
+
+});
+</script>
+{% endblock %}

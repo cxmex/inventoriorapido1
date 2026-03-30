@@ -1272,127 +1272,150 @@ async def test_sql_update(barcode: str, new_value: int):
 @app.get("/verventasxdia", response_class=HTMLResponse)
 async def ver_ventas_por_dia(request: Request):
     try:
-        import traceback
-        
-        print(f"Fetching daily sales data for the last 14 days", flush=True)
-        
+        print("Fetching daily sales by branch + estilo + modelo (RPC)", flush=True)
+
         try:
-            # Call both Supabase functions
-            async with httpx.AsyncClient() as client:
-                # Get data by estilo
-                response_by_estilo = await client.get(
-                    f"{SUPABASE_URL}/rest/v1/rpc/get_daily_sales_by_estilo",
-                    headers=HEADERS,
-                    params={"days_back": 14}
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp_branch, resp_estilo, resp_modelo = await asyncio.gather(
+                    client.get(
+                        f"{SUPABASE_URL}/rest/v1/rpc/get_daily_sales_by_branch",
+                        headers=HEADERS,
+                        params={"days_back": 14}
+                    ),
+                    client.get(
+                        f"{SUPABASE_URL}/rest/v1/rpc/get_daily_sales_by_estilo_branch",
+                        headers=HEADERS,
+                        params={"days_back": 14}
+                    ),
+                    client.get(
+                        f"{SUPABASE_URL}/rest/v1/rpc/get_daily_sales_by_modelo_branch",
+                        headers=HEADERS,
+                        params={"days_back": 14}
+                    ),
                 )
-                
-                # Get total data (for the table)
-                response_total = await client.get(
-                    f"{SUPABASE_URL}/rest/v1/rpc/get_daily_sales_total",
-                    headers=HEADERS,
-                    params={"days_back": 14}
-                )
-                
-                if response_by_estilo.status_code >= 400:
-                    print(f"Function call error (by estilo): {response_by_estilo.text}", flush=True)
-                    raise Exception(f"Function call failed: {response_by_estilo.status_code}")
-                
-                if response_total.status_code >= 400:
-                    print(f"Function call error (total): {response_total.text}", flush=True)
-                    raise Exception(f"Function call failed: {response_total.status_code}")
-                
-                daily_results_by_estilo = response_by_estilo.json()
-                daily_results_total = response_total.json()
-                
-                print(f"Retrieved daily sales data for {len(daily_results_by_estilo)} records by estilo", flush=True)
-            
-            # Process total results for the table
-            day_totals = {}
-            for row in daily_results_total:
-                day_key = row.get('day_date')
-                total = float(row.get('total_revenue', 0) or 0)
-                day_totals[day_key] = total
-            
-            # Process results by estilo for the chart
-            chart_data_by_estilo = {}
-            all_days = set()
-            all_estilos = set()
-            
-            for row in daily_results_by_estilo:
-                day_key = row.get('day_date')
-                estilo = row.get('estilo')
-                total = float(row.get('total_revenue', 0) or 0)
-                
-                # Simplify date format for chart (keep DD/MM format)
-                simple_date = datetime.strptime(day_key, "%d/%m/%Y").strftime("%d/%m")
-                
-                if estilo not in chart_data_by_estilo:
-                    chart_data_by_estilo[estilo] = {}
-                
-                chart_data_by_estilo[estilo][simple_date] = round(total, 2)
-                all_days.add(simple_date)
-                all_estilos.add(estilo)
-            
-            # Prepare chart data structure
+
+            if resp_branch.status_code >= 400:
+                raise Exception(f"RPC branch error {resp_branch.status_code}: {resp_branch.text}")
+
+            rows = resp_branch.json()
+
+            # --- Branch totals chart (existing) ---
+            day_totals_t1 = {}
+            day_totals_t2 = {}
+            day_totals_total = {}
+            labels = []
+            data_t1 = []
+            data_t2 = []
+            data_total = []
+
+            for row in rows:
+                full_display = row.get("day_date", "")
+                try:
+                    display = datetime.strptime(full_display, "%d/%m/%Y").strftime("%d/%m")
+                except ValueError:
+                    display = full_display
+
+                t1_val = float(row.get("t1_revenue", 0) or 0)
+                t2_val = float(row.get("t2_revenue", 0) or 0)
+                tot_val = float(row.get("total_revenue", 0) or 0)
+
+                labels.append(display)
+                data_t1.append(round(t1_val, 2))
+                data_t2.append(round(t2_val, 2))
+                data_total.append(round(tot_val, 2))
+
+                day_totals_t1[full_display] = round(t1_val, 2)
+                day_totals_t2[full_display] = round(t2_val, 2)
+                day_totals_total[full_display] = round(tot_val, 2)
+
             chart_data = {
-                'labels': sorted(list(all_days), key=lambda x: datetime.strptime(x, "%d/%m")),
-                'datasets': []
+                'labels': labels,
+                'datasets': [
+                    {
+                        'label': 'Terex 1',
+                        'data': data_t1,
+                        'backgroundColor': 'rgba(54, 162, 235, 0.7)',
+                        'borderColor': 'rgba(54, 162, 235, 1)',
+                        'borderWidth': 2
+                    },
+                    {
+                        'label': 'Terex 2',
+                        'data': data_t2,
+                        'backgroundColor': 'rgba(255, 159, 64, 0.7)',
+                        'borderColor': 'rgba(255, 159, 64, 1)',
+                        'borderWidth': 2
+                    },
+                    {
+                        'label': 'Total',
+                        'data': data_total,
+                        'backgroundColor': 'rgba(75, 192, 192, 0.7)',
+                        'borderColor': 'rgba(75, 192, 192, 1)',
+                        'borderWidth': 2
+                    }
+                ]
             }
-            
-            # Define colors for different estilos
-            colors = [
-                {'bg': 'rgba(255, 99, 132, 0.7)', 'border': 'rgba(255, 99, 132, 1)'},
-                {'bg': 'rgba(54, 162, 235, 0.7)', 'border': 'rgba(54, 162, 235, 1)'},
-                {'bg': 'rgba(255, 206, 86, 0.7)', 'border': 'rgba(255, 206, 86, 1)'},
-                {'bg': 'rgba(75, 192, 192, 0.7)', 'border': 'rgba(75, 192, 192, 1)'},
-                {'bg': 'rgba(153, 102, 255, 0.7)', 'border': 'rgba(153, 102, 255, 1)'},
-                {'bg': 'rgba(255, 159, 64, 0.7)', 'border': 'rgba(255, 159, 64, 1)'},
-                {'bg': 'rgba(199, 199, 199, 0.7)', 'border': 'rgba(199, 199, 199, 1)'},
-                {'bg': 'rgba(83, 102, 255, 0.7)', 'border': 'rgba(83, 102, 255, 1)'}
-            ]
-            
-            # Create dataset for each estilo
-            for i, estilo in enumerate(sorted(all_estilos)):
-                color = colors[i % len(colors)]
-                data = []
-                
-                for day in chart_data['labels']:
-                    value = chart_data_by_estilo.get(estilo, {}).get(day, 0)
-                    data.append(value)
-                
-                chart_data['datasets'].append({
-                    'label': estilo,
-                    'data': data,
-                    'backgroundColor': color['bg'],
-                    'borderColor': color['border'],
-                    'borderWidth': 1
-                })
-            
-            print(f"Daily totals: {day_totals}", flush=True)
-            
+
+            # --- Process estilo/modelo breakdown data ---
+            # Structure: { "Terex 1": { "16/03": { "EstiloA": 500, "EstiloB": 300 }, ... }, "Terex 2": {...} }
+            def process_breakdown(resp, key_field):
+                if resp.status_code >= 400:
+                    return {}
+                raw = resp.json()
+                # Build: { branch: { day_display: { name: revenue } } }
+                result = {}
+                for r in raw:
+                    branch = r.get("branch", "")
+                    day_full = r.get("day_date", "")
+                    name = r.get(key_field, "") or "Sin dato"
+                    rev = float(r.get("revenue", 0) or 0)
+                    try:
+                        day_display = datetime.strptime(day_full, "%d/%m/%Y").strftime("%d/%m")
+                    except ValueError:
+                        day_display = day_full
+                    if branch not in result:
+                        result[branch] = {}
+                    if day_display not in result[branch]:
+                        result[branch][day_display] = {}
+                    result[branch][day_display][name] = result[branch][day_display].get(name, 0) + round(rev, 2)
+                return result
+
+            estilo_data = process_breakdown(resp_estilo, "estilo")
+            modelo_data = process_breakdown(resp_modelo, "modelo")
+
             return templates.TemplateResponse(
-            request=request,
-            name="ventas_por_dia.html",
-            context={
-                    "day_totals": day_totals,
+                request=request,
+                name="ventas_por_dia.html",
+                context={
+                    "day_totals_t1": day_totals_t1,
+                    "day_totals_t2": day_totals_t2,
+                    "day_totals_total": day_totals_total,
                     "chart_data": chart_data,
-                    "chart_data_by_estilo": True  # Flag to indicate we have estilo data
+                    "chart_data_by_estilo": True,
+                    "estilo_data": estilo_data,
+                    "modelo_data": modelo_data,
+                    "chart_labels": labels,
                 }
-        )
-            
+            )
+
         except Exception as fetch_error:
             print(f"Error fetching data: {str(fetch_error)}", flush=True)
+            import traceback
             traceback.print_exc()
             return templates.TemplateResponse(
-            request=request,
-            name="ventas_por_dia.html",
-            context={
-                    "day_totals": {},
+                request=request,
+                name="ventas_por_dia.html",
+                context={
+                    "day_totals_t1": {},
+                    "day_totals_t2": {},
+                    "day_totals_total": {},
                     "chart_data": {'labels': [], 'datasets': []},
-                    "chart_data_by_estilo": False
+                    "chart_data_by_estilo": False,
+                    "estilo_data": {},
+                    "modelo_data": {},
+                    "chart_labels": [],
                 }
-        )
-            
+            )
+
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -1407,127 +1430,147 @@ async def ver_ventas_por_dia(request: Request):
 @app.get("/verventasxsemana", response_class=HTMLResponse)
 async def ver_ventas_por_semana(request: Request):
     try:
-        import traceback
-        
-        print(f"Fetching weekly sales data for the last 15 weeks", flush=True)
-        
+        print("Fetching weekly sales by branch + estilo + modelo (RPC)", flush=True)
+
         try:
-            # Call both Supabase functions
-            async with httpx.AsyncClient() as client:
-                # Get data by estilo
-                response_by_estilo = await client.get(
-                    f"{SUPABASE_URL}/rest/v1/rpc/get_weekly_sales_by_estilo",
-                    headers=HEADERS,
-                    params={"weeks_back": 15}
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp_branch, resp_estilo, resp_modelo = await asyncio.gather(
+                    client.get(
+                        f"{SUPABASE_URL}/rest/v1/rpc/get_weekly_sales_by_branch",
+                        headers=HEADERS,
+                        params={"weeks_back": 15}
+                    ),
+                    client.get(
+                        f"{SUPABASE_URL}/rest/v1/rpc/get_weekly_sales_by_estilo_branch",
+                        headers=HEADERS,
+                        params={"weeks_back": 15}
+                    ),
+                    client.get(
+                        f"{SUPABASE_URL}/rest/v1/rpc/get_weekly_sales_by_modelo_branch",
+                        headers=HEADERS,
+                        params={"weeks_back": 15}
+                    ),
                 )
-                
-                # Get total data (for the table)
-                response_total = await client.get(
-                    f"{SUPABASE_URL}/rest/v1/rpc/get_weekly_sales_total",
-                    headers=HEADERS,
-                    params={"weeks_back": 15}
-                )
-                
-                if response_by_estilo.status_code >= 400:
-                    print(f"Function call error (by estilo): {response_by_estilo.text}", flush=True)
-                    raise Exception(f"Function call failed: {response_by_estilo.status_code}")
-                
-                if response_total.status_code >= 400:
-                    print(f"Function call error (total): {response_total.text}", flush=True)
-                    raise Exception(f"Function call failed: {response_total.status_code}")
-                
-                weekly_results_by_estilo = response_by_estilo.json()
-                weekly_results_total = response_total.json()
-                
-                print(f"Retrieved sales data for {len(weekly_results_by_estilo)} records by estilo", flush=True)
-            
-            # Process total results for the table
-            week_totals = {}
-            for row in weekly_results_total:
-                week_key = row.get('week_start')
-                total = float(row.get('total_revenue', 0) or 0)
-                week_totals[week_key] = total
-            
-            # Process results by estilo for the chart
-            chart_data_by_estilo = {}
-            all_weeks = set()
-            all_estilos = set()
-            
-            for row in weekly_results_by_estilo:
-                week_key = row.get('week_start')
-                estilo = row.get('estilo')
-                total = float(row.get('total_revenue', 0) or 0)
-                
-                # Simplify date format for chart
-                simple_date = datetime.strptime(week_key, "%d/%m/%Y").strftime("%d/%m")
-                
-                if estilo not in chart_data_by_estilo:
-                    chart_data_by_estilo[estilo] = {}
-                
-                chart_data_by_estilo[estilo][simple_date] = round(total, 2)
-                all_weeks.add(simple_date)
-                all_estilos.add(estilo)
-            
-            # Prepare chart data structure
+
+            if resp_branch.status_code >= 400:
+                raise Exception(f"RPC branch error {resp_branch.status_code}: {resp_branch.text}")
+
+            rows = resp_branch.json()
+
+            week_totals_t1 = {}
+            week_totals_t2 = {}
+            week_totals_total = {}
+            labels = []
+            data_t1 = []
+            data_t2 = []
+            data_total = []
+
+            for row in rows:
+                full_display = row.get("week_start", "")
+                try:
+                    display = datetime.strptime(full_display, "%d/%m/%Y").strftime("%d/%m")
+                except ValueError:
+                    display = full_display
+
+                t1_val = float(row.get("t1_revenue", 0) or 0)
+                t2_val = float(row.get("t2_revenue", 0) or 0)
+                tot_val = float(row.get("total_revenue", 0) or 0)
+
+                labels.append(display)
+                data_t1.append(round(t1_val, 2))
+                data_t2.append(round(t2_val, 2))
+                data_total.append(round(tot_val, 2))
+
+                week_totals_t1[full_display] = round(t1_val, 2)
+                week_totals_t2[full_display] = round(t2_val, 2)
+                week_totals_total[full_display] = round(tot_val, 2)
+
             chart_data = {
-                'labels': sorted(list(all_weeks), key=lambda x: datetime.strptime(x, "%d/%m")),
-                'datasets': []
+                'labels': labels,
+                'datasets': [
+                    {
+                        'label': 'Terex 1',
+                        'data': data_t1,
+                        'backgroundColor': 'rgba(54, 162, 235, 0.7)',
+                        'borderColor': 'rgba(54, 162, 235, 1)',
+                        'borderWidth': 2
+                    },
+                    {
+                        'label': 'Terex 2',
+                        'data': data_t2,
+                        'backgroundColor': 'rgba(255, 159, 64, 0.7)',
+                        'borderColor': 'rgba(255, 159, 64, 1)',
+                        'borderWidth': 2
+                    },
+                    {
+                        'label': 'Total',
+                        'data': data_total,
+                        'backgroundColor': 'rgba(75, 192, 192, 0.7)',
+                        'borderColor': 'rgba(75, 192, 192, 1)',
+                        'borderWidth': 2
+                    }
+                ]
             }
-            
-            # Define colors for different estilos
-            colors = [
-                {'bg': 'rgba(255, 99, 132, 0.7)', 'border': 'rgba(255, 99, 132, 1)'},
-                {'bg': 'rgba(54, 162, 235, 0.7)', 'border': 'rgba(54, 162, 235, 1)'},
-                {'bg': 'rgba(255, 206, 86, 0.7)', 'border': 'rgba(255, 206, 86, 1)'},
-                {'bg': 'rgba(75, 192, 192, 0.7)', 'border': 'rgba(75, 192, 192, 1)'},
-                {'bg': 'rgba(153, 102, 255, 0.7)', 'border': 'rgba(153, 102, 255, 1)'},
-                {'bg': 'rgba(255, 159, 64, 0.7)', 'border': 'rgba(255, 159, 64, 1)'},
-                {'bg': 'rgba(199, 199, 199, 0.7)', 'border': 'rgba(199, 199, 199, 1)'},
-                {'bg': 'rgba(83, 102, 255, 0.7)', 'border': 'rgba(83, 102, 255, 1)'}
-            ]
-            
-            # Create dataset for each estilo
-            for i, estilo in enumerate(sorted(all_estilos)):
-                color = colors[i % len(colors)]
-                data = []
-                
-                for week in chart_data['labels']:
-                    value = chart_data_by_estilo.get(estilo, {}).get(week, 0)
-                    data.append(value)
-                
-                chart_data['datasets'].append({
-                    'label': estilo,
-                    'data': data,
-                    'backgroundColor': color['bg'],
-                    'borderColor': color['border'],
-                    'borderWidth': 1
-                })
-            
-            print(f"Weekly totals: {week_totals}", flush=True)
-            
+
+            # Process estilo/modelo breakdown data
+            def process_breakdown(resp, key_field):
+                if resp.status_code >= 400:
+                    return {}
+                raw = resp.json()
+                result = {}
+                for r in raw:
+                    branch = r.get("branch", "")
+                    week_full = r.get("week_start", "")
+                    name = r.get(key_field, "") or "Sin dato"
+                    rev = float(r.get("revenue", 0) or 0)
+                    try:
+                        week_display = datetime.strptime(week_full, "%d/%m/%Y").strftime("%d/%m")
+                    except ValueError:
+                        week_display = week_full
+                    if branch not in result:
+                        result[branch] = {}
+                    if week_display not in result[branch]:
+                        result[branch][week_display] = {}
+                    result[branch][week_display][name] = result[branch][week_display].get(name, 0) + round(rev, 2)
+                return result
+
+            estilo_data = process_breakdown(resp_estilo, "estilo")
+            modelo_data = process_breakdown(resp_modelo, "modelo")
+
             return templates.TemplateResponse(
-            request=request,
-            name="ventas_por_semana.html",
-            context={
-                    "week_totals": week_totals,
+                request=request,
+                name="ventas_por_semana.html",
+                context={
+                    "week_totals_t1": week_totals_t1,
+                    "week_totals_t2": week_totals_t2,
+                    "week_totals_total": week_totals_total,
                     "chart_data": chart_data,
-                    "chart_data_by_estilo": True  # Flag to indicate we have estilo data
+                    "chart_data_by_estilo": True,
+                    "estilo_data": estilo_data,
+                    "modelo_data": modelo_data,
+                    "chart_labels": labels,
                 }
-        )
-            
+            )
+
         except Exception as fetch_error:
             print(f"Error fetching data: {str(fetch_error)}", flush=True)
+            import traceback
             traceback.print_exc()
             return templates.TemplateResponse(
-            request=request,
-            name="ventas_por_semana.html",
-            context={
-                    "week_totals": {},
+                request=request,
+                name="ventas_por_semana.html",
+                context={
+                    "week_totals_t1": {},
+                    "week_totals_t2": {},
+                    "week_totals_total": {},
                     "chart_data": {'labels': [], 'datasets': []},
-                    "chart_data_by_estilo": False
+                    "chart_data_by_estilo": False,
+                    "estilo_data": {},
+                    "modelo_data": {},
+                    "chart_labels": [],
                 }
-        )
-            
+            )
+
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -1540,6 +1583,120 @@ async def ver_ventas_por_semana(request: Request):
         )
 
 
+
+@app.get("/verinventariostock", response_class=HTMLResponse)
+async def ver_inventario_stock(request: Request):
+    try:
+        print("Inventory stock snapshot page — triggering daily snapshot + loading data", flush=True)
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            # 1. Trigger today's snapshot (idempotent — skips if already done)
+            snap_resp = await client.post(
+                f"{SUPABASE_URL}/rest/v1/rpc/take_inventory_snapshot",
+                headers=HEADERS,
+                json={}
+            )
+            snapshot_taken = snap_resp.json() if snap_resp.status_code < 400 else False
+            print(f"Snapshot taken today: {snapshot_taken}", flush=True)
+
+            # 2. Fetch snapshots + current detailed stock (all in parallel)
+            resp_modelo, resp_estilo, resp_stock_estilo, resp_stock_detail = await asyncio.gather(
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_inventory_snapshots",
+                    headers=HEADERS,
+                    params={"days_back": 30, "filter_type": "modelo"}
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_inventory_snapshots",
+                    headers=HEADERS,
+                    params={"days_back": 30, "filter_type": "estilo"}
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_current_stock_by_estilo",
+                    headers=HEADERS,
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_current_stock_by_estilo_modelo",
+                    headers=HEADERS,
+                ),
+            )
+
+        def process_snapshots(resp):
+            if resp.status_code >= 400:
+                return {}, [], []
+            rows = resp.json()
+            # Structure: { group_name: { date_display: {t1, t2, total} } }
+            data = {}
+            all_dates = []
+            seen_dates = set()
+            for r in rows:
+                date_full = r.get("snapshot_date", "")
+                name = r.get("group_name", "")
+                t1 = int(r.get("terex1_stock", 0) or 0)
+                t2 = int(r.get("terex2_stock", 0) or 0)
+                total = int(r.get("total_stock", 0) or 0)
+                try:
+                    date_display = datetime.strptime(date_full, "%d/%m/%Y").strftime("%d/%m")
+                except ValueError:
+                    date_display = date_full
+                if date_display not in seen_dates:
+                    all_dates.append(date_display)
+                    seen_dates.add(date_display)
+                if name not in data:
+                    data[name] = {}
+                data[name][date_display] = {"t1": t1, "t2": t2, "total": total}
+
+            # Rank by latest total stock descending
+            ranked = sorted(data.keys(), key=lambda n: sum(v.get("total", 0) for v in data[n].values()), reverse=True)
+            return data, all_dates, ranked
+
+        modelo_data, modelo_dates, modelo_ranked = process_snapshots(resp_modelo)
+        estilo_data, estilo_dates, estilo_ranked = process_snapshots(resp_estilo)
+
+        # Process current stock by estilo
+        stock_by_estilo = []
+        if resp_stock_estilo.status_code < 400:
+            stock_by_estilo = resp_stock_estilo.json()
+
+        # Process current stock detail: estilo -> [modelo rows]
+        stock_detail = {}
+        if resp_stock_detail.status_code < 400:
+            for r in resp_stock_detail.json():
+                est = r.get("estilo", "")
+                if est not in stock_detail:
+                    stock_detail[est] = []
+                stock_detail[est].append({
+                    "modelo": r.get("modelo", ""),
+                    "t1": int(r.get("terex1_stock", 0) or 0),
+                    "t2": int(r.get("terex2_stock", 0) or 0),
+                    "total": int(r.get("total_stock", 0) or 0),
+                    "items": int(r.get("num_items", 0) or 0),
+                })
+
+        return templates.TemplateResponse(
+            request=request,
+            name="inventario_stock.html",
+            context={
+                "modelo_data": modelo_data,
+                "modelo_dates": modelo_dates,
+                "modelo_ranked": modelo_ranked,
+                "estilo_data": estilo_data,
+                "estilo_dates": estilo_dates,
+                "estilo_ranked": estilo_ranked,
+                "snapshot_taken": snapshot_taken,
+                "stock_by_estilo": stock_by_estilo,
+                "stock_detail": stock_detail,
+            }
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return templates.TemplateResponse(
+            request=request,
+            name="error.html",
+            context={"error_message": f"Error loading inventory stock: {str(e)}"},
+        )
 
 
 @app.get("/verinventariodaily", response_class=HTMLResponse)
@@ -7202,6 +7359,379 @@ async def get_pendientes1():
         return resp.json()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ══════════════════════════════════════════════════════════════
+# DASHBOARD POWER — Both branches, negatives, full turnover
+# ══════════════════════════════════════════════════════════════
+
+@app.get("/dashboard-power", response_class=HTMLResponse)
+async def dashboard_power(request: Request, days: int = 14):
+    try:
+        mexico_tz = pytz.timezone("America/Mexico_City")
+        now_mx = datetime.now(mexico_tz)
+        date_from = (now_mx - timedelta(days=days)).strftime("%Y-%m-%d")
+
+        range_header = {**HEADERS, "Range": "0-9999", "Prefer": "return=representation"}
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            results = await asyncio.gather(
+                # 0: ventas_terex1
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex1",
+                    headers=range_header,
+                    params={
+                        "select": "fecha,qty,price,estilo_id,estilo,modelo,name_id,order_id,hora",
+                        "fecha": f"gte.{date_from}",
+                        "order": "fecha.asc"
+                    }
+                ),
+                # 1: ventas_terex2
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex2",
+                    headers=range_header,
+                    params={
+                        "select": "fecha,qty,price,estilo_id,estilo,modelo,name_id,order_id,hora",
+                        "fecha": f"gte.{date_from}",
+                        "order": "fecha.asc"
+                    }
+                ),
+                # 2: negative inventory (terex1 < 0 OR terex2 < 0)
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/inventario1",
+                    headers=range_header,
+                    params={
+                        "select": "barcode,name,terex1,terex2,estilo,estilo_id,modelo,color",
+                        "or": "(terex1.lt.0,terex2.lt.0)",
+                        "order": "estilo.asc"
+                    }
+                ),
+                # 3: all prioridad=1 estilos
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/inventario_estilos",
+                    headers=range_header,
+                    params={
+                        "select": "id,nombre",
+                        "prioridad": "eq.1",
+                        "order": "nombre.asc"
+                    }
+                ),
+                # 4: recent entrada_mercancia (last 60 days for new demand)
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/entrada_mercancia",
+                    headers=range_header,
+                    params={
+                        "select": "created_at,qty,barcode,estilo,estilo_id",
+                        "created_at": f"gte.{(now_mx - timedelta(days=60)).isoformat()}",
+                        "order": "created_at.desc"
+                    }
+                ),
+            )
+
+        sales_t1 = results[0].json() if results[0].status_code in (200, 206) else []
+        sales_t2 = results[1].json() if results[1].status_code in (200, 206) else []
+        negatives = results[2].json() if results[2].status_code in (200, 206) else []
+        prioridad_estilos = results[3].json() if results[3].status_code in (200, 206) else []
+        entradas = results[4].json() if results[4].status_code in (200, 206) else []
+
+        # ── KPIs per branch ────────────────────────────────────
+        def calc_kpis(sales):
+            revenue = sum((r.get("qty") or 0) * (r.get("price") or 0) for r in sales)
+            units = sum(r.get("qty") or 0 for r in sales)
+            orders = len(set(r.get("order_id") for r in sales if r.get("order_id")))
+            avg_ticket = revenue / orders if orders else 0
+            return {"revenue": revenue, "units": units, "orders": orders, "avg_ticket": avg_ticket}
+
+        kpis_t1 = calc_kpis(sales_t1)
+        kpis_t2 = calc_kpis(sales_t2)
+        kpis_combined = {
+            "revenue": kpis_t1["revenue"] + kpis_t2["revenue"],
+            "units": kpis_t1["units"] + kpis_t2["units"],
+            "orders": kpis_t1["orders"] + kpis_t2["orders"],
+            "avg_ticket": (kpis_t1["revenue"] + kpis_t2["revenue"]) / max(kpis_t1["orders"] + kpis_t2["orders"], 1),
+        }
+
+        # ── Daily sales chart (both branches) ──────────────────
+        daily_t1 = defaultdict(lambda: {"revenue": 0, "units": 0})
+        daily_t2 = defaultdict(lambda: {"revenue": 0, "units": 0})
+
+        for r in sales_t1:
+            d = r.get("fecha")
+            if d:
+                daily_t1[d]["revenue"] += (r.get("qty") or 0) * (r.get("price") or 0)
+                daily_t1[d]["units"] += r.get("qty") or 0
+
+        for r in sales_t2:
+            d = r.get("fecha")
+            if d:
+                daily_t2[d]["revenue"] += (r.get("qty") or 0) * (r.get("price") or 0)
+                daily_t2[d]["units"] += r.get("qty") or 0
+
+        all_dates = sorted(set(list(daily_t1.keys()) + list(daily_t2.keys())))
+        daily_chart = {
+            "labels": all_dates,
+            "t1_revenue": [daily_t1[d]["revenue"] for d in all_dates],
+            "t2_revenue": [daily_t2[d]["revenue"] for d in all_dates],
+            "t1_units": [daily_t1[d]["units"] for d in all_dates],
+            "t2_units": [daily_t2[d]["units"] for d in all_dates],
+        }
+
+        # ── Negative inventory processing ──────────────────────
+        negative_items = []
+        for item in negatives:
+            t1 = item.get("terex1") or 0
+            t2 = item.get("terex2") or 0
+            negative_items.append({
+                "barcode": item.get("barcode"),
+                "name": item.get("name", ""),
+                "terex1": int(t1),
+                "terex2": int(t2),
+                "estilo": item.get("estilo", ""),
+                "modelo": item.get("modelo", ""),
+                "color": item.get("color", ""),
+                "branch": ("T1" if t1 < 0 else "") + (" T2" if t2 < 0 else ""),
+            })
+
+        # ── Turnover for ALL prioridad=1 estilos ──────────────
+        prioridad_ids = {e["id"] for e in prioridad_estilos}
+        prioridad_names = {e["id"]: e["nombre"] for e in prioridad_estilos}
+
+        estilo_sales = defaultdict(lambda: {
+            "t1_units": 0, "t1_revenue": 0, "t2_units": 0, "t2_revenue": 0,
+            "modelo": "", "first_sale": None, "last_sale": None,
+            "t1_orders": set(), "t2_orders": set()
+        })
+
+        for r in sales_t1:
+            eid = r.get("estilo_id")
+            if eid and eid in prioridad_ids:
+                estilo_sales[eid]["t1_units"] += r.get("qty") or 0
+                estilo_sales[eid]["t1_revenue"] += (r.get("qty") or 0) * (r.get("price") or 0)
+                estilo_sales[eid]["modelo"] = r.get("modelo", "")
+                if r.get("order_id"):
+                    estilo_sales[eid]["t1_orders"].add(r["order_id"])
+                fecha = r.get("fecha")
+                if fecha:
+                    if not estilo_sales[eid]["first_sale"] or fecha < estilo_sales[eid]["first_sale"]:
+                        estilo_sales[eid]["first_sale"] = fecha
+                    if not estilo_sales[eid]["last_sale"] or fecha > estilo_sales[eid]["last_sale"]:
+                        estilo_sales[eid]["last_sale"] = fecha
+
+        for r in sales_t2:
+            eid = r.get("estilo_id")
+            if eid and eid in prioridad_ids:
+                estilo_sales[eid]["t2_units"] += r.get("qty") or 0
+                estilo_sales[eid]["t2_revenue"] += (r.get("qty") or 0) * (r.get("price") or 0)
+                estilo_sales[eid]["modelo"] = r.get("modelo") or estilo_sales[eid]["modelo"]
+                if r.get("order_id"):
+                    estilo_sales[eid]["t2_orders"].add(r["order_id"])
+                fecha = r.get("fecha")
+                if fecha:
+                    if not estilo_sales[eid]["first_sale"] or fecha < estilo_sales[eid]["first_sale"]:
+                        estilo_sales[eid]["first_sale"] = fecha
+                    if not estilo_sales[eid]["last_sale"] or fecha > estilo_sales[eid]["last_sale"]:
+                        estilo_sales[eid]["last_sale"] = fecha
+
+        turnover_table = []
+        for eid in prioridad_ids:
+            s = estilo_sales.get(eid, {
+                "t1_units": 0, "t1_revenue": 0, "t2_units": 0, "t2_revenue": 0,
+                "modelo": "", "first_sale": None, "last_sale": None,
+                "t1_orders": set(), "t2_orders": set()
+            })
+            total_units = s["t1_units"] + s["t2_units"]
+            total_revenue = s["t1_revenue"] + s["t2_revenue"]
+
+            # Days active
+            if s["first_sale"] and s["last_sale"] and s["first_sale"] != s["last_sale"]:
+                from datetime import date as dt_date
+                d1 = datetime.strptime(s["first_sale"], "%Y-%m-%d").date() if isinstance(s["first_sale"], str) else s["first_sale"]
+                d2 = datetime.strptime(s["last_sale"], "%Y-%m-%d").date() if isinstance(s["last_sale"], str) else s["last_sale"]
+                days_active = max((d2 - d1).days, 1)
+            else:
+                days_active = 1 if total_units > 0 else 0
+
+            velocity = round(total_units / days_active, 2) if days_active > 0 else 0
+
+            turnover_table.append({
+                "estilo_id": eid,
+                "estilo": prioridad_names.get(eid, ""),
+                "modelo": s["modelo"],
+                "t1_units": s["t1_units"],
+                "t2_units": s["t2_units"],
+                "total_units": total_units,
+                "t1_revenue": s["t1_revenue"],
+                "t2_revenue": s["t2_revenue"],
+                "total_revenue": total_revenue,
+                "days_active": days_active,
+                "velocity": velocity,
+            })
+
+        # Sort by velocity descending
+        turnover_table.sort(key=lambda x: x["velocity"], reverse=True)
+
+        # ── New demand tracker (estilos from recent entradas) ──
+        # Find estilos that entered recently and measure their sales velocity
+        entrada_estilos = defaultdict(lambda: {"qty_entered": 0, "first_entry": None})
+        for e in entradas:
+            eid = e.get("estilo_id")
+            if eid:
+                entrada_estilos[eid]["qty_entered"] += e.get("qty") or 0
+                created = e.get("created_at", "")[:10]
+                if created:
+                    if not entrada_estilos[eid]["first_entry"] or created < entrada_estilos[eid]["first_entry"]:
+                        entrada_estilos[eid]["first_entry"] = created
+
+        new_demand = []
+        for eid, entry_info in entrada_estilos.items():
+            s = estilo_sales.get(eid, {"t1_units": 0, "t2_units": 0, "t1_revenue": 0, "t2_revenue": 0, "modelo": ""})
+            total_sold = s["t1_units"] + s["t2_units"]
+            qty_entered = entry_info["qty_entered"]
+            sell_through = round((total_sold / qty_entered) * 100, 1) if qty_entered > 0 else 0
+
+            # Days since first entry
+            if entry_info["first_entry"]:
+                try:
+                    entry_date = datetime.strptime(entry_info["first_entry"], "%Y-%m-%d").date()
+                    days_since = max((now_mx.date() - entry_date).days, 1)
+                except Exception:
+                    days_since = 1
+            else:
+                days_since = 1
+
+            vel = round(total_sold / days_since, 2) if days_since > 0 else 0
+
+            new_demand.append({
+                "estilo_id": eid,
+                "estilo": prioridad_names.get(eid, f"Estilo {eid}"),
+                "modelo": s.get("modelo", ""),
+                "qty_entered": qty_entered,
+                "total_sold": total_sold,
+                "sell_through": sell_through,
+                "velocity": vel,
+                "days_since_entry": days_since,
+                "first_entry": entry_info["first_entry"] or "",
+            })
+
+        # Sort by velocity descending
+        new_demand.sort(key=lambda x: x["velocity"], reverse=True)
+
+        # ── Top 15 estilos for comparison chart ────────────────
+        top15 = turnover_table[:15]
+        top15_chart = {
+            "labels": [t["estilo"][:20] for t in top15],
+            "t1_units": [t["t1_units"] for t in top15],
+            "t2_units": [t["t2_units"] for t in top15],
+            "t1_revenue": [t["t1_revenue"] for t in top15],
+            "t2_revenue": [t["t2_revenue"] for t in top15],
+        }
+
+        # ── Per-estilo daily trend (top 5 by velocity) ─────────
+        top5_ids = [t["estilo_id"] for t in turnover_table[:5]]
+        top5_names = {t["estilo_id"]: t["estilo"][:18] for t in turnover_table[:5]}
+        estilo_daily = {eid: defaultdict(int) for eid in top5_ids}
+
+        for r in sales_t1 + sales_t2:
+            eid = r.get("estilo_id")
+            if eid in estilo_daily:
+                fecha = r.get("fecha")
+                if fecha:
+                    estilo_daily[eid][fecha] += r.get("qty") or 0
+
+        estilo_trend_chart = {
+            "labels": all_dates,
+            "datasets": [
+                {
+                    "label": top5_names.get(eid, ""),
+                    "data": [estilo_daily[eid].get(d, 0) for d in all_dates],
+                }
+                for eid in top5_ids
+            ]
+        }
+
+        # ── Daily order count per branch (for avg ticket chart) ─
+        daily_orders_t1 = defaultdict(set)
+        daily_orders_t2 = defaultdict(set)
+        for r in sales_t1:
+            d = r.get("fecha")
+            oid = r.get("order_id")
+            if d and oid:
+                daily_orders_t1[d].add(oid)
+        for r in sales_t2:
+            d = r.get("fecha")
+            oid = r.get("order_id")
+            if d and oid:
+                daily_orders_t2[d].add(oid)
+
+        avg_ticket_chart = {
+            "labels": all_dates,
+            "t1": [round(daily_t1[d]["revenue"] / max(len(daily_orders_t1[d]), 1), 0) for d in all_dates],
+            "t2": [round(daily_t2[d]["revenue"] / max(len(daily_orders_t2[d]), 1), 0) for d in all_dates],
+        }
+
+        return templates.TemplateResponse(
+            request=request,
+            name="dashboard_power.html",
+            context={
+                "days": days,
+                "kpis_t1": kpis_t1,
+                "kpis_t2": kpis_t2,
+                "kpis_combined": kpis_combined,
+                "daily_chart": daily_chart,
+                "negative_items": negative_items,
+                "turnover_table": turnover_table,
+                "new_demand": new_demand,
+                "top15_chart": top15_chart,
+                "estilo_trend_chart": estilo_trend_chart,
+                "avg_ticket_chart": avg_ticket_chart,
+            }
+        )
+
+    except Exception as e:
+        traceback.print_exc()
+        return templates.TemplateResponse(
+            request=request,
+            name="error.html",
+            context={"error_message": f"Dashboard Power error: {str(e)}"}
+        )
+
+
+@app.get("/api/dashboard-power/negative-sales/{barcode}")
+async def negative_sales_drilldown(barcode: str):
+    """Fetch sales history for a specific barcode from both branches"""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r1, r2 = await asyncio.gather(
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex1",
+                    headers=HEADERS,
+                    params={
+                        "select": "fecha,hora,qty,price,order_id",
+                        "name_id": f"eq.{barcode}",
+                        "order": "fecha.desc,hora.desc",
+                        "limit": "50"
+                    }
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex2",
+                    headers=HEADERS,
+                    params={
+                        "select": "fecha,hora,qty,price,order_id",
+                        "name_id": f"eq.{barcode}",
+                        "order": "fecha.desc,hora.desc",
+                        "limit": "50"
+                    }
+                ),
+            )
+
+        t1_sales = [{"branch": "T1", **s} for s in (r1.json() if r1.status_code == 200 else [])]
+        t2_sales = [{"branch": "T2", **s} for s in (r2.json() if r2.status_code == 200 else [])]
+
+        all_sales = sorted(t1_sales + t2_sales, key=lambda x: (x.get("fecha", ""), x.get("hora", "")), reverse=True)
+        return all_sales
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     import uvicorn
