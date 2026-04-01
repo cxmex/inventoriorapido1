@@ -1,4 +1,5 @@
 # app.py - FastAPI with templates for inventory management
+import ml_engine
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 import jwt
@@ -56,6 +57,33 @@ app = FastAPI(
     description="API for inventory management with style prioritization",
     version="1.0.0"
 )
+
+# ── APScheduler: ML pipeline at 11pm daily ──
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+
+ml_scheduler = AsyncIOScheduler()
+
+async def _scheduled_ml_pipeline():
+    """Run full ML pipeline — called by scheduler at 11pm."""
+    logger.info("Running scheduled ML pipeline...")
+    try:
+        result = await ml_engine.run_full_pipeline()
+        logger.info("ML pipeline complete: %s", {k: v for k, v in result.items() if k != "ml"})
+    except Exception as e:
+        logger.error("ML pipeline error: %s", e)
+
+ml_scheduler.add_job(
+    _scheduled_ml_pipeline,
+    CronTrigger(hour=23, minute=0, timezone="America/Mexico_City"),
+    id="ml_daily_pipeline",
+    replace_existing=True,
+)
+
+@app.on_event("startup")
+async def start_scheduler():
+    ml_scheduler.start()
+    logger.info("ML scheduler started — runs daily at 11pm Mexico City time")
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -1584,6 +1612,254 @@ async def ver_ventas_por_semana(request: Request):
 
 
 
+@app.get("/should_order", response_class=HTMLResponse)
+async def should_order(request: Request):
+    try:
+        days = int(request.query_params.get("days", 30))
+        lead_time = 30  # days
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp_analysis, resp_suppliers = await asyncio.gather(
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_order_analysis",
+                    headers=HEADERS,
+                    params={"days_back": days}
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/inventario_estilos",
+                    headers={**HEADERS, "Range": "0-9999"},
+                    params={"select": "nombre,supplier", "order": "nombre.asc"}
+                ),
+            )
+
+        if resp_analysis.status_code >= 400:
+            raise Exception(f"RPC error {resp_analysis.status_code}: {resp_analysis.text}")
+
+        rows = resp_analysis.json()
+
+        # Build supplier map: estilo -> supplier
+        supplier_map = {}
+        if resp_suppliers.status_code < 400:
+            for s in resp_suppliers.json():
+                if s.get("nombre"):
+                    supplier_map[s["nombre"]] = s.get("supplier") or "Sin proveedor"
+
+        # Compute modelo-level total stock across ALL estilos (cross-coverage)
+        modelo_total_stock = {}
+        modelo_total_sold = {}
+        for r in rows:
+            mod = r.get("modelo", "")
+            stock = float(r.get("stock_total", 0) or 0)
+            sold = float(r.get("sold_total", 0) or 0)
+            modelo_total_stock[mod] = modelo_total_stock.get(mod, 0) + stock
+            # Only count sold once per modelo (sales are at modelo level, duplicated per color)
+            if mod not in modelo_total_sold:
+                modelo_total_sold[mod] = sold
+
+        # Build structured data: supplier -> estilo -> modelo -> [colors]
+        structured = {}
+        for r in rows:
+            est = r.get("estilo", "") or "Sin estilo"
+            mod = r.get("modelo", "") or "Sin modelo"
+            color = r.get("color", "") or "Sin color"
+            supplier = supplier_map.get(est, "Sin proveedor")
+
+            stock = float(r.get("stock_total", 0) or 0)
+            sold = float(r.get("sold_total", 0) or 0)
+            rev = float(r.get("revenue_total", 0) or 0)
+            avg_daily = float(r.get("avg_daily_sales", 0) or 0)
+            doi = r.get("days_of_inventory")
+            doi = float(doi) if doi is not None else None
+
+            # Lost sales estimate: if DOI < lead_time, we'll run out before restock
+            # Lost sales = avg_daily_sales * (lead_time - DOI) * avg_price_per_unit
+            avg_price = rev / sold if sold > 0 else 0
+            lost_sales = 0
+            if doi is not None and doi < lead_time and avg_daily > 0:
+                stockout_days = lead_time - doi
+                lost_sales = round(avg_daily * stockout_days * avg_price, 0)
+            elif stock == 0 and sold > 0:
+                # Already sold out: losing avg_daily * lead_time * avg_price
+                lost_sales = round(avg_daily * lead_time * avg_price, 0)
+
+            # Cross-coverage: is this modelo available in other estilos?
+            modelo_cross_stock = modelo_total_stock.get(mod, 0) - stock
+            modelo_has_coverage = modelo_cross_stock > 0
+
+            # Urgency score (lower = more urgent)
+            # Factors: DOI (lower=urgent), cross-coverage (none=urgent), sold volume
+            if stock == 0 and sold > 0:
+                urgency = 0  # SOLD OUT
+            elif doi is not None and doi < 7:
+                urgency = 1  # CRITICAL
+            elif doi is not None and doi < lead_time:
+                urgency = 2  # ORDER NOW
+            elif doi is not None and doi < lead_time * 2:
+                urgency = 3  # PLAN ORDER
+            else:
+                urgency = 4  # OK
+
+            # Boost urgency if no cross-coverage for this modelo
+            if not modelo_has_coverage and urgency <= 2:
+                urgency = max(0, urgency - 1)
+
+            if supplier not in structured:
+                structured[supplier] = {}
+            if est not in structured[supplier]:
+                structured[supplier][est] = {}
+            if mod not in structured[supplier][est]:
+                structured[supplier][est][mod] = {
+                    "colors": [],
+                    "total_stock": 0,
+                    "total_sold": sold,
+                    "total_rev": rev,
+                    "avg_daily": avg_daily,
+                    "doi": doi,
+                    "lost_sales": 0,
+                    "urgency": 4,
+                    "modelo_cross_stock": modelo_cross_stock,
+                }
+            structured[supplier][est][mod]["colors"].append({
+                "color": color,
+                "stock": int(stock),
+                "stock_t1": int(float(r.get("stock_t1", 0) or 0)),
+                "stock_t2": int(float(r.get("stock_t2", 0) or 0)),
+                "sold_pct": round(sold / max(sold, 1) * 100, 0) if color != "SOLD OUT" else 0,
+            })
+            structured[supplier][est][mod]["total_stock"] += int(stock)
+            structured[supplier][est][mod]["lost_sales"] += lost_sales
+            structured[supplier][est][mod]["urgency"] = min(structured[supplier][est][mod]["urgency"], urgency)
+
+        # Sort suppliers, estilos, modelos by urgency then revenue
+        sorted_suppliers = sorted(structured.items(), key=lambda x: x[0])
+
+        # Compute totals
+        total_lost_sales = 0
+        total_items_to_order = 0
+        for sup, estilos in structured.items():
+            for est, modelos in estilos.items():
+                for mod, data in modelos.items():
+                    total_lost_sales += data["lost_sales"]
+                    if data["urgency"] <= 2:
+                        total_items_to_order += 1
+
+        return templates.TemplateResponse(
+            request=request,
+            name="should_order.html",
+            context={
+                "structured": sorted_suppliers,
+                "days": days,
+                "lead_time": lead_time,
+                "total_lost_sales": total_lost_sales,
+                "total_items_to_order": total_items_to_order,
+            }
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return templates.TemplateResponse(
+            request=request,
+            name="error.html",
+            context={"error_message": f"Error loading order analysis: {str(e)}"}
+        )
+
+
+@app.get("/retail_metrics", response_class=HTMLResponse)
+async def retail_metrics(request: Request):
+    try:
+        group_by = request.query_params.get("group", "estilo")
+        days = int(request.query_params.get("days", 30))
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp, resp_modelo, resp_em = await asyncio.gather(
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_retail_metrics",
+                    headers=HEADERS,
+                    params={"group_by_field": group_by, "days_back": days}
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_retail_metrics",
+                    headers=HEADERS,
+                    params={"group_by_field": "modelo", "days_back": days}
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_retail_metrics",
+                    headers=HEADERS,
+                    params={"group_by_field": "estilo_modelo", "days_back": days}
+                ),
+            )
+
+        if resp.status_code >= 400:
+            raise Exception(f"RPC error {resp.status_code}: {resp.text}")
+
+        rows = resp.json()
+
+        # Build modelo-led table: modelo rows + drill-down by estilo
+        modelo_rows = resp_modelo.json() if resp_modelo.status_code < 400 else []
+        modelo_rows.sort(key=lambda r: float(r.get("revenue_total", 0) or 0), reverse=True)
+        em_rows = resp_em.json() if resp_em.status_code < 400 else []
+        # Group estilo_modelo rows by modelo
+        modelo_estilo_detail = {}
+        for r in em_rows:
+            gn = r.get("group_name", "")
+            if " > " in gn:
+                estilo, modelo = gn.split(" > ", 1)
+            else:
+                continue
+            if modelo not in modelo_estilo_detail:
+                modelo_estilo_detail[modelo] = []
+            modelo_estilo_detail[modelo].append({**r, "estilo_name": estilo})
+        # Sort each modelo's estilos by revenue desc
+        for mod in modelo_estilo_detail:
+            modelo_estilo_detail[mod].sort(key=lambda r: float(r.get("revenue_total", 0) or 0), reverse=True)
+
+        # Compute summary KPIs
+        total_stock = sum(int(r.get("current_stock_total", 0) or 0) for r in rows)
+        total_sold = sum(int(r.get("units_sold_total", 0) or 0) for r in rows)
+        total_rev = sum(float(r.get("revenue_total", 0) or 0) for r in rows)
+        dead_count = sum(1 for r in rows if r.get("is_dead_stock"))
+        soldout_count = sum(1 for r in rows if int(r.get("current_stock_total", 0) or 0) == 0 and int(r.get("units_sold_total", 0) or 0) > 0)
+        low_count = sum(1 for r in rows if r.get("days_of_inventory") is not None and float(r["days_of_inventory"]) < 7 and int(r.get("current_stock_total", 0) or 0) > 0)
+        avg_doi = None
+        doi_values = [float(r["days_of_inventory"]) for r in rows if r.get("days_of_inventory") is not None]
+        if doi_values:
+            avg_doi = round(sum(doi_values) / len(doi_values), 1)
+        avg_turnover = None
+        turn_values = [float(r["turnover_rate"]) for r in rows if r.get("turnover_rate") is not None]
+        if turn_values:
+            avg_turnover = round(sum(turn_values) / len(turn_values), 2)
+
+        return templates.TemplateResponse(
+            request=request,
+            name="retail_metrics.html",
+            context={
+                "rows": rows,
+                "group_by": group_by,
+                "days": days,
+                "total_stock": total_stock,
+                "total_sold": total_sold,
+                "total_rev": total_rev,
+                "dead_count": dead_count,
+                "soldout_count": soldout_count,
+                "low_count": low_count,
+                "avg_doi": avg_doi,
+                "avg_turnover": avg_turnover,
+                "modelo_rows": modelo_rows,
+                "modelo_estilo_detail": modelo_estilo_detail,
+            }
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return templates.TemplateResponse(
+            request=request,
+            name="error.html",
+            context={"error_message": f"Error loading retail metrics: {str(e)}"}
+        )
+
+
 @app.get("/verinventariostock", response_class=HTMLResponse)
 async def ver_inventario_stock(request: Request):
     try:
@@ -1600,7 +1876,7 @@ async def ver_inventario_stock(request: Request):
             print(f"Snapshot taken today: {snapshot_taken}", flush=True)
 
             # 2. Fetch snapshots + current detailed stock (all in parallel)
-            resp_modelo, resp_estilo, resp_stock_estilo, resp_stock_detail = await asyncio.gather(
+            resp_modelo, resp_estilo, resp_stock_estilo, resp_stock_detail, resp_stock_color = await asyncio.gather(
                 client.get(
                     f"{SUPABASE_URL}/rest/v1/rpc/get_inventory_snapshots",
                     headers=HEADERS,
@@ -1617,6 +1893,10 @@ async def ver_inventario_stock(request: Request):
                 ),
                 client.get(
                     f"{SUPABASE_URL}/rest/v1/rpc/get_current_stock_by_estilo_modelo",
+                    headers=HEADERS,
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/rpc/get_current_stock_by_estilo_modelo_color",
                     headers=HEADERS,
                 ),
             )
@@ -1673,6 +1953,50 @@ async def ver_inventario_stock(request: Request):
                     "items": int(r.get("num_items", 0) or 0),
                 })
 
+        # Process color detail: estilo|modelo -> [color rows]
+        color_detail = {}
+        if resp_stock_color.status_code < 400:
+            for r in resp_stock_color.json():
+                key = f"{r.get('estilo', '')}|{r.get('modelo', '')}"
+                if key not in color_detail:
+                    color_detail[key] = []
+                color_detail[key].append({
+                    "color": r.get("color", "") or "Sin color",
+                    "t1": int(r.get("terex1_stock", 0) or 0),
+                    "t2": int(r.get("terex2_stock", 0) or 0),
+                    "total": int(r.get("total_stock", 0) or 0),
+                })
+
+        # Build modelo-first view: modelo -> [estilo rows]
+        stock_by_modelo = {}
+        modelo_detail = {}
+        if resp_stock_detail.status_code < 400:
+            for r in resp_stock_detail.json():
+                mod = r.get("modelo", "")
+                est = r.get("estilo", "")
+                t1 = int(r.get("terex1_stock", 0) or 0)
+                t2 = int(r.get("terex2_stock", 0) or 0)
+                total = int(r.get("total_stock", 0) or 0)
+                num = int(r.get("num_items", 0) or 0)
+                # Accumulate modelo totals
+                if mod not in stock_by_modelo:
+                    stock_by_modelo[mod] = {"modelo": mod, "t1": 0, "t2": 0, "total": 0, "num_items": 0}
+                stock_by_modelo[mod]["t1"] += t1
+                stock_by_modelo[mod]["t2"] += t2
+                stock_by_modelo[mod]["total"] += total
+                stock_by_modelo[mod]["num_items"] += num
+                # Detail: modelo -> estilos
+                if mod not in modelo_detail:
+                    modelo_detail[mod] = []
+                modelo_detail[mod].append({
+                    "estilo": est,
+                    "t1": t1,
+                    "t2": t2,
+                    "total": total,
+                    "num_items": num,
+                })
+        stock_by_modelo_list = sorted(stock_by_modelo.values(), key=lambda x: x["total"], reverse=True)
+
         return templates.TemplateResponse(
             request=request,
             name="inventario_stock.html",
@@ -1686,6 +2010,9 @@ async def ver_inventario_stock(request: Request):
                 "snapshot_taken": snapshot_taken,
                 "stock_by_estilo": stock_by_estilo,
                 "stock_detail": stock_detail,
+                "color_detail": color_detail,
+                "stock_by_modelo": stock_by_modelo_list,
+                "modelo_detail": modelo_detail,
             }
         )
 
@@ -1743,6 +2070,446 @@ async def secret_menu_estilos(request: Request):
             request=request,
             name="error.html",
             context={"error_message": f"Error loading estilos: {str(e)}"}
+        )
+
+
+@app.get("/secretmenu/ml", response_class=HTMLResponse)
+async def secret_menu_ml(request: Request):
+    """Machine Learning dashboard — demand forecasts, dead stock prediction, branch transfers."""
+    try:
+        import math
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            # Fetch multiple data sources in parallel
+            (
+                resp_metrics_30, resp_metrics_14, resp_metrics_7,
+                resp_em_30, resp_em_14,
+                resp_daily_modelo, resp_daily_estilo,
+                resp_snapshots, resp_order,
+            ) = await asyncio.gather(
+                client.get(f"{SUPABASE_URL}/rest/v1/rpc/get_retail_metrics", headers=HEADERS,
+                           params={"group_by_field": "modelo", "days_back": 30}),
+                client.get(f"{SUPABASE_URL}/rest/v1/rpc/get_retail_metrics", headers=HEADERS,
+                           params={"group_by_field": "modelo", "days_back": 14}),
+                client.get(f"{SUPABASE_URL}/rest/v1/rpc/get_retail_metrics", headers=HEADERS,
+                           params={"group_by_field": "modelo", "days_back": 7}),
+                client.get(f"{SUPABASE_URL}/rest/v1/rpc/get_retail_metrics", headers=HEADERS,
+                           params={"group_by_field": "estilo_modelo", "days_back": 30}),
+                client.get(f"{SUPABASE_URL}/rest/v1/rpc/get_retail_metrics", headers=HEADERS,
+                           params={"group_by_field": "estilo_modelo", "days_back": 14}),
+                client.get(f"{SUPABASE_URL}/rest/v1/rpc/get_daily_sales_by_modelo_branch", headers=HEADERS,
+                           params={"days_back": 30}),
+                client.get(f"{SUPABASE_URL}/rest/v1/rpc/get_daily_sales_by_estilo_branch", headers=HEADERS,
+                           params={"days_back": 30}),
+                client.get(f"{SUPABASE_URL}/rest/v1/rpc/get_inventory_snapshots", headers=HEADERS,
+                           params={"days_back": 30, "filter_type": "modelo"}),
+                client.get(f"{SUPABASE_URL}/rest/v1/rpc/get_order_analysis", headers=HEADERS,
+                           params={"days_back": 30}),
+            )
+
+        def safe_json(resp):
+            return resp.json() if resp.status_code < 400 else []
+
+        metrics_30 = {r["group_name"]: r for r in safe_json(resp_metrics_30)}
+        metrics_14 = {r["group_name"]: r for r in safe_json(resp_metrics_14)}
+        metrics_7 = {r["group_name"]: r for r in safe_json(resp_metrics_7)}
+        em_30 = safe_json(resp_em_30)
+        em_14 = safe_json(resp_em_14)
+        daily_modelo = safe_json(resp_daily_modelo)
+        daily_estilo = safe_json(resp_daily_estilo)
+        snapshots = safe_json(resp_snapshots)
+        order_rows = safe_json(resp_order)
+
+        # ---- 1. DEMAND FORECASTING per modelo ----
+        # Compare 14d avg vs 30d avg to detect acceleration/deceleration
+        demand_forecasts = []
+        for name, m30 in metrics_30.items():
+            m14 = metrics_14.get(name, {})
+            m7 = metrics_7.get(name, {})
+            avg30 = float(m30.get("avg_daily_sales", 0) or 0)
+            avg14 = float(m14.get("avg_daily_sales", 0) or 0)
+            avg7 = float(m7.get("avg_daily_sales", 0) or 0)
+            stock = int(m30.get("current_stock_total", 0) or 0)
+            sold_30 = int(m30.get("units_sold_total", 0) or 0)
+            rev_30 = float(m30.get("revenue_total", 0) or 0)
+
+            if sold_30 == 0:
+                continue
+
+            # Weighted forecast: 50% recent (7d), 30% medium (14d), 20% long (30d)
+            forecast_daily = avg7 * 0.50 + avg14 * 0.30 + avg30 * 0.20
+            forecast_7d = round(forecast_daily * 7, 0)
+            forecast_14d = round(forecast_daily * 14, 0)
+            forecast_30d = round(forecast_daily * 30, 0)
+
+            # Trend: compare 7d velocity vs 30d baseline
+            if avg30 > 0:
+                trend_pct = round(((avg7 - avg30) / avg30) * 100, 1)
+            else:
+                trend_pct = 0
+
+            # Predicted stockout date
+            if forecast_daily > 0 and stock > 0:
+                days_left = round(stock / forecast_daily, 1)
+            elif stock == 0:
+                days_left = 0
+            else:
+                days_left = 999
+
+            demand_forecasts.append({
+                "modelo": name,
+                "stock": stock,
+                "avg30": round(avg30, 1),
+                "avg14": round(avg14, 1),
+                "avg7": round(avg7, 1),
+                "forecast_daily": round(forecast_daily, 1),
+                "forecast_7d": int(forecast_7d),
+                "forecast_14d": int(forecast_14d),
+                "forecast_30d": int(forecast_30d),
+                "trend_pct": trend_pct,
+                "days_left": days_left,
+                "rev_30": rev_30,
+                "sold_30": sold_30,
+            })
+        demand_forecasts.sort(key=lambda x: x["rev_30"], reverse=True)
+
+        # ---- 2. DEAD STOCK EARLY WARNING ----
+        # Items with declining velocity that may become dead stock in 30-60 days
+        dead_stock_warnings = []
+        for name, m30 in metrics_30.items():
+            m14 = metrics_14.get(name, {})
+            m7 = metrics_7.get(name, {})
+            avg30 = float(m30.get("avg_daily_sales", 0) or 0)
+            avg14 = float(m14.get("avg_daily_sales", 0) or 0)
+            avg7 = float(m7.get("avg_daily_sales", 0) or 0)
+            stock = int(m30.get("current_stock_total", 0) or 0)
+            is_dead = m30.get("is_dead_stock", False)
+
+            if stock == 0:
+                continue
+
+            # Declining: 7d avg is much lower than 30d avg
+            if avg30 > 0:
+                decline_pct = round(((avg7 - avg30) / avg30) * 100, 1)
+            else:
+                decline_pct = -100 if avg7 == 0 else 0
+
+            # Risk score: higher = more likely to become dead stock
+            # Factors: sales decline rate, high stock, low turnover
+            turnover = float(m30.get("turnover_rate", 0) or 0)
+            doi = float(m30.get("days_of_inventory", 0) or 0)
+
+            risk_score = 0
+            if decline_pct < -30:
+                risk_score += 3
+            elif decline_pct < -15:
+                risk_score += 2
+            elif decline_pct < 0:
+                risk_score += 1
+            if doi > 90:
+                risk_score += 3
+            elif doi > 60:
+                risk_score += 2
+            elif doi > 30:
+                risk_score += 1
+            if turnover < 0.3:
+                risk_score += 2
+            elif turnover < 0.5:
+                risk_score += 1
+            if is_dead:
+                risk_score += 4
+
+            if risk_score >= 3:
+                risk_level = "CRITICAL" if risk_score >= 7 else ("HIGH" if risk_score >= 5 else "MEDIUM")
+                dead_stock_warnings.append({
+                    "modelo": name,
+                    "stock": stock,
+                    "avg30": round(avg30, 1),
+                    "avg7": round(avg7, 1),
+                    "decline_pct": decline_pct,
+                    "doi": round(doi, 0),
+                    "turnover": round(turnover, 2),
+                    "risk_score": risk_score,
+                    "risk_level": risk_level,
+                    "is_dead": is_dead,
+                    "rev_30": float(m30.get("revenue_total", 0) or 0),
+                    "stock_value_at_risk": round(stock * float(m30.get("revenue_per_unit", 0) or 0), 0),
+                })
+        dead_stock_warnings.sort(key=lambda x: x["risk_score"], reverse=True)
+
+        # ---- 3. BRANCH TRANSFER RECOMMENDATIONS ----
+        # Find modelos where one branch sells much more but the other has more stock
+        transfer_recs = []
+        for name, m30 in metrics_30.items():
+            stock_t1 = int(m30.get("current_stock_t1", 0) or 0)
+            stock_t2 = int(m30.get("current_stock_t2", 0) or 0)
+            sold_t1 = int(m30.get("units_sold_t1", 0) or 0)
+            sold_t2 = int(m30.get("units_sold_t2", 0) or 0)
+            total_stock = stock_t1 + stock_t2
+            total_sold = sold_t1 + sold_t2
+
+            if total_stock < 10 or total_sold < 5:
+                continue
+
+            # Calculate sales share vs stock share for each branch
+            sales_share_t1 = sold_t1 / total_sold if total_sold > 0 else 0.5
+            stock_share_t1 = stock_t1 / total_stock if total_stock > 0 else 0.5
+            imbalance = sales_share_t1 - stock_share_t1  # positive = T1 sells more but has less stock
+
+            # Significant imbalance threshold
+            if abs(imbalance) > 0.20 and total_sold >= 10:
+                if imbalance > 0:
+                    from_branch, to_branch = "T2", "T1"
+                    from_stock, to_stock = stock_t2, stock_t1
+                    to_sold = sold_t1
+                else:
+                    from_branch, to_branch = "T1", "T2"
+                    from_stock, to_stock = stock_t1, stock_t2
+                    to_sold = sold_t2
+
+                # Suggest transfer qty: rebalance to match sales proportion
+                ideal_stock_to = round(total_stock * (to_sold / total_sold))
+                transfer_qty = max(0, ideal_stock_to - to_stock)
+                transfer_qty = min(transfer_qty, from_stock)  # can't transfer more than available
+
+                if transfer_qty >= 5:
+                    transfer_recs.append({
+                        "modelo": name,
+                        "from_branch": from_branch,
+                        "to_branch": to_branch,
+                        "from_stock": from_stock,
+                        "to_stock": to_stock,
+                        "transfer_qty": transfer_qty,
+                        "imbalance": round(abs(imbalance) * 100, 1),
+                        "sold_t1": sold_t1,
+                        "sold_t2": sold_t2,
+                        "stock_t1": stock_t1,
+                        "stock_t2": stock_t2,
+                        "rev_30": float(m30.get("revenue_total", 0) or 0),
+                    })
+        transfer_recs.sort(key=lambda x: x["transfer_qty"], reverse=True)
+
+        # ---- 4. SOLD-OUT MODELS WITH HIGH DEMAND (restocking urgency) ----
+        restock_urgent = []
+        for name, m30 in metrics_30.items():
+            stock = int(m30.get("current_stock_total", 0) or 0)
+            sold_30 = int(m30.get("units_sold_total", 0) or 0)
+            rev_30 = float(m30.get("revenue_total", 0) or 0)
+            avg30 = float(m30.get("avg_daily_sales", 0) or 0)
+            m14 = metrics_14.get(name, {})
+            avg14 = float(m14.get("avg_daily_sales", 0) or 0)
+
+            if stock == 0 and sold_30 > 0:
+                # Estimate lost revenue per day
+                lost_daily = avg30 * float(m30.get("revenue_per_unit", 0) or 0)
+                restock_urgent.append({
+                    "modelo": name,
+                    "sold_30": sold_30,
+                    "rev_30": rev_30,
+                    "avg_daily": round(avg30, 1),
+                    "lost_daily_rev": round(lost_daily, 0),
+                    "lost_30d_rev": round(lost_daily * 30, 0),
+                })
+        restock_urgent.sort(key=lambda x: x["rev_30"], reverse=True)
+
+        # ---- 5. ESTILO-MODELO SOLD OUT COMBOS (hidden opportunities) ----
+        em_14_map = {r["group_name"]: r for r in em_14}
+        soldout_combos = []
+        for r in em_30:
+            stock = int(r.get("current_stock_total", 0) or 0)
+            sold = int(r.get("units_sold_total", 0) or 0)
+            rev = float(r.get("revenue_total", 0) or 0)
+            if stock == 0 and sold > 5 and rev > 500:
+                gn = r.get("group_name", "")
+                if " > " in gn:
+                    estilo, modelo = gn.split(" > ", 1)
+                else:
+                    continue
+                r14 = em_14_map.get(gn, {})
+                avg14 = float(r14.get("avg_daily_sales", 0) or 0)
+                soldout_combos.append({
+                    "estilo": estilo,
+                    "modelo": modelo,
+                    "sold_30": sold,
+                    "rev_30": rev,
+                    "avg_daily": round(float(r.get("avg_daily_sales", 0) or 0), 1),
+                    "avg_daily_14": round(avg14, 1),
+                })
+        soldout_combos.sort(key=lambda x: x["rev_30"], reverse=True)
+
+        # ---- SUMMARY KPIs ----
+        total_forecast_7d = sum(d["forecast_7d"] for d in demand_forecasts)
+        total_forecast_rev_7d = sum(d["forecast_7d"] * (d["rev_30"] / d["sold_30"]) if d["sold_30"] > 0 else 0 for d in demand_forecasts)
+        stockout_within_14d = sum(1 for d in demand_forecasts if d["days_left"] <= 14 and d["stock"] > 0)
+        total_transfer_units = sum(t["transfer_qty"] for t in transfer_recs)
+        total_lost_daily = sum(r["lost_daily_rev"] for r in restock_urgent)
+
+        return templates.TemplateResponse(
+            request=request,
+            name="secret_ml.html",
+            context={
+                "demand_forecasts": demand_forecasts,
+                "dead_stock_warnings": dead_stock_warnings,
+                "transfer_recs": transfer_recs,
+                "restock_urgent": restock_urgent,
+                "soldout_combos": soldout_combos,
+                "total_forecast_7d": int(total_forecast_7d),
+                "total_forecast_rev_7d": int(total_forecast_rev_7d),
+                "stockout_within_14d": stockout_within_14d,
+                "total_transfer_units": total_transfer_units,
+                "total_lost_daily": int(total_lost_daily),
+                "dead_warning_count": len(dead_stock_warnings),
+                "restock_count": len(restock_urgent),
+                "soldout_combo_count": len(soldout_combos),
+            }
+        )
+
+    except Exception as e:
+        traceback.print_exc()
+        return templates.TemplateResponse(
+            request=request,
+            name="error.html",
+            context={"error_message": f"Error loading ML dashboard: {str(e)}"}
+        )
+
+
+# ── ML API Endpoints ──
+
+@app.post("/ml/daily-snapshot")
+async def ml_daily_snapshot():
+    """Manually trigger today's daily snapshot into daily_records."""
+    result = await ml_engine.take_daily_snapshot()
+    return result
+
+
+@app.post("/ml/run-pipeline")
+async def ml_run_pipeline():
+    """Manually trigger the full ML pipeline (snapshot + train + predict + alerts)."""
+    try:
+        result = await ml_engine.run_full_pipeline()
+        return result
+    except Exception as e:
+        traceback.print_exc()
+        return {"error": str(e)}
+
+
+@app.get("/ml/leaderboard")
+async def ml_leaderboard(days: int = 30):
+    """Model competition leaderboard + history for charts."""
+    return await ml_engine.get_leaderboard(days)
+
+
+@app.get("/ml/predictions/tomorrow")
+async def ml_predictions_tomorrow():
+    """Best model's predictions for tomorrow."""
+    return await ml_engine.get_predictions_tomorrow()
+
+
+@app.get("/ml/lost-sales")
+async def ml_lost_sales():
+    """Historical lost sales by modelo with trends."""
+    return await ml_engine.get_lost_sales_data()
+
+
+@app.get("/ml/stockout-alerts")
+async def ml_stockout_alerts():
+    """Active stockout alerts (>70% probability)."""
+    return await ml_engine.get_stockout_alerts()
+
+
+@app.get("/ml/dashboard", response_class=HTMLResponse)
+async def ml_dashboard_page(request: Request):
+    """Full ML dashboard with model competition, predictions, alerts."""
+    try:
+        leaderboard_data = await ml_engine.get_leaderboard(30)
+        predictions_data = await ml_engine.get_predictions_tomorrow()
+        lost_sales_data = await ml_engine.get_lost_sales_data()
+        alerts_data = await ml_engine.get_stockout_alerts()
+
+        # Find champion model (most days ranked #1)
+        champion = None
+        leaderboard = leaderboard_data.get("leaderboard", [])
+        sales_lb = [r for r in leaderboard if r.get("target") == "sales"]
+        if sales_lb:
+            champion = max(sales_lb, key=lambda x: x.get("days_ranked_first", 0))
+
+        return templates.TemplateResponse(
+            request=request,
+            name="ml_dashboard.html",
+            context={
+                "leaderboard": leaderboard_data,
+                "predictions": predictions_data,
+                "lost_sales": lost_sales_data,
+                "alerts": alerts_data,
+                "champion": champion,
+                "total_days": leaderboard_data.get("total_days_data", 0),
+            }
+        )
+    except Exception as e:
+        traceback.print_exc()
+        return templates.TemplateResponse(
+            request=request,
+            name="error.html",
+            context={"error_message": f"Error loading ML dashboard: {str(e)}"}
+        )
+
+
+@app.get("/secretmenu/dailysales", response_class=HTMLResponse)
+async def secret_menu_daily_sales(request: Request):
+    try:
+        days = int(request.query_params.get("days", 7))
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/rpc/get_daily_sales_detail",
+                headers=HEADERS,
+                params={"days_back": days}
+            )
+
+        if resp.status_code >= 400:
+            raise Exception(f"RPC error {resp.status_code}: {resp.text}")
+
+        rows = resp.json()
+
+        # Aggregate by estilo: { estilo: { total_qty, total_revenue, modelos: { modelo: {t1_qty, t2_qty, t1_rev, t2_rev} } } }
+        estilos = {}
+        for r in rows:
+            est = r.get("estilo", "") or "Sin estilo"
+            mod = r.get("modelo", "") or "Sin modelo"
+            branch = r.get("branch", "")
+            qty = int(r.get("total_qty", 0) or 0)
+            rev = float(r.get("total_revenue", 0) or 0)
+
+            if est not in estilos:
+                estilos[est] = {"total_qty": 0, "total_revenue": 0, "modelos": {}}
+            estilos[est]["total_qty"] += qty
+            estilos[est]["total_revenue"] += rev
+
+            if mod not in estilos[est]["modelos"]:
+                estilos[est]["modelos"][mod] = {"t1_qty": 0, "t2_qty": 0, "t1_rev": 0, "t2_rev": 0}
+            if branch == "Terex 1":
+                estilos[est]["modelos"][mod]["t1_qty"] += qty
+                estilos[est]["modelos"][mod]["t1_rev"] += rev
+            else:
+                estilos[est]["modelos"][mod]["t2_qty"] += qty
+                estilos[est]["modelos"][mod]["t2_rev"] += rev
+
+        # Sort estilos by total revenue desc
+        sorted_estilos = sorted(estilos.items(), key=lambda x: x[1]["total_revenue"], reverse=True)
+
+        return templates.TemplateResponse(
+            request=request,
+            name="secret_dailysales.html",
+            context={"estilos": sorted_estilos, "days": days}
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return templates.TemplateResponse(
+            request=request,
+            name="error.html",
+            context={"error_message": f"Error loading daily sales: {str(e)}"}
         )
 
 

@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+
+{% block title %}Should Order{% endblock %}
+
+{% block content %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+<style>
+    .urgency-0 { background-color: #dc3545 !important; color: white; }
+    .urgency-1 { background-color: #fd7e14 !important; color: white; }
+    .urgency-2 { background-color: #28a745 !important; color: white; }
+    .urgency-3 { background-color: #ffc107 !important; color: #333; }
+    .urgency-4 { background-color: #e9ecef !important; color: #666; }
+    .badge-urgency-0 { background: #dc3545; }
+    .badge-urgency-1 { background: #fd7e14; }
+    .badge-urgency-2 { background: #28a745; }
+    .badge-urgency-3 { background: #ffc107; color: #333; }
+    .badge-urgency-4 { background: #6c757d; }
+    .supplier-header { background: #1a1a2e; color: #e6e6e6; padding: 10px 15px; font-size: 1.1rem; cursor: pointer; }
+    .estilo-header { background: #16213e; color: #ddd; padding: 8px 15px 8px 25px; cursor: pointer; }
+    .modelo-row { cursor: pointer; }
+    .modelo-row:hover { background-color: #f0f4ff !important; }
+    .color-bar { height: 8px; border-radius: 4px; display: inline-block; min-width: 4px; }
+    .kpi-card { border-radius: 12px; padding: 18px; text-align: center; color: white; }
+    .kpi-card h3 { margin: 5px 0 0; font-size: 1.8rem; }
+    .no-coverage { border-left: 3px solid #dc3545; }
+    .lost-sales { color: #dc3545; font-weight: bold; }
+</style>
+
+<div class="container-fluid mt-4 px-4">
+    <div class="row mb-3">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <h2 class="mb-0"><i class="bi bi-cart-check"></i> Should Order</h2>
+                <div class="d-flex gap-2 align-items-center">
+                    <strong>Periodo ventas:</strong>
+                    <div class="btn-group" role="group">
+                        <a href="/should_order?days=7" class="btn btn-sm {{ 'btn-dark' if days == 7 else 'btn-outline-dark' }}">7d</a>
+                        <a href="/should_order?days=14" class="btn btn-sm {{ 'btn-dark' if days == 14 else 'btn-outline-dark' }}">14d</a>
+                        <a href="/should_order?days=30" class="btn btn-sm {{ 'btn-dark' if days == 30 else 'btn-outline-dark' }}">30d</a>
+                    </div>
+                    <span class="badge bg-secondary">Lead time: {{ lead_time }}d</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- KPI Cards -->
+    <div class="row g-3 mb-4">
+        <div class="col-md-3">
+            <div class="kpi-card" style="background: #dc3545;">
+                <small>Items que Ordenar</small>
+                <h3>{{ total_items_to_order }}</h3>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="kpi-card" style="background: #1a1a2e;">
+                <small>Ventas Perdidas Estimadas</small>
+                <h3>${{ '{:,.0f}'.format(total_lost_sales) }}</h3>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="kpi-card" style="background: #4363d8;">
+                <small>Proveedores</small>
+                <h3>{{ structured|length }}</h3>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="kpi-card" style="background: #469990;">
+                <small>Lead Time</small>
+                <h3>{{ lead_time }} dias</h3>
+            </div>
+        </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="mb-3 d-flex gap-2 flex-wrap align-items-center">
+        <strong>Urgencia:</strong>
+        <span class="badge badge-urgency-0">SOLD OUT</span>
+        <span class="badge badge-urgency-1">CRITICAL (&lt;7d)</span>
+        <span class="badge badge-urgency-2">ORDER NOW (&lt;{{ lead_time }}d)</span>
+        <span class="badge badge-urgency-3">PLAN ORDER</span>
+        <span class="badge badge-urgency-4">OK</span>
+        <span class="ms-3"><span style="border-left:3px solid #dc3545; padding-left:5px;">Sin cobertura cruzada</span></span>
+    </div>
+
+    <!-- Search + Filters -->
+    <div class="mb-3">
+        <div class="input-group">
+            <span class="input-group-text"><i class="bi bi-search"></i></span>
+            <input type="text" class="form-control" id="searchInput" placeholder="Buscar estilo, modelo...">
+            <button class="btn btn-outline-danger" id="filterUrgent">Solo Urgentes</button>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div id="orderContent">
+    {% for supplier_name, estilos in structured %}
+    <div class="card shadow-sm mb-3 supplier-card">
+        <div class="supplier-header" onclick="this.nextElementSibling.classList.toggle('d-none')">
+            <i class="bi bi-truck"></i> <strong>{{ supplier_name }}</strong>
+            <span class="badge bg-light text-dark ms-2">{{ estilos|length }} estilos</span>
+        </div>
+        <div class="card-body p-0">
+            {% for est_name, modelos in estilos.items()|sort %}
+            <div class="estilo-header" onclick="this.nextElementSibling.classList.toggle('d-none')">
+                <i class="bi bi-chevron-right"></i> {{ est_name }}
+                <span class="badge bg-light text-dark ms-1">{{ modelos|length }}</span>
+                {% set est_lost = namespace(v=0) %}
+                {% for _, md in modelos.items() %}{% set est_lost.v = est_lost.v + md.lost_sales %}{% endfor %}
+                {% if est_lost.v > 0 %}
+                <span class="badge bg-danger ms-1">-${{ '{:,.0f}'.format(est_lost.v) }} lost</span>
+                {% endif %}
+            </div>
+            <div>
+                <table class="table table-sm table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Modelo</th>
+                            <th class="text-end">Stock</th>
+                            <th class="text-end">Vendido ({{ days }}d)</th>
+                            <th class="text-end">Revenue</th>
+                            <th class="text-end">Vta/Dia</th>
+                            <th class="text-end">DOI</th>
+                            <th class="text-end">Perdida Est.</th>
+                            <th class="text-center">Cobertura</th>
+                            <th class="text-center">Urgencia</th>
+                            <th>Colores</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for mod_name, md in modelos.items()|sort(attribute='1.urgency') %}
+                        <tr class="modelo-row {% if not md.modelo_cross_stock %}no-coverage{% endif %}" data-urgency="{{ md.urgency }}">
+                            <td class="fw-bold">{{ mod_name }}</td>
+                            <td class="text-end">{{ md.total_stock }}</td>
+                            <td class="text-end">{{ md.total_sold|int }}</td>
+                            <td class="text-end">${{ '{:,.0f}'.format(md.total_rev) }}</td>
+                            <td class="text-end">{{ '%.1f' | format(md.avg_daily) }}</td>
+                            <td class="text-end">
+                                {% if md.doi is not none %}
+                                    {% if md.doi < 7 %}
+                                        <span class="text-danger fw-bold">{{ '%.0f' | format(md.doi) }}d</span>
+                                    {% elif md.doi < lead_time %}
+                                        <span class="text-warning fw-bold">{{ '%.0f' | format(md.doi) }}d</span>
+                                    {% else %}
+                                        {{ '%.0f' | format(md.doi) }}d
+                                    {% endif %}
+                                {% elif md.total_stock == 0 and md.total_sold > 0 %}
+                                    <span class="text-danger fw-bold">0d</span>
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
+                            <td class="text-end">
+                                {% if md.lost_sales > 0 %}
+                                    <span class="lost-sales">-${{ '{:,.0f}'.format(md.lost_sales) }}</span>
+                                {% else %}-{% endif %}
+                            </td>
+                            <td class="text-center">
+                                {% if md.modelo_cross_stock > 0 %}
+                                    <span class="text-success" title="Hay {{ md.modelo_cross_stock|int }} uds en otros estilos"><i class="bi bi-check-circle-fill"></i> {{ md.modelo_cross_stock|int }}</span>
+                                {% else %}
+                                    <span class="text-danger" title="No hay stock de este modelo en ningun otro estilo"><i class="bi bi-x-circle-fill"></i> 0</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-center">
+                                {% if md.urgency == 0 %}
+                                    <span class="badge badge-urgency-0">SOLD OUT</span>
+                                {% elif md.urgency == 1 %}
+                                    <span class="badge badge-urgency-1">CRITICAL</span>
+                                {% elif md.urgency == 2 %}
+                                    <span class="badge badge-urgency-2">ORDER NOW</span>
+                                {% elif md.urgency == 3 %}
+                                    <span class="badge badge-urgency-3">PLAN</span>
+                                {% else %}
+                                    <span class="badge badge-urgency-4">OK</span>
+                                {% endif %}
+                            </td>
+                            <td style="min-width:150px;">
+                                {% for c in md.colors %}
+                                <span class="d-inline-block me-1" title="{{ c.color }}: {{ c.stock }} uds (T1:{{ c.stock_t1 }} T2:{{ c.stock_t2 }})">
+                                    {% if c.stock > 0 %}
+                                        <span class="color-bar" style="width: {{ [c.stock * 3, 60]|min }}px; background: {% if c.stock > 5 %}#28a745{% elif c.stock > 2 %}#ffc107{% else %}#dc3545{% endif %};"></span>
+                                    {% else %}
+                                        <span class="color-bar" style="width:15px; background: #dc3545;"></span>
+                                    {% endif %}
+                                    <small class="text-muted">{{ c.color[:12] }}({{ c.stock }})</small>
+                                </span>
+                                {% endfor %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const search = document.getElementById('searchInput');
+    let urgentOnly = false;
+
+    function filterAll() {
+        const q = (search ? search.value : '').toLowerCase();
+        document.querySelectorAll('.supplier-card').forEach(card => {
+            let anyVisible = false;
+            card.querySelectorAll('.modelo-row').forEach(row => {
+                const matchSearch = !q || row.closest('.card-body').textContent.toLowerCase().includes(q);
+                const matchUrgent = !urgentOnly || parseInt(row.dataset.urgency) <= 2;
+                const show = matchSearch && matchUrgent;
+                row.style.display = show ? '' : 'none';
+                if (show) anyVisible = true;
+            });
+            card.style.display = anyVisible || !q ? '' : 'none';
+        });
+    }
+
+    if (search) search.addEventListener('input', filterAll);
+
+    const urgentBtn = document.getElementById('filterUrgent');
+    if (urgentBtn) {
+        urgentBtn.addEventListener('click', function() {
+            urgentOnly = !urgentOnly;
+            this.classList.toggle('btn-danger', urgentOnly);
+            this.classList.toggle('btn-outline-danger', !urgentOnly);
+            filterAll();
+        });
+    }
+});
+</script>
+{% endblock %}

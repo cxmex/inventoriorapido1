@@ -61,17 +61,34 @@
                             <td class="text-end fw-bold">{{ tot }}</td>
                             <td class="text-end text-muted">{{ ni }}</td>
                         </tr>
-                        <!-- Detail rows (hidden by default) -->
+                        <!-- Modelo detail rows (hidden by default) -->
                         {% if stock_detail.get(est) %}
                         {% for m in stock_detail[est] %}
-                        <tr class="detail-row detail-{{ est|replace(' ', '_')|replace("'", "_") }}" style="display:none; background-color: #f8f9fa;">
-                            <td></td>
+                        {% set safe_est = est|replace(' ', '_')|replace("'", "_") %}
+                        {% set safe_mod = m.modelo|replace(' ', '_')|replace("'", "_") %}
+                        {% set mod_key = safe_est ~ '__' ~ safe_mod %}
+                        <tr class="detail-row detail-{{ safe_est }}" style="display:none; background-color: #f8f9fa; cursor:pointer;" onclick="toggleColor('{{ mod_key }}', this)">
+                            <td class="text-center"><i class="bi bi-chevron-right color-icon-{{ mod_key }}"></i></td>
                             <td class="ps-4 text-muted"><small>{{ m.modelo }}</small></td>
                             <td class="text-end"><small>{{ m.t1 }}</small></td>
                             <td class="text-end"><small>{{ m.t2 }}</small></td>
                             <td class="text-end"><small class="fw-bold">{{ m.total }}</small></td>
-                            <td class="text-end text-muted"><small>{{ m.items }}</small></td>
+                            <td class="text-end text-muted"><small>{{ m['items'] }}</small></td>
                         </tr>
+                        <!-- Color detail rows -->
+                        {% set color_key = est ~ '|' ~ m.modelo %}
+                        {% if color_detail.get(color_key) %}
+                        {% for c in color_detail[color_key] %}
+                        <tr class="color-row color-{{ mod_key }}" style="display:none; background-color: #eef2ff;">
+                            <td></td>
+                            <td class="ps-5"><small class="text-secondary"><i class="bi bi-palette"></i> {{ c.color }}</small></td>
+                            <td class="text-end"><small class="text-secondary">{{ c.t1 }}</small></td>
+                            <td class="text-end"><small class="text-secondary">{{ c.t2 }}</small></td>
+                            <td class="text-end"><small class="text-secondary fw-bold">{{ c.total }}</small></td>
+                            <td></td>
+                        </tr>
+                        {% endfor %}
+                        {% endif %}
                         {% endfor %}
                         {% endif %}
                         {% endfor %}
@@ -99,6 +116,102 @@
                                 {% set sni = namespace(v=0) %}
                                 {% for r in stock_by_estilo %}{% set sni.v = sni.v + (r.num_items if r.num_items is defined else r.get("num_items",0)) %}{% endfor %}
                                 {{ sni.v }}
+                            </th>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ============ STOCK BY MODELO > ESTILO > COLOR ============ -->
+    {% if stock_by_modelo and stock_by_modelo|length > 0 %}
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-dark text-white">
+            <h5 class="mb-0">Stock Actual por Modelo / Estilo</h5>
+        </div>
+        <div class="card-body p-0">
+            <div class="input-group p-3 pb-0">
+                <span class="input-group-text"><i class="bi bi-search"></i></span>
+                <input type="text" class="form-control" id="modeloSearch" placeholder="Buscar modelo...">
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover mb-0" id="modeloDetailTable">
+                    <thead class="table-secondary">
+                        <tr>
+                            <th style="width:40px;"></th>
+                            <th>Modelo</th>
+                            <th class="text-end">Terex 1</th>
+                            <th class="text-end">Terex 2</th>
+                            <th class="text-end">Total</th>
+                            <th class="text-end">SKUs</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in stock_by_modelo %}
+                        {% set mod = row.modelo %}
+                        {% set safe_mod = mod|replace(' ', '_')|replace("'", "_") %}
+                        <tr class="modelo-parent-row" data-modelo="{{ mod }}" style="cursor:pointer;" onclick="toggleModeloDetail('{{ mod|replace("'", "\\'") }}')">
+                            <td class="text-center"><i class="bi bi-chevron-right" id="micon-{{ loop.index }}"></i></td>
+                            <td class="fw-bold">{{ mod }}</td>
+                            <td class="text-end">{{ row.t1 }}</td>
+                            <td class="text-end">{{ row.t2 }}</td>
+                            <td class="text-end fw-bold">{{ row.total }}</td>
+                            <td class="text-end text-muted">{{ row.num_items }}</td>
+                        </tr>
+                        {% if modelo_detail.get(mod) %}
+                        {% for e in modelo_detail[mod] %}
+                        {% set safe_est = e.estilo|replace(' ', '_')|replace("'", "_") %}
+                        {% set me_key = safe_mod ~ '__' ~ safe_est %}
+                        <tr class="mdetail-row mdetail-{{ safe_mod }}" style="display:none; background-color: #f8f9fa; cursor:pointer;" onclick="toggleModeloColor('{{ me_key }}', this)">
+                            <td class="text-center"><i class="bi bi-chevron-right mcolor-icon-{{ me_key }}"></i></td>
+                            <td class="ps-4 text-muted"><small>{{ e.estilo }}</small></td>
+                            <td class="text-end"><small>{{ e.t1 }}</small></td>
+                            <td class="text-end"><small>{{ e.t2 }}</small></td>
+                            <td class="text-end"><small class="fw-bold">{{ e.total }}</small></td>
+                            <td class="text-end text-muted"><small>{{ e.num_items }}</small>
+                        </tr>
+                        {% set color_key = e.estilo ~ '|' ~ mod %}
+                        {% if color_detail.get(color_key) %}
+                        {% for c in color_detail[color_key] %}
+                        <tr class="mcolor-row mcolor-{{ me_key }}" style="display:none; background-color: #eef2ff;">
+                            <td></td>
+                            <td class="ps-5"><small class="text-secondary"><i class="bi bi-palette"></i> {{ c.color }}</small></td>
+                            <td class="text-end"><small class="text-secondary">{{ c.t1 }}</small></td>
+                            <td class="text-end"><small class="text-secondary">{{ c.t2 }}</small></td>
+                            <td class="text-end"><small class="text-secondary fw-bold">{{ c.total }}</small></td>
+                            <td></td>
+                        </tr>
+                        {% endfor %}
+                        {% endif %}
+                        {% endfor %}
+                        {% endif %}
+                        {% endfor %}
+                    </tbody>
+                    <tfoot class="table-dark">
+                        <tr>
+                            <td></td>
+                            <th>TOTAL</th>
+                            <th class="text-end">
+                                {% set mt1 = namespace(v=0) %}
+                                {% for r in stock_by_modelo %}{% set mt1.v = mt1.v + r.t1 %}{% endfor %}
+                                {{ mt1.v }}
+                            </th>
+                            <th class="text-end">
+                                {% set mt2 = namespace(v=0) %}
+                                {% for r in stock_by_modelo %}{% set mt2.v = mt2.v + r.t2 %}{% endfor %}
+                                {{ mt2.v }}
+                            </th>
+                            <th class="text-end">
+                                {% set mtt = namespace(v=0) %}
+                                {% for r in stock_by_modelo %}{% set mtt.v = mtt.v + r.total %}{% endfor %}
+                                {{ mtt.v }}
+                            </th>
+                            <th class="text-end">
+                                {% set mni = namespace(v=0) %}
+                                {% for r in stock_by_modelo %}{% set mni.v = mni.v + r.num_items %}{% endfor %}
+                                {{ mni.v }}
                             </th>
                         </tr>
                     </tfoot>
@@ -187,8 +300,18 @@ document.addEventListener('DOMContentLoaded', function() {
 
         rows.forEach(r => r.style.display = isOpen ? 'none' : 'table-row');
 
-        if (isOpen) openEstilos.delete(estilo);
-        else openEstilos.add(estilo);
+        // Also hide color rows when collapsing estilo
+        if (isOpen) {
+            openEstilos.delete(estilo);
+            openModelos.forEach(mk => {
+                if (mk.startsWith(safeClass.replace('detail-', '') + '__')) {
+                    document.querySelectorAll('.color-' + CSS.escape(mk)).forEach(cr => cr.style.display = 'none');
+                    openModelos.delete(mk);
+                }
+            });
+        } else {
+            openEstilos.add(estilo);
+        }
 
         // Toggle icon
         const estiloRow = document.querySelector(`tr[data-estilo="${estilo}"]`);
@@ -198,6 +321,23 @@ document.addEventListener('DOMContentLoaded', function() {
                 icon.className = isOpen ? 'bi bi-chevron-right' : 'bi bi-chevron-down';
             }
         }
+    };
+
+    // ========== EXPAND/COLLAPSE COLOR ROWS ==========
+    const openModelos = new Set();
+
+    window.toggleColor = function(modKey, clickedRow) {
+        const rows = document.querySelectorAll('.color-' + CSS.escape(modKey));
+        const isOpen = openModelos.has(modKey);
+
+        rows.forEach(r => r.style.display = isOpen ? 'none' : 'table-row');
+
+        if (isOpen) openModelos.delete(modKey);
+        else openModelos.add(modKey);
+
+        // Toggle icon
+        const icon = document.querySelector('.color-icon-' + CSS.escape(modKey));
+        if (icon) icon.className = isOpen ? 'bi bi-chevron-right' : 'bi bi-chevron-down';
     };
 
     // ========== SEARCH FILTER ==========
@@ -213,6 +353,66 @@ document.addEventListener('DOMContentLoaded', function() {
                 const safeClass = 'detail-' + row.dataset.estilo.replace(/ /g, '_').replace(/'/g, '_');
                 document.querySelectorAll('.' + CSS.escape(safeClass)).forEach(dr => {
                     dr.style.display = match && openEstilos.has(row.dataset.estilo) ? 'table-row' : 'none';
+                });
+            });
+        });
+    }
+
+    // ========== MODELO > ESTILO TABLE ==========
+    const openModelos2 = new Set();
+
+    window.toggleModeloDetail = function(modelo) {
+        const safeClass = 'mdetail-' + modelo.replace(/ /g, '_').replace(/'/g, '_');
+        const rows = document.querySelectorAll('.' + CSS.escape(safeClass));
+        const isOpen = openModelos2.has(modelo);
+
+        rows.forEach(r => r.style.display = isOpen ? 'none' : 'table-row');
+
+        if (isOpen) {
+            openModelos2.delete(modelo);
+            openModeloColors.forEach(mk => {
+                if (mk.startsWith(safeClass.replace('mdetail-', '') + '__')) {
+                    document.querySelectorAll('.mcolor-' + CSS.escape(mk)).forEach(cr => cr.style.display = 'none');
+                    openModeloColors.delete(mk);
+                }
+            });
+        } else {
+            openModelos2.add(modelo);
+        }
+
+        const modeloRow = document.querySelector(`tr[data-modelo="${modelo}"]`);
+        if (modeloRow) {
+            const icon = modeloRow.querySelector('i');
+            if (icon) icon.className = isOpen ? 'bi bi-chevron-right' : 'bi bi-chevron-down';
+        }
+    };
+
+    const openModeloColors = new Set();
+
+    window.toggleModeloColor = function(meKey, clickedRow) {
+        const rows = document.querySelectorAll('.mcolor-' + CSS.escape(meKey));
+        const isOpen = openModeloColors.has(meKey);
+
+        rows.forEach(r => r.style.display = isOpen ? 'none' : 'table-row');
+
+        if (isOpen) openModeloColors.delete(meKey);
+        else openModeloColors.add(meKey);
+
+        const icon = document.querySelector('.mcolor-icon-' + CSS.escape(meKey));
+        if (icon) icon.className = isOpen ? 'bi bi-chevron-right' : 'bi bi-chevron-down';
+    };
+
+    const modeloSearchInput = document.getElementById('modeloSearch');
+    if (modeloSearchInput) {
+        modeloSearchInput.addEventListener('input', function() {
+            const q = this.value.toLowerCase();
+            document.querySelectorAll('.modelo-parent-row').forEach(row => {
+                const modelo = row.dataset.modelo.toLowerCase();
+                const match = !q || modelo.includes(q);
+                row.style.display = match ? '' : 'none';
+                const safeClass = 'mdetail-' + row.dataset.modelo.replace(/ /g, '_').replace(/'/g, '_');
+                document.querySelectorAll('.' + CSS.escape(safeClass)).forEach(dr => {
+                    dr.style.display = match && openModelos2.has(row.dataset.modelo) ? 'table-row' : 'none';
                 });
             });
         });

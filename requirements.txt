@@ -13,4 +13,8 @@ pillow
 google-auth
 pyjwt
 pytz
-
+scikit-learn
+xgboost
+apscheduler
+numpy
+pandas
