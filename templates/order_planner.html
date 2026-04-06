@@ -1,0 +1,288 @@
+{% extends "base.html" %}
+{% block title %}Order Planner{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+<style>
+    .kpi-card { border-radius: 12px; padding: 18px; text-align: center; color: white; }
+    .kpi-card h3 { margin: 5px 0 0; font-size: 1.8rem; }
+    .kpi-card small { opacity: 0.85; }
+    .brand-btn { min-width: 80px; }
+    .brand-btn.active { font-weight: bold; }
+    .rec-300 { border-left: 4px solid #dc3545; }
+    .rec-200 { border-left: 4px solid #fd7e14; }
+    .rec-150 { border-left: 4px solid #ffc107; }
+    .rec-100 { border-left: 4px solid #28a745; }
+    .rec-0 { border-left: 4px solid #dee2e6; opacity: 0.6; }
+    .doi-danger { color: #dc3545; font-weight: bold; }
+    .doi-warning { color: #fd7e14; font-weight: bold; }
+    .doi-ok { color: #28a745; }
+    .doi-over { color: #6c757d; }
+    .qty-input { width: 80px; text-align: center; }
+</style>
+
+<div class="container-fluid mt-4 px-4">
+    <div class="row mb-3">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div>
+                    <a href="/secretmenu" class="btn btn-outline-secondary btn-sm me-2"><i class="bi bi-arrow-left"></i> Menu</a>
+                    <h2 class="d-inline-block mb-0"><i class="bi bi-clipboard2-data"></i> Order Planner</h2>
+                </div>
+                <div class="d-flex gap-2">
+                    <a href="/retail_metrics" class="btn btn-sm btn-outline-dark"><i class="bi bi-speedometer2"></i> Metrics</a>
+                    <a href="/should_order" class="btn btn-sm btn-outline-warning"><i class="bi bi-cart-check"></i> Should Order</a>
+                </div>
+            </div>
+            <p class="text-muted mt-1">Orden recomendada basada en DOI + turnover + velocidad. Filtra por marca, ajusta cantidades.</p>
+        </div>
+    </div>
+
+    <!-- KPI Cards (dynamic — update on filter) -->
+    <div class="row g-3 mb-4">
+        <div class="col-md-3">
+            <div class="kpi-card" style="background: #3cb44b;">
+                <small>Modelos a Ordenar</small>
+                <h3 id="kpiModels">{{ total_models }}</h3>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="kpi-card" style="background: #4363d8;">
+                <small>Total Unidades</small>
+                <h3 id="kpiUnits">{{ '{:,}'.format(total_units) }}</h3>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="kpi-card" style="background: #dc3545;">
+                <small>Urgentes (DOI &lt;14d)</small>
+                <h3 id="kpiUrgent">0</h3>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="kpi-card" style="background: #6c757d;">
+                <small>Skip / Dead</small>
+                <h3 id="kpiSkip">0</h3>
+            </div>
+        </div>
+    </div>
+
+    <!-- Brand Filter Buttons -->
+    <div class="card shadow-sm mb-3">
+        <div class="card-body py-2">
+            <div class="d-flex flex-wrap gap-2 align-items-center">
+                <strong class="me-2">Marca:</strong>
+                <button class="btn btn-sm btn-dark brand-btn active" data-brand="ALL" onclick="filterBrand('ALL', this)">TODOS</button>
+                {% for b in brands %}
+                <button class="btn btn-sm btn-outline-dark brand-btn" data-brand="{{ b }}" onclick="filterBrand('{{ b }}', this)">{{ b }}</button>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Filter bar -->
+    <div class="mb-3">
+        <div class="input-group">
+            <span class="input-group-text"><i class="bi bi-search"></i></span>
+            <input type="text" class="form-control" id="searchInput" placeholder="Buscar modelo...">
+            <button class="btn btn-outline-danger" onclick="filterStatus('urgent')"><i class="bi bi-exclamation-triangle"></i> Urgentes</button>
+            <button class="btn btn-outline-success" onclick="filterStatus('order')"><i class="bi bi-cart-plus"></i> Solo Ordenar</button>
+            <button class="btn btn-outline-secondary" onclick="filterStatus('skip')"><i class="bi bi-x-circle"></i> Solo Skip</button>
+            <button class="btn btn-outline-dark" onclick="filterStatus('all')">Todos</button>
+        </div>
+    </div>
+
+    <!-- Main Table -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover table-sm mb-0" id="orderTable">
+                    <thead class="table-dark">
+                        <tr>
+                            <th class="osort" data-col="0" data-type="text" style="cursor:pointer">Modelo <i class="bi bi-arrow-down-up"></i></th>
+                            <th class="osort" data-col="1" data-type="text" style="cursor:pointer">Marca <i class="bi bi-arrow-down-up"></i></th>
+                            <th class="osort text-end" data-col="2" data-type="num" style="cursor:pointer">Sold 30d <i class="bi bi-arrow-down-up"></i></th>
+                            <th class="osort text-end" data-col="3" data-type="num" style="cursor:pointer">Stock <i class="bi bi-arrow-down-up"></i></th>
+                            <th class="osort text-end" data-col="4" data-type="num" style="cursor:pointer">DOI <i class="bi bi-arrow-down-up"></i></th>
+                            <th class="osort text-end" data-col="5" data-type="num" style="cursor:pointer">Vta/Dia <i class="bi bi-arrow-down-up"></i></th>
+                            <th class="osort text-end" data-col="6" data-type="num" style="cursor:pointer">Turnover <i class="bi bi-arrow-down-up"></i></th>
+                            <th class="osort text-end" data-col="7" data-type="num" style="cursor:pointer">Revenue <i class="bi bi-arrow-down-up"></i></th>
+                            <th class="osort text-end" data-col="8" data-type="num" style="cursor:pointer">Sell-Thru% <i class="bi bi-arrow-down-up"></i></th>
+                            <th class="text-center" style="min-width:120px;">Order Qty</th>
+                            <th>Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for m in models %}
+                        <tr class="order-row rec-{{ m.rec_qty }}"
+                            data-brand="{{ m.brand }}"
+                            data-qty="{{ m.rec_qty }}"
+                            data-doi="{{ m.doi if m.doi is not none else 999 }}"
+                            data-status="{% if m.rec_qty == 0 %}skip{% elif m.doi is not none and m.doi <= 14 and m.rec_qty > 0 %}urgent{% else %}order{% endif %}">
+                            <td class="fw-bold">{{ m.modelo }}</td>
+                            <td><span class="badge bg-secondary">{{ m.brand }}</span></td>
+                            <td class="text-end">{{ '{:,}'.format(m.sold_30d) }}</td>
+                            <td class="text-end">{{ '{:,}'.format(m.stock) }}</td>
+                            <td class="text-end">
+                                {% if m.doi is none %}
+                                    {% if m.sold_30d > 0 %}<span class="doi-danger">OOS</span>
+                                    {% else %}<span class="text-muted">-</span>{% endif %}
+                                {% elif m.doi <= 7 %}<span class="doi-danger">{{ m.doi }}d</span>
+                                {% elif m.doi <= 14 %}<span class="doi-warning">{{ m.doi }}d</span>
+                                {% elif m.doi <= 45 %}<span class="doi-ok">{{ m.doi }}d</span>
+                                {% elif m.doi <= 90 %}<span class="text-muted">{{ m.doi }}d</span>
+                                {% else %}<span class="doi-over">{{ m.doi }}d</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-end">{{ m.avg_daily }}</td>
+                            <td class="text-end">
+                                {% if m.turnover >= 2 %}<span class="text-danger fw-bold">{{ m.turnover }}x</span>
+                                {% elif m.turnover >= 1 %}<span class="text-success fw-bold">{{ m.turnover }}x</span>
+                                {% elif m.turnover >= 0.5 %}<span class="text-muted">{{ m.turnover }}x</span>
+                                {% elif m.turnover > 0 %}<span class="doi-over">{{ m.turnover }}x</span>
+                                {% else %}-{% endif %}
+                            </td>
+                            <td class="text-end">${{ '{:,.0f}'.format(m.revenue) }}</td>
+                            <td class="text-end">{{ m.sell_through }}%</td>
+                            <td class="text-center">
+                                {% if m.rec_qty > 0 %}
+                                <input type="number" class="form-control form-control-sm qty-input d-inline-block"
+                                       value="{{ m.rec_qty }}" min="0" step="50"
+                                       onchange="updateTotals()">
+                                {% else %}
+                                <span class="text-muted">—</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if 'TOP' in m.rec_reason %}<span class="badge bg-danger">{{ m.rec_reason }}</span>
+                                {% elif 'HIGH' in m.rec_reason %}<span class="badge bg-warning text-dark">{{ m.rec_reason }}</span>
+                                {% elif 'URGENT' in m.rec_reason %}<span class="badge bg-danger">{{ m.rec_reason }}</span>
+                                {% elif 'STRONG' in m.rec_reason %}<span class="badge bg-primary">{{ m.rec_reason }}</span>
+                                {% elif 'MODERATE' in m.rec_reason or 'MIN' in m.rec_reason %}<span class="badge bg-success">{{ m.rec_reason }}</span>
+                                {% elif 'DEAD' in m.rec_reason %}<span class="badge bg-dark">{{ m.rec_reason }}</span>
+                                {% elif 'OVER' in m.rec_reason %}<span class="badge bg-secondary">{{ m.rec_reason }}</span>
+                                {% else %}<span class="text-muted">{{ m.rec_reason }}</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="mb-4">
+        <small class="text-muted">
+            <strong>DOI</strong> = Dias de inventario |
+            <strong>Turnover</strong> > 1x = vende mas de lo que tiene |
+            <span class="doi-danger">Rojo</span> = &lt;7 dias |
+            <span class="doi-warning">Naranja</span> = &lt;14 dias |
+            <span class="doi-ok">Verde</span> = OK |
+            <span class="doi-over">Gris</span> = sobrestockeado |
+            Puedes editar las cantidades directamente en la tabla
+        </small>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    let activeBrand = 'ALL';
+    let activeStatus = 'all';
+
+    // ===== BRAND FILTER =====
+    window.filterBrand = function(brand, btn) {
+        activeBrand = brand;
+        document.querySelectorAll('.brand-btn').forEach(b => {
+            b.classList.remove('active', 'btn-dark');
+            b.classList.add('btn-outline-dark');
+        });
+        btn.classList.remove('btn-outline-dark');
+        btn.classList.add('active', 'btn-dark');
+        applyFilters();
+    };
+
+    // ===== STATUS FILTER =====
+    window.filterStatus = function(status) {
+        activeStatus = status;
+        applyFilters();
+    };
+
+    // ===== SEARCH =====
+    document.getElementById('searchInput').addEventListener('input', applyFilters);
+
+    function applyFilters() {
+        const q = document.getElementById('searchInput').value.toLowerCase();
+        document.querySelectorAll('.order-row').forEach(row => {
+            const brand = row.dataset.brand;
+            const status = row.dataset.status;
+            const text = row.textContent.toLowerCase();
+
+            const matchBrand = activeBrand === 'ALL' || brand === activeBrand;
+            const matchStatus = activeStatus === 'all' || status === activeStatus;
+            const matchSearch = !q || text.includes(q);
+
+            row.style.display = (matchBrand && matchStatus && matchSearch) ? '' : 'none';
+        });
+        updateTotals();
+    }
+
+    // ===== UPDATE KPI TOTALS =====
+    window.updateTotals = function() {
+        let totalModels = 0, totalUnits = 0, urgentCount = 0, skipCount = 0;
+
+        document.querySelectorAll('.order-row').forEach(row => {
+            if (row.style.display === 'none') return;
+
+            const input = row.querySelector('.qty-input');
+            const qty = input ? parseInt(input.value) || 0 : 0;
+            const doi = parseFloat(row.dataset.doi);
+
+            if (qty > 0) {
+                totalModels++;
+                totalUnits += qty;
+                if (doi <= 14) urgentCount++;
+            } else {
+                skipCount++;
+            }
+        });
+
+        document.getElementById('kpiModels').textContent = totalModels;
+        document.getElementById('kpiUnits').textContent = totalUnits.toLocaleString();
+        document.getElementById('kpiUrgent').textContent = urgentCount;
+        document.getElementById('kpiSkip').textContent = skipCount;
+    };
+
+    // ===== SORTING =====
+    const table = document.getElementById('orderTable');
+    const tbody = table.querySelector('tbody');
+    let sortCol = -1, sortAsc = true;
+
+    document.querySelectorAll('.osort').forEach(th => {
+        th.addEventListener('click', function() {
+            const col = parseInt(this.dataset.col);
+            const type = this.dataset.type;
+            if (sortCol === col) sortAsc = !sortAsc; else { sortCol = col; sortAsc = true; }
+
+            const rows = Array.from(tbody.querySelectorAll('tr'));
+            rows.sort((a, b) => {
+                let va = a.cells[col].textContent.trim().replace(/[$,%xd]/g, '');
+                let vb = b.cells[col].textContent.trim().replace(/[$,%xd]/g, '');
+                if (va === '-' || va === '—' || va === 'OOS') va = type === 'num' ? (sortAsc ? '999999' : '-1') : va;
+                if (vb === '-' || vb === '—' || vb === 'OOS') vb = type === 'num' ? (sortAsc ? '999999' : '-1') : vb;
+                if (type === 'num') {
+                    va = parseFloat(va) || 0;
+                    vb = parseFloat(vb) || 0;
+                    return sortAsc ? va - vb : vb - va;
+                }
+                return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+            });
+            rows.forEach(r => tbody.appendChild(r));
+        });
+    });
+
+    // Initial KPI calc
+    updateTotals();
+});
+</script>
+{% endblock %}

@@ -1,5 +1,6 @@
 # app.py - FastAPI with templates for inventory management
 import ml_engine
+import market_intel
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 import jwt
@@ -2451,6 +2452,196 @@ async def ml_dashboard_page(request: Request):
             request=request,
             name="error.html",
             context={"error_message": f"Error loading ML dashboard: {str(e)}"}
+        )
+
+
+# ── Order Planner Endpoint ──
+
+@app.get("/secretmenu/order-planner", response_class=HTMLResponse)
+async def order_planner(request: Request):
+    """Order Planner: interactive DOI/turnover-based order recommendations."""
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/rpc/get_retail_metrics",
+                headers=HEADERS,
+                params={"group_by_field": "modelo", "days_back": 30}
+            )
+
+        if resp.status_code >= 400:
+            raise Exception(f"RPC error: {resp.text}")
+
+        rows = resp.json()
+
+        # Classify each modelo into a brand
+        brand_map = {
+            "IPHONE": "APPLE", "IPAD": "APPLE",
+            "GALAXY": "SAMSUNG", "SAMSUNG": "SAMSUNG",
+            "S25": "SAMSUNG", "S24": "SAMSUNG", "S23": "SAMSUNG",
+            "S26": "SAMSUNG", "A06": "SAMSUNG", "A07": "SAMSUNG",
+            "A05": "SAMSUNG", "A15": "SAMSUNG", "A16": "SAMSUNG",
+            "A17": "SAMSUNG", "A23": "SAMSUNG", "A26": "SAMSUNG",
+            "A35": "SAMSUNG", "A36": "SAMSUNG", "A37": "SAMSUNG",
+            "A55": "SAMSUNG", "A56": "SAMSUNG", "A57": "SAMSUNG",
+            "NOTE": "SAMSUNG", "FLIP": "SAMSUNG", "FOLD": "SAMSUNG",
+            "EDGE": "MOTOROLA", "MOTO": "MOTOROLA", "RAZR": "MOTOROLA",
+            "G06": "MOTOROLA", "G24": "MOTOROLA", "G56": "MOTOROLA",
+            "G86": "MOTOROLA", "G55": "MOTOROLA", "G8": "MOTOROLA",
+            "HONOR": "HONOR", "MAGIC": "HONOR", "X9D": "HONOR",
+            "X9C": "HONOR", "X6C": "HONOR", "X7D": "HONOR",
+            "X8C": "HONOR", "X5C": "HONOR", "X8D": "HONOR",
+            "REDMI": "XIAOMI", "MI ": "XIAOMI", "POCO": "XIAOMI",
+            "14C": "XIAOMI", "14T": "XIAOMI",
+            "RENO": "OPPO", "OPPO": "OPPO", "FIND": "OPPO",
+            "V60": "VIVO", "V50": "VIVO", "V40": "VIVO", "VIVO": "VIVO",
+            "ZTE": "ZTE", "BLADE": "ZTE", "AXON": "ZTE",
+            "REALME": "REALME", "INFINIX": "INFINIX",
+            "TECNO": "TECNO", "CAMON": "TECNO",
+            "HUAWEI": "HUAWEI", "NOVA": "HUAWEI", "MATE": "HUAWEI",
+            "P30": "HUAWEI",
+        }
+
+        def get_brand(modelo_name):
+            name = modelo_name.upper()
+            for key, brand in brand_map.items():
+                if name.startswith(key):
+                    return brand
+            return "OTHER"
+
+        models = []
+        brands_set = set()
+        for r in rows:
+            name = r.get("group_name", "")
+            sold = int(r.get("units_sold_total", 0) or 0)
+            stock = int(r.get("current_stock_total", 0) or 0)
+            doi = r.get("days_of_inventory")
+            avg_daily = float(r.get("avg_daily_sales", 0) or 0)
+            turnover = float(r.get("turnover_rate", 0) or 0) if r.get("turnover_rate") is not None else 0
+            rev = float(r.get("revenue_total", 0) or 0)
+            is_dead = r.get("is_dead_stock", False)
+            sell_through = float(r.get("sell_through_pct", 0) or 0) if r.get("sell_through_pct") is not None else 0
+
+            brand = get_brand(name)
+            brands_set.add(brand)
+
+            # Order recommendation logic (DOI + turnover first, volume second)
+            rec_qty = 0
+            rec_reason = ""
+            if is_dead or (sold == 0 and stock > 0):
+                rec_qty = 0
+                rec_reason = "DEAD"
+            elif sold < 10:
+                rec_qty = 0
+                rec_reason = "LOW DEMAND"
+            elif doi is not None and float(doi) > 200:
+                rec_qty = 0
+                rec_reason = "OVERSTOCKED"
+            elif sold >= 500:
+                rec_qty = 300
+                rec_reason = "TOP SELLER"
+            elif sold >= 200:
+                rec_qty = 200
+                rec_reason = "HIGH DEMAND"
+            elif sold >= 100:
+                rec_qty = 150
+                rec_reason = "STRONG"
+            elif sold >= 50:
+                rec_qty = 100
+                rec_reason = "MODERATE"
+            elif sold >= 30:
+                rec_qty = 100
+                rec_reason = "MIN ORDER"
+            else:
+                rec_qty = 0
+                rec_reason = "SKIP"
+
+            # Urgency adjustments based on DOI
+            if doi is not None and float(doi) <= 14 and sold >= 30:
+                rec_qty = max(rec_qty, 200)
+                rec_reason += " URGENT"
+            elif doi is not None and float(doi) > 90 and rec_qty > 0:
+                rec_qty = max(100, rec_qty - 100)
+                rec_reason += " (overstocked)"
+
+            models.append({
+                "modelo": name,
+                "brand": brand,
+                "sold_30d": sold,
+                "stock": stock,
+                "doi": round(float(doi), 1) if doi is not None else None,
+                "avg_daily": round(avg_daily, 1),
+                "turnover": round(turnover, 2),
+                "revenue": rev,
+                "sell_through": round(sell_through, 1),
+                "is_dead": is_dead,
+                "rec_qty": rec_qty,
+                "rec_reason": rec_reason,
+            })
+
+        models.sort(key=lambda x: x["sold_30d"], reverse=True)
+        brands_list = sorted(brands_set)
+
+        return templates.TemplateResponse(
+            request=request,
+            name="order_planner.html",
+            context={
+                "models": models,
+                "brands": brands_list,
+                "total_models": len([m for m in models if m["rec_qty"] > 0]),
+                "total_units": sum(m["rec_qty"] for m in models),
+            }
+        )
+    except Exception as e:
+        traceback.print_exc()
+        return templates.TemplateResponse(
+            request=request,
+            name="error.html",
+            context={"error_message": f"Error loading Order Planner: {str(e)}"}
+        )
+
+
+# ── Market Intelligence Endpoints ──
+
+@app.post("/market-intel/scan")
+async def market_intel_scan():
+    """Run full market intelligence scan."""
+    try:
+        result = await market_intel.run_market_scan()
+        return json.loads(json.dumps(result, default=str))
+    except Exception as e:
+        traceback.print_exc()
+        return {"error": str(e)}
+
+
+@app.get("/secretmenu/market-intel", response_class=HTMLResponse)
+async def market_intel_dashboard(request: Request):
+    """Market Intelligence dashboard."""
+    try:
+        # Try Supabase tables first, fall back to live scan
+        data = await market_intel.get_dashboard_data()
+        if not data.get("gaps") and not data.get("alerts"):
+            # Tables might not exist yet — run live scan
+            scan = await market_intel.run_market_scan()
+            data = {
+                "gaps": scan.get("gaps", []),
+                "no_cases": scan.get("no_cases_models", []),
+                "stockouts": [g for g in scan.get("gaps", []) if g.get("our_was_stockout")],
+                "high_opportunity": [g for g in scan.get("gaps", []) if g.get("opportunity_score", 0) >= 40],
+                "alerts": scan.get("alerts", []),
+                "correlations": [],
+                "summary": scan.get("summary", {}),
+            }
+        return templates.TemplateResponse(
+            request=request,
+            name="market_intel.html",
+            context={"data": data}
+        )
+    except Exception as e:
+        traceback.print_exc()
+        return templates.TemplateResponse(
+            request=request,
+            name="error.html",
+            context={"error_message": f"Error loading Market Intel: {str(e)}"}
         )
 
 
