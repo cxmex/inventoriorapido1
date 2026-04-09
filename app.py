@@ -2600,6 +2600,321 @@ async def order_planner(request: Request):
         )
 
 
+# ── Yearly Forecast Endpoints ──
+
+@app.get("/secretmenu/yearly-forecast", response_class=HTMLResponse)
+async def yearly_forecast(request: Request):
+    """Yearly sales view with seasonality analysis and ML forecasting."""
+    try:
+        import numpy as np
+        import pandas as pd
+
+        # Fetch monthly sales from RPC
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/rpc/get_monthly_sales_by_branch",
+                headers=HEADERS,
+            )
+
+        if resp.status_code >= 400:
+            raise Exception(f"RPC error {resp.status_code}: {resp.text}")
+
+        rows = resp.json()
+        if not rows:
+            return templates.TemplateResponse(
+                request=request,
+                name="yearly_forecast.html",
+                context={"has_data": False, "error_msg": "No hay datos de ventas mensuales. Ejecuta la migracion SQL primero."},
+            )
+
+        # Build pandas DataFrame
+        df = pd.DataFrame(rows)
+        df["month_date"] = pd.to_datetime(df["month_date"], format="%Y-%m")
+        for col in ["t1_revenue", "t2_revenue", "total_revenue", "t1_qty", "t2_qty", "total_qty"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        df = df.sort_values("month_date").reset_index(drop=True)
+
+        # ── Handle incomplete current month ──
+        mexico_tz = pytz.timezone("America/Mexico_City")
+        today = datetime.now(mexico_tz)
+        current_month_start = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        import calendar
+        days_in_current_month = calendar.monthrange(today.year, today.month)[1]
+        days_elapsed = today.day
+        current_month_partial = None
+
+        # Check if the last row is the current incomplete month
+        if len(df) > 0:
+            last_month = df["month_date"].iloc[-1]
+            if last_month.year == today.year and last_month.month == today.month:
+                # Extract partial month data for display
+                partial_row = df.iloc[-1]
+                scale_factor = days_in_current_month / max(days_elapsed, 1)
+                current_month_partial = {
+                    "month": today.strftime("%b %Y"),
+                    "days_elapsed": days_elapsed,
+                    "days_total": days_in_current_month,
+                    "days_remaining": days_in_current_month - days_elapsed,
+                    "actual_t1": round(float(partial_row["t1_revenue"]), 2),
+                    "actual_t2": round(float(partial_row["t2_revenue"]), 2),
+                    "actual_total": round(float(partial_row["total_revenue"]), 2),
+                    "projected_t1": round(float(partial_row["t1_revenue"]) * scale_factor, 2),
+                    "projected_t2": round(float(partial_row["t2_revenue"]) * scale_factor, 2),
+                    "projected_total": round(float(partial_row["total_revenue"]) * scale_factor, 2),
+                    "scale_factor": round(scale_factor, 2),
+                }
+                # Remove incomplete month from training data
+                df = df.iloc[:-1].reset_index(drop=True)
+
+        # ── Historical chart data (only complete months) ──
+        month_labels = [d.strftime("%Y-%m") for d in df["month_date"]]
+        month_labels_short = [d.strftime("%b %y") for d in df["month_date"]]
+
+        chart_data = {
+            "labels": month_labels_short,
+            "datasets": [
+                {
+                    "label": "Terex 1",
+                    "data": [round(v, 2) for v in df["t1_revenue"]],
+                    "backgroundColor": "rgba(54, 162, 235, 0.7)",
+                    "borderColor": "rgba(54, 162, 235, 1)",
+                    "borderWidth": 2,
+                },
+                {
+                    "label": "Terex 2",
+                    "data": [round(v, 2) for v in df["t2_revenue"]],
+                    "backgroundColor": "rgba(255, 159, 64, 0.7)",
+                    "borderColor": "rgba(255, 159, 64, 1)",
+                    "borderWidth": 2,
+                },
+                {
+                    "label": "Total",
+                    "data": [round(v, 2) for v in df["total_revenue"]],
+                    "backgroundColor": "rgba(75, 192, 192, 0.7)",
+                    "borderColor": "rgba(75, 192, 192, 1)",
+                    "borderWidth": 2,
+                },
+            ],
+        }
+
+        # ── Year-over-Year seasonality data ──
+        yoy_data = {}
+        for _, row in df.iterrows():
+            yr = int(row["month_date"].year)
+            mn = int(row["month_date"].month)
+            if yr not in yoy_data:
+                yoy_data[yr] = {}
+            yoy_data[yr][mn] = round(float(row["total_revenue"]), 2)
+
+        month_names = ["Ene", "Feb", "Mar", "Abr", "May", "Jun",
+                       "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
+        yoy_colors = [
+            "rgba(54, 162, 235, 1)", "rgba(255, 99, 132, 1)",
+            "rgba(75, 192, 192, 1)", "rgba(255, 159, 64, 1)",
+            "rgba(153, 102, 255, 1)", "rgba(255, 205, 86, 1)",
+        ]
+        yoy_datasets = []
+        for i, yr in enumerate(sorted(yoy_data.keys())):
+            yoy_datasets.append({
+                "label": str(yr),
+                "data": [yoy_data[yr].get(m, 0) for m in range(1, 13)],
+                "borderColor": yoy_colors[i % len(yoy_colors)],
+                "backgroundColor": yoy_colors[i % len(yoy_colors)].replace("1)", "0.1)"),
+                "borderWidth": 2,
+                "fill": False,
+                "tension": 0.3,
+            })
+        yoy_chart = {"labels": month_names, "datasets": yoy_datasets}
+
+        # ── Table data ──
+        month_totals_t1 = {}
+        month_totals_t2 = {}
+        month_totals_total = {}
+        for _, row in df.iterrows():
+            label = row["month_date"].strftime("%b %Y")
+            month_totals_t1[label] = round(float(row["t1_revenue"]), 2)
+            month_totals_t2[label] = round(float(row["t2_revenue"]), 2)
+            month_totals_total[label] = round(float(row["total_revenue"]), 2)
+
+        # ── ML Forecasting (next 6 months) ──
+        forecast_months = 6
+        forecasts = {}
+        model_details = {}
+
+        # Prepare time series
+        ts = df.set_index("month_date")["total_revenue"].astype(float)
+        ts = ts.asfreq("MS", fill_value=0)
+
+        # Model 1: ARIMA / SARIMAX
+        try:
+            from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+            # Use seasonal order (1,1,1)(1,1,1,12) if enough data, else simpler
+            if len(ts) >= 24:
+                model = SARIMAX(ts, order=(1, 1, 1), seasonal_order=(1, 1, 1, 12),
+                                enforce_stationarity=False, enforce_invertibility=False)
+            else:
+                model = SARIMAX(ts, order=(1, 1, 1), seasonal_order=(0, 0, 0, 0),
+                                enforce_stationarity=False, enforce_invertibility=False)
+            fit = model.fit(disp=False, maxiter=200)
+            pred = fit.forecast(steps=forecast_months)
+            forecasts["SARIMAX"] = [max(0, round(v, 2)) for v in pred.values]
+            model_details["SARIMAX"] = {"aic": round(fit.aic, 1)}
+        except Exception as e:
+            print(f"SARIMAX error: {e}", flush=True)
+            forecasts["SARIMAX"] = None
+
+        # Model 2: XGBoost with seasonal features
+        try:
+            import xgboost as xgb
+
+            feat_df = df[["month_date", "total_revenue"]].copy()
+            feat_df["month"] = feat_df["month_date"].dt.month
+            feat_df["year"] = feat_df["month_date"].dt.year
+            feat_df["month_sin"] = np.sin(2 * np.pi * feat_df["month"] / 12)
+            feat_df["month_cos"] = np.cos(2 * np.pi * feat_df["month"] / 12)
+            feat_df["trend"] = range(len(feat_df))
+            feat_df["lag_1"] = feat_df["total_revenue"].shift(1).fillna(0)
+            feat_df["lag_2"] = feat_df["total_revenue"].shift(2).fillna(0)
+            feat_df["lag_3"] = feat_df["total_revenue"].shift(3).fillna(0)
+            feat_df["lag_12"] = feat_df["total_revenue"].shift(12).fillna(0)
+            feat_df["rolling_3"] = feat_df["total_revenue"].rolling(3, min_periods=1).mean()
+            feat_df["rolling_6"] = feat_df["total_revenue"].rolling(6, min_periods=1).mean()
+
+            feature_cols = ["month", "month_sin", "month_cos", "trend",
+                            "lag_1", "lag_2", "lag_3", "lag_12", "rolling_3", "rolling_6"]
+            X = feat_df[feature_cols].values
+            y = feat_df["total_revenue"].values
+
+            xgb_model = xgb.XGBRegressor(
+                n_estimators=100, max_depth=4, learning_rate=0.1,
+                objective="reg:squarederror", random_state=42
+            )
+            xgb_model.fit(X, y)
+
+            # Predict future months iteratively
+            xgb_preds = []
+            last_date = df["month_date"].iloc[-1]
+            recent_vals = list(feat_df["total_revenue"].values)
+
+            for step in range(forecast_months):
+                future_date = last_date + pd.DateOffset(months=step + 1)
+                m = future_date.month
+                trend_val = len(feat_df) + step
+                lag1 = recent_vals[-1] if len(recent_vals) >= 1 else 0
+                lag2 = recent_vals[-2] if len(recent_vals) >= 2 else 0
+                lag3 = recent_vals[-3] if len(recent_vals) >= 3 else 0
+                lag12 = recent_vals[-12] if len(recent_vals) >= 12 else 0
+                roll3 = np.mean(recent_vals[-3:]) if len(recent_vals) >= 3 else np.mean(recent_vals)
+                roll6 = np.mean(recent_vals[-6:]) if len(recent_vals) >= 6 else np.mean(recent_vals)
+
+                row_feat = np.array([[m, np.sin(2 * np.pi * m / 12),
+                                      np.cos(2 * np.pi * m / 12), trend_val,
+                                      lag1, lag2, lag3, lag12, roll3, roll6]])
+                pred_val = float(xgb_model.predict(row_feat)[0])
+                pred_val = max(0, pred_val)
+                xgb_preds.append(round(pred_val, 2))
+                recent_vals.append(pred_val)
+
+            forecasts["XGBoost"] = xgb_preds
+        except Exception as e:
+            print(f"XGBoost forecast error: {e}", flush=True)
+            forecasts["XGBoost"] = None
+
+        # Model 3: Holt-Winters Exponential Smoothing
+        try:
+            from statsmodels.tsa.holtwinters import ExponentialSmoothing
+
+            if len(ts) >= 24:
+                hw_model = ExponentialSmoothing(
+                    ts, trend="add", seasonal="add", seasonal_periods=12
+                ).fit(optimized=True)
+            else:
+                hw_model = ExponentialSmoothing(
+                    ts, trend="add", seasonal=None
+                ).fit(optimized=True)
+            hw_pred = hw_model.forecast(forecast_months)
+            forecasts["Holt-Winters"] = [max(0, round(v, 2)) for v in hw_pred.values]
+        except Exception as e:
+            print(f"Holt-Winters error: {e}", flush=True)
+            forecasts["Holt-Winters"] = None
+
+        # Ensemble: average of available models
+        available = {k: v for k, v in forecasts.items() if v is not None}
+        if available:
+            ensemble = []
+            for i in range(forecast_months):
+                vals = [v[i] for v in available.values()]
+                ensemble.append(round(np.mean(vals), 2))
+            forecasts["Ensemble"] = ensemble
+        else:
+            forecasts["Ensemble"] = None
+
+        # Build forecast chart data
+        last_date = df["month_date"].iloc[-1]
+        forecast_labels = []
+        for i in range(forecast_months):
+            fd = last_date + pd.DateOffset(months=i + 1)
+            forecast_labels.append(fd.strftime("%b %y"))
+
+        forecast_colors = {
+            "SARIMAX": "rgba(255, 99, 132, 1)",
+            "XGBoost": "rgba(54, 162, 235, 1)",
+            "Holt-Winters": "rgba(255, 159, 64, 1)",
+            "Ensemble": "rgba(75, 192, 192, 1)",
+        }
+        forecast_datasets = []
+        for name, preds in forecasts.items():
+            if preds is None:
+                continue
+            forecast_datasets.append({
+                "label": name,
+                "data": preds,
+                "borderColor": forecast_colors.get(name, "rgba(153, 102, 255, 1)"),
+                "backgroundColor": forecast_colors.get(name, "rgba(153, 102, 255, 0.1)").replace("1)", "0.1)"),
+                "borderWidth": 3 if name == "Ensemble" else 2,
+                "borderDash": [] if name == "Ensemble" else [5, 5],
+                "fill": False,
+                "tension": 0.3,
+            })
+        forecast_chart = {"labels": forecast_labels, "datasets": forecast_datasets}
+
+        # Forecast table
+        forecast_table = {}
+        for name, preds in forecasts.items():
+            if preds is not None:
+                forecast_table[name] = dict(zip(forecast_labels, preds))
+
+        return templates.TemplateResponse(
+            request=request,
+            name="yearly_forecast.html",
+            context={
+                "has_data": True,
+                "chart_data": chart_data,
+                "yoy_chart": yoy_chart,
+                "month_totals_t1": month_totals_t1,
+                "month_totals_t2": month_totals_t2,
+                "month_totals_total": month_totals_total,
+                "forecast_chart": forecast_chart,
+                "forecast_table": forecast_table,
+                "forecast_labels": forecast_labels,
+                "forecasts": forecasts,
+                "model_details": model_details,
+                "num_months": len(df),
+                "years_available": sorted(yoy_data.keys()),
+                "current_month_partial": current_month_partial,
+            },
+        )
+
+    except Exception as e:
+        traceback.print_exc()
+        return templates.TemplateResponse(
+            request=request,
+            name="error.html",
+            context={"error_message": f"Error loading Yearly Forecast: {str(e)}"},
+        )
+
+
 # ── Market Intelligence Endpoints ──
 
 @app.post("/market-intel/scan")
@@ -4097,60 +4412,83 @@ async def ver_imagenes(request: Request):
 
 @app.get("/api/estilos-with-images")
 async def get_estilos_with_images():
-    """Get estilos with images and sales data"""
+    """Get estilos with images and sales data.
+    Priority for thumbnail: images_estilos bucket first, then image_uploads (color-level) as fallback.
+    """
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            # Calculate 3 months ago
             three_months_ago = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
-            
-            # Get all estilos with prioridad=1
-            estilos_response = await client.get(
-                f"{SUPABASE_URL}/rest/v1/inventario_estilos",
-                headers=HEADERS,
-                params={"select": "id,nombre", "prioridad": "eq.1", "order": "nombre"}
+
+            # Fetch estilos + color-level images in parallel
+            estilos_resp, images_resp = await asyncio.gather(
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/inventario_estilos",
+                    headers=HEADERS,
+                    params={"select": "id,nombre", "prioridad": "eq.1", "order": "nombre"}
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/image_uploads",
+                    headers=HEADERS,
+                    params={"select": "estilo_id,color_id,public_url,file_name,description"}
+                ),
             )
-            
-            estilos_data = estilos_response.json()
-            
-            # Get images data
-            images_response = await client.get(
-                f"{SUPABASE_URL}/rest/v1/image_uploads",
-                headers=HEADERS,
-                params={"select": "estilo_id,color_id,public_url,file_name,description"}
-            )
-            
-            # Count images by estilo_id
-            image_counts = {}
+
+            estilos_data = estilos_resp.json()
+
+            # Index color-level images from image_uploads
+            color_image_counts = {}
             color_counts = {}
-            sample_images = {}
-            
-            if images_response.status_code == 200:
-                images_data = images_response.json()
-                for image in images_data:
-                    estilo_id = image.get('estilo_id')
-                    color_id = image.get('color_id')
-                    
-                    if estilo_id is not None:
-                        image_counts[estilo_id] = image_counts.get(estilo_id, 0) + 1
-                        
-                        if estilo_id not in color_counts:
-                            color_counts[estilo_id] = set()
-                        if color_id is not None:
-                            color_counts[estilo_id].add(color_id)
-                        
-                        if estilo_id not in sample_images and image.get('public_url'):
-                            sample_images[estilo_id] = {
-                                "public_url": image.get('public_url'),
-                                "file_name": image.get('file_name'),
-                                "description": image.get('description', '')
+            color_sample_images = {}
+
+            if images_resp.status_code == 200:
+                for image in images_resp.json():
+                    eid = image.get('estilo_id')
+                    cid = image.get('color_id')
+                    if eid is not None:
+                        color_image_counts[eid] = color_image_counts.get(eid, 0) + 1
+                        if eid not in color_counts:
+                            color_counts[eid] = set()
+                        if cid is not None:
+                            color_counts[eid].add(cid)
+                        if eid not in color_sample_images and image.get('public_url'):
+                            color_sample_images[eid] = {
+                                "public_url": image['public_url'],
+                                "file_name": image.get('file_name', ''),
+                                "description": image.get('description', ''),
                             }
-            
-            # Build response with individual sales queries for each estilo
+
+            # For each estilo, check images_estilos bucket for estilo-level thumbnail
+            estilo_bucket_images = {}
+            bucket_tasks = []
+            for estilo in estilos_data:
+                eid = int(estilo['id'])
+                bucket_tasks.append((eid, client.post(
+                    f"{SUPABASE_URL}/storage/v1/object/list/images_estilos",
+                    headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
+                    json={"prefix": f"{eid}/", "limit": 1},
+                )))
+
+            for eid, task in bucket_tasks:
+                try:
+                    resp = await task
+                    if resp.status_code == 200:
+                        files = resp.json()
+                        for f in files:
+                            if f.get("name") and f.get("id"):
+                                estilo_bucket_images[eid] = {
+                                    "public_url": f"{SUPABASE_URL}/storage/v1/object/public/images_estilos/{eid}/{f['name']}",
+                                    "file_name": f['name'],
+                                    "description": "",
+                                }
+                                break
+                except Exception:
+                    pass
+
+            # Build response
             estilos = []
             for estilo in estilos_data:
                 estilo_id = int(estilo['id'])
-                
-                # Get sales for THIS specific estilo
+
                 sales_response = await client.get(
                     f"{SUPABASE_URL}/rest/v1/ventas_terex1",
                     headers=HEADERS,
@@ -4160,23 +4498,26 @@ async def get_estilos_with_images():
                         "fecha": f"gte.{three_months_ago}"
                     }
                 )
-                
+
                 sales_total = 0
                 if sales_response.status_code == 200:
-                    sales_data = sales_response.json()
-                    sales_total = sum(record.get('qty', 0) for record in sales_data)
-                
+                    sales_total = sum(r.get('qty', 0) for r in sales_response.json())
+
+                # Priority: images_estilos bucket > image_uploads (color-level)
+                sample_image = estilo_bucket_images.get(estilo_id) or color_sample_images.get(estilo_id)
+
                 estilos.append({
                     "id": estilo_id,
                     "nombre": estilo['nombre'],
-                    "total_images": image_counts.get(estilo_id, 0),
+                    "total_images": color_image_counts.get(estilo_id, 0),
                     "total_colors_with_images": len(color_counts.get(estilo_id, set())),
                     "sales_last_3_months": sales_total,
-                    "sample_image": sample_images.get(estilo_id, None)
+                    "sample_image": sample_image,
+                    "has_estilo_image": estilo_id in estilo_bucket_images,
                 })
-            
+
             return {"estilos": estilos}
-    
+
     except Exception as e:
         logger.error(f"Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -4201,11 +4542,11 @@ async def get_colors_with_images(estilo_id: int):
             if not estilo_data:
                 raise HTTPException(status_code=404, detail="Estilo not found")
             
-            # Get available colors for this estilo (from inventory with terex1 > 0)
+            # Get all colors for this estilo (any barcode in inventario1)
             inventory_response = await client.get(
                 f"{SUPABASE_URL}/rest/v1/inventario1",
                 headers=HEADERS,
-                params={"select": "color_id", "estilo_id": f"eq.{estilo_id}", "terex1": "gt.0"}
+                params={"select": "color_id", "estilo_id": f"eq.{estilo_id}"}
             )
             
             if inventory_response.status_code != 200:
@@ -4267,6 +4608,64 @@ async def get_colors_with_images(estilo_id: int):
     except Exception as e:
         logger.error(f"Error in get_colors_with_images: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/estilo/{estilo_id}/color/{color_id}/upload")
+async def upload_color_image(estilo_id: int, color_id: int, file: UploadFile = File(...)):
+    """Upload image for a specific estilo+color and save to image_uploads table."""
+    try:
+        contents = await file.read()
+        if len(contents) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Archivo demasiado grande (max 10MB)")
+
+        ext = file.filename.rsplit(".", 1)[-1] if "." in file.filename else "jpg"
+        filename = f"{uuid.uuid4().hex[:12]}.{ext}"
+        storage_path = f"{estilo_id}/{color_id}/{filename}"
+        bucket = "images-colores"
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            # Upload to Supabase Storage
+            resp = await client.post(
+                f"{SUPABASE_URL}/storage/v1/object/{bucket}/{storage_path}",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": file.content_type or "image/jpeg",
+                },
+                content=contents,
+            )
+
+            if resp.status_code >= 400:
+                raise HTTPException(status_code=resp.status_code, detail=f"Storage error: {resp.text}")
+
+            public_url = f"{SUPABASE_URL}/storage/v1/object/public/{bucket}/{storage_path}"
+
+            # Save metadata to image_uploads table
+            record = {
+                "estilo_id": estilo_id,
+                "color_id": color_id,
+                "file_name": file.filename,
+                "file_path": storage_path,
+                "public_url": public_url,
+                "description": "",
+            }
+            db_resp = await client.post(
+                f"{SUPABASE_URL}/rest/v1/image_uploads",
+                headers={**HEADERS, "Prefer": "return=representation"},
+                json=record,
+            )
+
+            print(f"DB insert response: status={db_resp.status_code} body={db_resp.text}", flush=True)
+            if db_resp.status_code >= 400:
+                print(f"image_uploads insert error: {db_resp.text}", flush=True)
+                raise HTTPException(status_code=500, detail=f"Imagen subida pero error guardando en BD: {db_resp.text}")
+
+        return JSONResponse({"ok": True, "url": public_url, "file_name": file.filename})
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.delete("/api/image/{image_id}")
 async def delete_image(image_id: int):

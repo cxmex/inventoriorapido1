@@ -1,0 +1,521 @@
+{% extends "base.html" %}
+
+{% block title %}Yearly Forecast{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h2>Yearly Forecast</h2>
+                    <p class="text-muted mb-0">Estacionalidad, tendencias y predicciones de ventas</p>
+                </div>
+                <div>
+                    <a href="/secretmenu" class="btn btn-outline-secondary me-2"><i class="bi bi-arrow-left"></i> Menu</a>
+                    <button class="btn btn-outline-primary" onclick="window.print()"><i class="bi bi-printer"></i> Imprimir</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% if not has_data %}
+    <div class="alert alert-warning">
+        <h5>Sin datos</h5>
+        <p>{{ error_msg | default("No hay datos disponibles.") }}</p>
+        <p class="mb-0">Asegurate de ejecutar <code>migrations_yearly_forecast.sql</code> en el SQL Editor de Supabase.</p>
+    </div>
+    {% else %}
+
+    <!-- Summary Cards -->
+    <div class="row g-3 mb-4">
+        <div class="col-md-3">
+            <div class="card text-white" style="background-color: #1f77b4;">
+                <div class="card-body text-center">
+                    <h6 class="card-title">Meses de Datos</h6>
+                    <h3>{{ num_months }}</h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-white bg-success">
+                <div class="card-body text-center">
+                    <h6 class="card-title">Anos Disponibles</h6>
+                    <h3>{{ years_available|length }}</h3>
+                    <small>{{ years_available|join(", ") }}</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-white" style="background-color: rgba(255, 99, 132, 1);">
+                <div class="card-body text-center">
+                    <h6 class="card-title">Modelos de Prediccion</h6>
+                    <h3>{{ forecasts|length }}</h3>
+                    <small>SARIMAX, XGBoost, Holt-Winters</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-white" style="background-color: rgba(75, 192, 192, 1);">
+                <div class="card-body text-center">
+                    <h6 class="card-title">Promedio Mensual</h6>
+                    {% set vals = month_totals_total.values()|list %}
+                    {% if vals|length > 0 %}
+                        {% set total_sum = namespace(v=0) %}
+                        {% for v in vals %}{% set total_sum.v = total_sum.v + v %}{% endfor %}
+                        <h3>${{ '{:,.0f}'.format(total_sum.v / vals|length) }}</h3>
+                    {% else %}
+                        <h3>$0</h3>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Current Month Projection -->
+    {% if current_month_partial %}
+    <div class="card shadow-sm mb-4 border-warning">
+        <div class="card-header bg-warning bg-opacity-25">
+            <h5 class="mb-0"><i class="bi bi-clock-history"></i> Mes en Curso: {{ current_month_partial.month }} ({{ current_month_partial.days_elapsed }} de {{ current_month_partial.days_total }} dias)</h5>
+        </div>
+        <div class="card-body">
+            <div class="progress mb-3" style="height: 25px;">
+                <div class="progress-bar bg-warning" role="progressbar"
+                     style="width: {{ (current_month_partial.days_elapsed / current_month_partial.days_total * 100)|round(0) }}%;"
+                     aria-valuenow="{{ current_month_partial.days_elapsed }}"
+                     aria-valuemin="0" aria-valuemax="{{ current_month_partial.days_total }}">
+                    {{ (current_month_partial.days_elapsed / current_month_partial.days_total * 100)|round(0) }}% del mes
+                </div>
+            </div>
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <div class="card border-secondary">
+                        <div class="card-body text-center">
+                            <h6 class="text-muted">Actual ({{ current_month_partial.days_elapsed }} dias)</h6>
+                            <div class="row">
+                                <div class="col-4">
+                                    <small class="text-muted">T1</small>
+                                    <h6>${{ '{:,.0f}'.format(current_month_partial.actual_t1) }}</h6>
+                                </div>
+                                <div class="col-4">
+                                    <small class="text-muted">T2</small>
+                                    <h6>${{ '{:,.0f}'.format(current_month_partial.actual_t2) }}</h6>
+                                </div>
+                                <div class="col-4">
+                                    <small class="text-muted">Total</small>
+                                    <h5 class="fw-bold">${{ '{:,.0f}'.format(current_month_partial.actual_total) }}</h5>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card border-success">
+                        <div class="card-body text-center">
+                            <h6 class="text-muted">Proyeccion Fin de Mes (x{{ current_month_partial.scale_factor }})</h6>
+                            <div class="row">
+                                <div class="col-4">
+                                    <small class="text-muted">T1</small>
+                                    <h6>${{ '{:,.0f}'.format(current_month_partial.projected_t1) }}</h6>
+                                </div>
+                                <div class="col-4">
+                                    <small class="text-muted">T2</small>
+                                    <h6>${{ '{:,.0f}'.format(current_month_partial.projected_t2) }}</h6>
+                                </div>
+                                <div class="col-4">
+                                    <small class="text-muted">Total</small>
+                                    <h5 class="fw-bold text-success">${{ '{:,.0f}'.format(current_month_partial.projected_total) }}</h5>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card border-info">
+                        <div class="card-body text-center">
+                            <h6 class="text-muted">Faltan</h6>
+                            <h3 class="text-info">{{ current_month_partial.days_remaining }} dias</h3>
+                            <small class="text-muted">Este mes se excluye del entrenamiento ML</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- 1. Historical Monthly Sales Chart -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light">
+            <h5 class="mb-0"><i class="bi bi-bar-chart-line"></i> Ventas Mensuales Historicas</h5>
+        </div>
+        <div class="card-body">
+            <div class="d-flex flex-wrap gap-3 mb-3 align-items-center">
+                <strong>Mostrar:</strong>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="toggleHistT1" checked>
+                    <label class="form-check-label" for="toggleHistT1">
+                        <span class="badge" style="background-color: rgba(54, 162, 235, 1);">Terex 1</span>
+                    </label>
+                </div>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="toggleHistT2" checked>
+                    <label class="form-check-label" for="toggleHistT2">
+                        <span class="badge" style="background-color: rgba(255, 159, 64, 1);">Terex 2</span>
+                    </label>
+                </div>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="toggleHistTotal" checked>
+                    <label class="form-check-label" for="toggleHistTotal">
+                        <span class="badge" style="background-color: rgba(75, 192, 192, 1);">Total</span>
+                    </label>
+                </div>
+            </div>
+            <div class="chart-container" style="position: relative; height:400px;">
+                <canvas id="historicalChart"></canvas>
+            </div>
+            <div class="text-center mt-3">
+                <div class="btn-group" role="group" id="histChartTypeGroup">
+                    <button type="button" class="btn btn-outline-primary" data-type="bar">Barras</button>
+                    <button type="button" class="btn btn-outline-primary active" data-type="line">Linea</button>
+                    <button type="button" class="btn btn-outline-secondary" data-type="stackedBar">Barras Apiladas</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2. Year-over-Year Seasonality Chart -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light">
+            <h5 class="mb-0"><i class="bi bi-calendar3-range"></i> Estacionalidad: Comparativa Ano vs Ano</h5>
+        </div>
+        <div class="card-body">
+            <p class="text-muted small">Cada linea representa un ano. Busca patrones repetidos para identificar meses fuertes y debiles.</p>
+            <div class="chart-container" style="position: relative; height:400px;">
+                <canvas id="yoyChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3. Forecast Chart -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-header" style="background-color: #f0f7ff;">
+            <h5 class="mb-0"><i class="bi bi-graph-up-arrow"></i> Prediccion Proximos {{ forecast_labels|length }} Meses</h5>
+        </div>
+        <div class="card-body">
+            <p class="text-muted small">
+                3 modelos compiten: <strong>SARIMAX</strong> (estacionalidad estadistica),
+                <strong>XGBoost</strong> (machine learning con features temporales),
+                <strong>Holt-Winters</strong> (suavizamiento exponencial).
+                La linea <strong style="color: rgba(75, 192, 192, 1);">Ensemble</strong> es el promedio de los 3.
+            </p>
+            {% if forecast_chart and forecast_chart.datasets|length > 0 %}
+            <div class="chart-container" style="position: relative; height:400px;">
+                <canvas id="forecastChart"></canvas>
+            </div>
+            {% else %}
+            <div class="alert alert-info">No se pudieron generar predicciones. Se necesitan mas datos historicos.</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- 4. Combined Historical + Forecast Chart -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-header" style="background-color: #f5fff0;">
+            <h5 class="mb-0"><i class="bi bi-activity"></i> Historico + Prediccion (Ensemble)</h5>
+        </div>
+        <div class="card-body">
+            <div class="chart-container" style="position: relative; height:400px;">
+                <canvas id="combinedChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- 5. Forecast Table -->
+    {% if forecast_table %}
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light">
+            <h5 class="mb-0"><i class="bi bi-table"></i> Predicciones por Modelo</h5>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-striped table-hover">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Modelo</th>
+                            {% for label in forecast_labels %}
+                            <th class="text-end">{{ label }}</th>
+                            {% endfor %}
+                            <th class="text-end">Total</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for model_name, preds in forecast_table.items() %}
+                        <tr {% if model_name == "Ensemble" %}class="table-success fw-bold"{% endif %}>
+                            <td>
+                                {{ model_name }}
+                                {% if model_name == "Ensemble" %}<span class="badge bg-success ms-1">Promedio</span>{% endif %}
+                            </td>
+                            {% set row_total = namespace(v=0) %}
+                            {% for label in forecast_labels %}
+                                {% set val = preds.get(label, 0) %}
+                                {% set row_total.v = row_total.v + val %}
+                                <td class="text-end">${{ '{:,.0f}'.format(val) }}</td>
+                            {% endfor %}
+                            <td class="text-end fw-bold">${{ '{:,.0f}'.format(row_total.v) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- 6. Historical Data Table -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light">
+            <h5 class="mb-0"><i class="bi bi-table"></i> Ventas Mensuales por Sucursal</h5>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-striped table-hover">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Mes</th>
+                            <th class="text-end">Terex 1</th>
+                            <th class="text-end">Terex 2</th>
+                            <th class="text-end">Total</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for fecha, total in month_totals_total.items() %}
+                        <tr>
+                            <td>{{ fecha }}</td>
+                            <td class="text-end">${{ '{:,.2f}'.format(month_totals_t1.get(fecha, 0)) }}</td>
+                            <td class="text-end">${{ '{:,.2f}'.format(month_totals_t2.get(fecha, 0)) }}</td>
+                            <td class="text-end fw-bold">${{ '{:,.2f}'.format(total) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                    <tfoot class="table-secondary">
+                        <tr>
+                            <th>Total General</th>
+                            <th class="text-end">
+                                {% set gt1 = namespace(v=0) %}
+                                {% for v in month_totals_t1.values() %}{% set gt1.v = gt1.v + v %}{% endfor %}
+                                ${{ '{:,.2f}'.format(gt1.v) }}
+                            </th>
+                            <th class="text-end">
+                                {% set gt2 = namespace(v=0) %}
+                                {% for v in month_totals_t2.values() %}{% set gt2.v = gt2.v + v %}{% endfor %}
+                                ${{ '{:,.2f}'.format(gt2.v) }}
+                            </th>
+                            <th class="text-end">
+                                {% set gtt = namespace(v=0) %}
+                                {% for v in month_totals_total.values() %}{% set gtt.v = gtt.v + v %}{% endfor %}
+                                ${{ '{:,.2f}'.format(gtt.v) }}
+                            </th>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    {% endif %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+
+    {% if has_data %}
+
+    // ========== 1. HISTORICAL MONTHLY CHART ==========
+    const fullChartData = {{ chart_data|tojson }};
+    if (fullChartData && fullChartData.labels && fullChartData.labels.length > 0) {
+        const ctx = document.getElementById('historicalChart').getContext('2d');
+        const visible = [true, true, true];
+
+        function getVisibleData() {
+            return { labels: fullChartData.labels, datasets: fullChartData.datasets.filter((_, i) => visible[i]) };
+        }
+
+        const chartOptions = {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+                legend: { display: true, position: 'top' },
+                title: { display: true, text: 'Ventas Mensuales por Sucursal', font: { size: 16, weight: 'bold' } },
+                tooltip: {
+                    backgroundColor: 'rgba(0,0,0,0.8)', titleFont: { size: 14 }, bodyFont: { size: 14 },
+                    callbacks: { label: ctx => ctx.dataset.label + ': $' + ctx.raw.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0}) }
+                }
+            },
+            scales: {
+                y: { beginAtZero: true, ticks: { callback: v => '$' + v.toLocaleString() }, title: { display: true, text: 'Ventas ($)' } },
+                x: { grid: { display: false }, title: { display: true, text: 'Mes' } }
+            },
+            interaction: { mode: 'index', intersect: false }
+        };
+
+        let currentType = 'line';
+        function makeDS(type) {
+            const ds = getVisibleData();
+            if (type === 'line') ds.datasets = ds.datasets.map(d => ({
+                ...d, fill: false, borderWidth: 3, pointBackgroundColor: d.borderColor,
+                pointBorderColor: '#fff', pointBorderWidth: 2, pointRadius: 4, pointHoverRadius: 7, tension: 0.4
+            }));
+            return ds;
+        }
+        let histChart = new Chart(ctx, { type: 'line', data: makeDS('line'), options: chartOptions });
+
+        function rebuildHist() {
+            histChart.destroy();
+            const opts = JSON.parse(JSON.stringify(chartOptions));
+            if (currentType === 'stackedBar') { opts.scales.x.stacked = true; opts.scales.y.stacked = true; }
+            histChart = new Chart(ctx, { type: currentType === 'stackedBar' ? 'bar' : currentType, data: makeDS(currentType), options: opts });
+        }
+
+        document.getElementById('toggleHistT1').addEventListener('change', function() { visible[0] = this.checked; rebuildHist(); });
+        document.getElementById('toggleHistT2').addEventListener('change', function() { visible[1] = this.checked; rebuildHist(); });
+        document.getElementById('toggleHistTotal').addEventListener('change', function() { visible[2] = this.checked; rebuildHist(); });
+
+        document.getElementById('histChartTypeGroup').addEventListener('click', function(e) {
+            const btn = e.target.closest('[data-type]');
+            if (!btn) return;
+            this.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            currentType = btn.dataset.type;
+            rebuildHist();
+        });
+    }
+
+    // ========== 2. YEAR-OVER-YEAR SEASONALITY CHART ==========
+    const yoyData = {{ yoy_chart|tojson }};
+    if (yoyData && yoyData.labels && yoyData.datasets.length > 0) {
+        const yoyCtx = document.getElementById('yoyChart').getContext('2d');
+        const yoyDatasets = yoyData.datasets.map(ds => ({
+            ...ds, pointBackgroundColor: ds.borderColor,
+            pointBorderColor: '#fff', pointBorderWidth: 2, pointRadius: 5, pointHoverRadius: 8
+        }));
+        new Chart(yoyCtx, {
+            type: 'line',
+            data: { labels: yoyData.labels, datasets: yoyDatasets },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: true, position: 'top' },
+                    title: { display: true, text: 'Revenue Total por Mes - Comparativa Anual', font: { size: 16, weight: 'bold' } },
+                    tooltip: {
+                        callbacks: { label: ctx => ctx.dataset.label + ': $' + ctx.raw.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0}) }
+                    }
+                },
+                scales: {
+                    y: { beginAtZero: true, ticks: { callback: v => '$' + v.toLocaleString() }, title: { display: true, text: 'Revenue ($)' } },
+                    x: { grid: { display: false }, title: { display: true, text: 'Mes' } }
+                },
+                interaction: { mode: 'index', intersect: false }
+            }
+        });
+    }
+
+    // ========== 3. FORECAST CHART ==========
+    const forecastData = {{ forecast_chart|tojson }};
+    if (forecastData && forecastData.labels && forecastData.datasets.length > 0) {
+        const fCtx = document.getElementById('forecastChart').getContext('2d');
+        const fDatasets = forecastData.datasets.map(ds => ({
+            ...ds, pointBackgroundColor: ds.borderColor,
+            pointBorderColor: '#fff', pointBorderWidth: 2, pointRadius: 5, pointHoverRadius: 8
+        }));
+        new Chart(fCtx, {
+            type: 'line',
+            data: { labels: forecastData.labels, datasets: fDatasets },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: true, position: 'top' },
+                    title: { display: true, text: 'Prediccion de Ventas - Proximos Meses', font: { size: 16, weight: 'bold' } },
+                    tooltip: {
+                        callbacks: { label: ctx => ctx.dataset.label + ': $' + ctx.raw.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0}) }
+                    }
+                },
+                scales: {
+                    y: { beginAtZero: true, ticks: { callback: v => '$' + v.toLocaleString() }, title: { display: true, text: 'Revenue Predicho ($)' } },
+                    x: { grid: { display: false }, title: { display: true, text: 'Mes' } }
+                },
+                interaction: { mode: 'index', intersect: false }
+            }
+        });
+    }
+
+    // ========== 4. COMBINED HISTORICAL + FORECAST CHART ==========
+    const histLabels = fullChartData ? fullChartData.labels : [];
+    const histTotalData = fullChartData ? (fullChartData.datasets[2] || {}).data || [] : [];
+    const ensembleData = {{ (forecasts.get("Ensemble") or [])|tojson }};
+    const ensembleLabels = {{ forecast_labels|tojson }};
+
+    if (histLabels.length > 0) {
+        const combCtx = document.getElementById('combinedChart').getContext('2d');
+
+        // Take last 12 months of history + forecast
+        const histSlice = Math.min(histLabels.length, 18);
+        const recentLabels = histLabels.slice(-histSlice);
+        const recentData = histTotalData.slice(-histSlice);
+
+        const allLabels = [...recentLabels, ...ensembleLabels];
+        const historicalLine = [...recentData, ...new Array(ensembleLabels.length).fill(null)];
+        const forecastLine = [...new Array(recentLabels.length - 1).fill(null), recentData[recentData.length - 1], ...ensembleData];
+
+        new Chart(combCtx, {
+            type: 'line',
+            data: {
+                labels: allLabels,
+                datasets: [
+                    {
+                        label: 'Historico (Total)',
+                        data: historicalLine,
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        backgroundColor: 'rgba(75, 192, 192, 0.1)',
+                        borderWidth: 3, fill: true, tension: 0.4,
+                        pointRadius: 4, pointBackgroundColor: 'rgba(75, 192, 192, 1)',
+                    },
+                    {
+                        label: 'Prediccion (Ensemble)',
+                        data: forecastLine,
+                        borderColor: 'rgba(255, 99, 132, 1)',
+                        backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                        borderWidth: 3, borderDash: [8, 4], fill: true, tension: 0.4,
+                        pointRadius: 5, pointBackgroundColor: 'rgba(255, 99, 132, 1)',
+                        pointBorderColor: '#fff', pointBorderWidth: 2,
+                    }
+                ]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: true, position: 'top' },
+                    title: { display: true, text: 'Historico + Prediccion Ensemble', font: { size: 16, weight: 'bold' } },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                if (ctx.raw === null) return null;
+                                return ctx.dataset.label + ': $' + ctx.raw.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0});
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: { beginAtZero: true, ticks: { callback: v => '$' + v.toLocaleString() }, title: { display: true, text: 'Revenue ($)' } },
+                    x: { grid: { display: false }, title: { display: true, text: 'Mes' } }
+                },
+                interaction: { mode: 'index', intersect: false },
+                spanGaps: false
+            }
+        });
+    }
+
+    {% endif %}
+});
+</script>
+{% endblock %}
