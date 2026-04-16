@@ -2040,7 +2040,8 @@ async def secret_menu_estilos(request: Request):
                 f"{SUPABASE_URL}/rest/v1/inventario_estilos",
                 headers={**HEADERS, "Range": "0-9999"},
                 params={
-                    "select": "*",
+                    # Explicit column list — avoid pulling the huge nombre_embedding vector
+                    "select": "id,nombre,supplier,prioridad,precio,cost,created_at",
                     "order": "nombre.asc"
                 }
             )
@@ -2049,14 +2050,7 @@ async def secret_menu_estilos(request: Request):
             print(f"Error response: {resp.text}", flush=True)
             raise Exception(f"Error fetching estilos: {resp.status_code}")
 
-        estilos_raw = resp.json()
-
-        # Remove unwanted columns
-        exclude = {"nombre_embedding", "sold30", "saldos"}
-        estilos = [
-            {k: v for k, v in row.items() if k not in exclude}
-            for row in estilos_raw
-        ]
+        estilos = resp.json()
 
         return templates.TemplateResponse(
             request=request,
@@ -2071,6 +2065,40 @@ async def secret_menu_estilos(request: Request):
             request=request,
             name="error.html",
             context={"error_message": f"Error loading estilos: {str(e)}"}
+        )
+
+
+@app.get("/estilos-nuevos", response_class=HTMLResponse)
+async def estilos_nuevos(request: Request):
+    """Newest estilos first, with pictures always displayed."""
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/inventario_estilos",
+                headers={**HEADERS, "Range": "0-199"},
+                params={
+                    "select": "id,nombre,supplier,prioridad,precio,cost,created_at",
+                    "order": "created_at.desc",
+                    "limit": "200",
+                },
+            )
+        if resp.status_code >= 400:
+            raise Exception(f"Error fetching estilos: {resp.status_code} {resp.text}")
+
+        estilos = resp.json()
+
+        return templates.TemplateResponse(
+            request=request,
+            name="secret_estilos_nuevos.html",
+            context={"estilos": estilos},
+        )
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return templates.TemplateResponse(
+            request=request,
+            name="error.html",
+            context={"error_message": f"Error loading nuevos estilos: {str(e)}"},
         )
 
 
