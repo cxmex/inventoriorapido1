@@ -6284,15 +6284,21 @@ async def store_qr_reward(order_id: int, token: str, purchase_amount: float) -> 
 async def get_customer_qr(phone: str):
     """Generate a PNG QR code with content CLIENTE:<phone> for POS scanning.
     Sent to the customer via WhatsApp when they type 'cliente'.
+    Must be RGB PNG (not 1-bit) for WhatsApp Media API to accept it.
     """
     try:
         qr = qrcode.QRCode(version=None, box_size=10, border=2, error_correction=qrcode.constants.ERROR_CORRECT_M)
         qr.add_data(f"CLIENTE:{phone}")
         qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white")
+        qr_img = qr.make_image(fill_color="black", back_color="white")
+
+        # Unwrap to underlying PIL Image and convert to RGB
+        # (qrcode default is 1-bit palette; WhatsApp rejects it)
+        pil_img = qr_img.get_image() if hasattr(qr_img, "get_image") else qr_img
+        pil_img = pil_img.convert("RGB")
 
         buf = io.BytesIO()
-        img.save(buf, format="PNG")
+        pil_img.save(buf, format="PNG")
         buf.seek(0)
 
         return StreamingResponse(
