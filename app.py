@@ -6280,6 +6280,106 @@ async def store_qr_reward(order_id: int, token: str, purchase_amount: float) -> 
         print(f"ERROR storing qr_reward: {e}", flush=True)
 
 
+@app.api_route("/api/customer-barcode/{phone}", methods=["GET", "HEAD"])
+async def get_customer_barcode(phone: str):
+    """Generate a Code128 barcode PNG with content CLIENTE:<phone> for POS scanning.
+    Most retail barcode scanners read Code128. Returns a clean RGB PNG
+    so WhatsApp Media API accepts it.
+    """
+    try:
+        from barcode import Code128
+        from barcode.writer import ImageWriter
+
+        payload = f"CLIENTE:{phone}"
+        writer = ImageWriter()
+        # Bigger, printable barcode with human-readable text below
+        options = {
+            "module_width": 0.4,
+            "module_height": 18.0,
+            "font_size": 12,
+            "text_distance": 4.0,
+            "quiet_zone": 4.0,
+            "write_text": True,
+            "background": "white",
+            "foreground": "black",
+        }
+        code = Code128(payload, writer=writer)
+
+        buf = io.BytesIO()
+        code.write(buf, options=options)
+        buf.seek(0)
+
+        # Re-open + convert to RGB for WhatsApp compatibility
+        from PIL import Image as PILImage
+        img = PILImage.open(buf).convert("RGB")
+        out = io.BytesIO()
+        img.save(out, format="PNG")
+        out.seek(0)
+
+        return StreamingResponse(
+            out,
+            media_type="image/png",
+            headers={
+                "Content-Disposition": f'inline; filename="cliente_{phone}.png"',
+                "Cache-Control": "public, max-age=60",
+            },
+        )
+    except Exception as e:
+        print(f"Error generating customer barcode: {e}", flush=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/customer-compras/{phone}")
+async def get_customer_compras(phone: str):
+    """Return purchase history for a WhatsApp phone: list of tickets with status in Spanish.
+    Used by the WhatsApp bot for the COMPRAS command.
+    """
+    try:
+        rows = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/qr_rewards",
+            params={
+                "select": "order_id,purchase_amount,reward_amount,status,created_at,redeemed_at",
+                "phone_number": f"eq.{phone}",
+                "order": "created_at.desc",
+            },
+        )
+
+        tickets = []
+        pendiente_total = 0.0
+        canjeado_total = 0.0
+        for r in rows:
+            status = r.get("status", "")
+            # linked = credit still available → "pendiente" for the customer
+            # redeemed = already used → "canjeado"
+            if status == "redeemed":
+                estado = "canjeado"
+                canjeado_total += float(r.get("reward_amount", 0) or 0)
+            else:
+                estado = "pendiente"
+                pendiente_total += float(r.get("reward_amount", 0) or 0)
+
+            tickets.append({
+                "order_id": r.get("order_id"),
+                "purchase_amount": float(r.get("purchase_amount", 0) or 0),
+                "reward_amount": float(r.get("reward_amount", 0) or 0),
+                "estado": estado,
+                "created_at": r.get("created_at"),
+            })
+
+        return {
+            "phone": phone,
+            "tickets": tickets,
+            "totals": {
+                "pendiente": round(pendiente_total, 2),
+                "canjeado": round(canjeado_total, 2),
+            },
+        }
+    except Exception as e:
+        print(f"Error in /api/customer-compras: {e}", flush=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.api_route("/api/customer-qr/{phone}", methods=["GET", "HEAD"])
 async def get_customer_qr(phone: str):
     """Generate a PNG QR code with content CLIENTE:<phone> for POS scanning.

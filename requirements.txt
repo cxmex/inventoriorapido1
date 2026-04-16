@@ -10,6 +10,7 @@ reportlab
 requests
 qrcode[pil]
 pillow
+python-barcode
 google-auth
 pyjwt
 pytz
