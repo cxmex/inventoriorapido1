@@ -5273,12 +5273,17 @@ def _build_receipt_pdf(items: list[dict], total: float, order_id: int) -> io.Byt
 
 @app.get("/api/search_barcode")
 async def api_search_barcode(barcode: str):
-    """Enhanced barcode search that handles both products and loyalty barcodes"""
-    
+    """Enhanced barcode search that handles products, loyalty barcodes, and CLIENTE QR codes."""
+
+    # Customer QR code (from WhatsApp)
+    if barcode.upper().startswith('CLIENTE:'):
+        phone = barcode.split(':', 1)[1].strip()
+        return await handle_customer_qr(phone)
+
     # Check if this is a customer loyalty barcode (starts with 8000)
     if barcode.startswith('8000') and len(barcode) == 13:
         return await handle_loyalty_barcode(barcode)
-    
+
     # Handle regular product barcode search
     rows = await supabase_request(
         method="GET",
@@ -5552,11 +5557,23 @@ async def api_save(payload: SavePayload):
         
         # Check if this is a loyalty barcode (starts with 8000)
         codigo = p_dict.get('codigo', '')
+
+        # Customer QR credit redemption (phone-based from WhatsApp)
+        if codigo.upper().startswith('CLIENTE:'):
+            await process_cliente_redemption(p_dict, next_order_id)
+            items_for_ticket.append({
+                "qty": p_dict.get('qty', 1),
+                "name": p_dict.get('name', ''),
+                "price": p_dict.get('price', 0),
+                "subtotal": p_dict.get('qty', 1) * p_dict.get('price', 0)
+            })
+            continue
+
         if codigo.startswith('8000') and len(codigo) == 13:
             # Process loyalty deduction
             loyalty_result = await process_loyalty_deduction(p_dict, next_order_id, fecha, hora)
             loyalty_deductions.append(loyalty_result)
-            
+
             # Add to ticket items
             items_for_ticket.append({
                 "qty": p_dict.get('qty', 1),
@@ -6261,6 +6278,102 @@ async def store_qr_reward(order_id: int, token: str, purchase_amount: float) -> 
         print(f"QR reward stored: order={order_id} reward=${reward_amount}", flush=True)
     except Exception as e:
         print(f"ERROR storing qr_reward: {e}", flush=True)
+
+
+@app.api_route("/api/customer-qr/{phone}", methods=["GET", "HEAD"])
+async def get_customer_qr(phone: str):
+    """Generate a PNG QR code with content CLIENTE:<phone> for POS scanning.
+    Sent to the customer via WhatsApp when they type 'cliente'.
+    """
+    try:
+        qr = qrcode.QRCode(version=None, box_size=10, border=2, error_correction=qrcode.constants.ERROR_CORRECT_M)
+        qr.add_data(f"CLIENTE:{phone}")
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+
+        return StreamingResponse(
+            buf,
+            media_type="image/png",
+            headers={
+                "Content-Disposition": f'inline; filename="cliente_{phone}.png"',
+                "Cache-Control": "public, max-age=60",
+            },
+        )
+    except Exception as e:
+        print(f"Error generating customer QR: {e}", flush=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def handle_customer_qr(phone: str):
+    """Look up all 'linked' qr_rewards for this phone, return aggregated credit as a loyalty row."""
+    try:
+        rewards = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/qr_rewards",
+            params={
+                "select": "id,reward_amount",
+                "phone_number": f"eq.{phone}",
+                "status": "eq.linked",
+            },
+        )
+        if not rewards:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Cliente {phone} no tiene creditos disponibles.",
+            )
+        total_credit = round(sum(float(r["reward_amount"]) for r in rewards), 2)
+        ids = [r["id"] for r in rewards]
+        return {
+            "name": f"CREDITO CLIENTE ({phone})",
+            "price": -total_credit,
+            "codigo": f"CLIENTE:{phone}",
+            "is_loyalty": True,
+            "customer_phone": phone,
+            "qr_reward_ids": ids,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error looking up customer QR: {e}", flush=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def process_cliente_redemption(product_dict: dict, order_id: int) -> None:
+    """Mark all of the customer's 'linked' qr_rewards as 'redeemed' now that they are used in this order."""
+    codigo = product_dict.get("codigo", "")
+    if not codigo.upper().startswith("CLIENTE:"):
+        return
+    phone = codigo.split(":", 1)[1].strip()
+    now_iso = datetime.utcnow().isoformat()
+
+    try:
+        rewards = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/qr_rewards",
+            params={
+                "select": "id",
+                "phone_number": f"eq.{phone}",
+                "status": "eq.linked",
+            },
+        )
+        for r in rewards:
+            rid = r.get("id")
+            await supabase_request(
+                method="PATCH",
+                endpoint=f"/rest/v1/qr_rewards?id=eq.{rid}",
+                json_data={
+                    "status": "redeemed",
+                    "redeemed_at": now_iso,
+                    "redeemed_order_id": order_id,
+                },
+            )
+        print(f"Redeemed {len(rewards)} qr_rewards for phone {phone} -> order {order_id}", flush=True)
+    except Exception as e:
+        print(f"ERROR redeeming customer credits: {e}", flush=True)
 
 
 @app.api_route("/api/ticket-pdf/{token}", methods=["GET", "HEAD"])
