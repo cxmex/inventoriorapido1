@@ -6263,7 +6263,7 @@ async def store_qr_reward(order_id: int, token: str, purchase_amount: float) -> 
         print(f"ERROR storing qr_reward: {e}", flush=True)
 
 
-@app.get("/api/ticket-pdf/{token}")
+@app.api_route("/api/ticket-pdf/{token}", methods=["GET", "HEAD"])
 async def get_ticket_pdf_by_token(token: str):
     """Public endpoint: returns the PDF of the ticket associated with a QR token.
     Used by the WhatsApp bot to send the ticket as a document to the customer.
