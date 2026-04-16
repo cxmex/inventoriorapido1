@@ -324,12 +324,14 @@
         }
 
         function createImageCard(image) {
+            console.log('Rendering image card:', image);
             const createdDate = new Date(image.created_at).toLocaleDateString('es-MX', {day:'2-digit', month:'short', year:'numeric'});
+            const imgId = image.id ?? image.ID ?? image.image_id ?? '';
             return `
                 <div class="image-card">
                     <img src="${image.public_url}" alt="${image.file_name}" loading="lazy"
                          onclick="openLightbox('${image.public_url}')" style="cursor:zoom-in;">
-                    <button type="button" class="delete-btn" data-image-id="${image.id}" title="Eliminar">
+                    <button type="button" class="delete-btn" data-image-id="${imgId}" title="Eliminar">
                         <i class="bi bi-trash"></i>
                     </button>
                     <div class="image-overlay">
