@@ -5273,12 +5273,16 @@ def _build_receipt_pdf(items: list[dict], total: float, order_id: int) -> io.Byt
 
 @app.get("/api/search_barcode")
 async def api_search_barcode(barcode: str):
-    """Enhanced barcode search that handles products, loyalty barcodes, and CLIENTE QR codes."""
+    """Enhanced barcode search that handles products, loyalty barcodes, customer barcodes, and CLIENTE: text."""
 
-    # Customer QR code (from WhatsApp)
+    # Customer text code (legacy CLIENTE:<phone> from QR-style codes)
     if barcode.upper().startswith('CLIENTE:'):
         phone = barcode.split(':', 1)[1].strip()
         return await handle_customer_qr(phone)
+
+    # Customer barcode (scanned from WhatsApp-generated Code128/EAN-13)
+    if barcode.startswith('9000') and len(barcode) == 13 and barcode.isdigit():
+        return await handle_customer_barcode_scan(barcode)
 
     # Check if this is a customer loyalty barcode (starts with 8000)
     if barcode.startswith('8000') and len(barcode) == 13:
@@ -6280,37 +6284,100 @@ async def store_qr_reward(order_id: int, token: str, purchase_amount: float) -> 
         print(f"ERROR storing qr_reward: {e}", flush=True)
 
 
+def _ean13_check_digit(twelve_digits: str) -> str:
+    """Compute the EAN-13 check digit for a 12-digit string."""
+    total = 0
+    for i, ch in enumerate(twelve_digits):
+        total += int(ch) * (3 if i % 2 else 1)
+    return str((10 - total % 10) % 10)
+
+
+def build_customer_barcode(customer_id: int) -> str:
+    """13-digit EAN-13: '9000' + 8-digit zero-padded id + 1 check digit."""
+    prefix = f"9000{customer_id:08d}"  # 12 digits
+    return prefix + _ean13_check_digit(prefix)
+
+
+async def get_or_create_customer(phone: str) -> dict:
+    """Look up (or create) a customer row by phone_number. Ensures customer_barcode is set."""
+    now_iso = datetime.utcnow().isoformat()
+
+    # Try to find existing
+    rows = await supabase_request(
+        method="GET",
+        endpoint="/rest/v1/customers",
+        params={"phone_number": f"eq.{phone}", "select": "*", "limit": "1"},
+    )
+    if rows:
+        customer = rows[0]
+        # Backfill barcode if missing
+        if not customer.get("customer_barcode"):
+            bc = build_customer_barcode(int(customer["id"]))
+            await supabase_request(
+                method="PATCH",
+                endpoint=f"/rest/v1/customers?id=eq.{customer['id']}",
+                json_data={"customer_barcode": bc, "last_seen_at": now_iso},
+            )
+            customer["customer_barcode"] = bc
+        else:
+            # Just update last_seen_at
+            try:
+                await supabase_request(
+                    method="PATCH",
+                    endpoint=f"/rest/v1/customers?id=eq.{customer['id']}",
+                    json_data={"last_seen_at": now_iso},
+                )
+            except Exception:
+                pass
+        return customer
+
+    # Create new — first insert to get id, then backfill the barcode
+    created = await supabase_request(
+        method="POST",
+        endpoint="/rest/v1/customers",
+        json_data={"phone_number": phone},
+    )
+    customer = created[0] if isinstance(created, list) else created
+    cid = int(customer["id"])
+    bc = build_customer_barcode(cid)
+    await supabase_request(
+        method="PATCH",
+        endpoint=f"/rest/v1/customers?id=eq.{cid}",
+        json_data={"customer_barcode": bc},
+    )
+    customer["customer_barcode"] = bc
+    return customer
+
+
 @app.api_route("/api/customer-barcode/{phone}", methods=["GET", "HEAD"])
 async def get_customer_barcode(phone: str):
-    """Generate a Code128 barcode PNG with content CLIENTE:<phone> for POS scanning.
-    Most retail barcode scanners read Code128. Returns a clean RGB PNG
-    so WhatsApp Media API accepts it.
+    """Generate a Code128-rendered EAN-13 barcode PNG for the customer's 13-digit code.
+    Same visual size as SKU barcodes on receipts. Returns RGB PNG for WhatsApp.
     """
     try:
+        customer = await get_or_create_customer(phone)
+        payload = customer["customer_barcode"]
+
         from barcode import Code128
         from barcode.writer import ImageWriter
+        from PIL import Image as PILImage
 
-        payload = f"CLIENTE:{phone}"
-        writer = ImageWriter()
-        # Bigger, printable barcode with human-readable text below
         options = {
             "module_width": 0.4,
-            "module_height": 18.0,
-            "font_size": 12,
+            "module_height": 22.0,
+            "font_size": 14,
             "text_distance": 4.0,
             "quiet_zone": 4.0,
             "write_text": True,
             "background": "white",
             "foreground": "black",
         }
-        code = Code128(payload, writer=writer)
+        code = Code128(payload, writer=ImageWriter())
 
         buf = io.BytesIO()
         code.write(buf, options=options)
         buf.seek(0)
 
-        # Re-open + convert to RGB for WhatsApp compatibility
-        from PIL import Image as PILImage
         img = PILImage.open(buf).convert("RGB")
         out = io.BytesIO()
         img.save(out, format="PNG")
@@ -6320,12 +6387,34 @@ async def get_customer_barcode(phone: str):
             out,
             media_type="image/png",
             headers={
-                "Content-Disposition": f'inline; filename="cliente_{phone}.png"',
+                "Content-Disposition": f'inline; filename="cliente_{payload}.png"',
                 "Cache-Control": "public, max-age=60",
             },
         )
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error generating customer barcode: {e}", flush=True)
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def handle_customer_barcode_scan(barcode: str):
+    """POS scanned a customer barcode (13-digit starting with 9000). Return credit as loyalty row."""
+    try:
+        rows = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/customers",
+            params={"customer_barcode": f"eq.{barcode}", "select": "id,phone_number", "limit": "1"},
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail=f"Cliente con barcode {barcode} no encontrado")
+        phone = rows[0]["phone_number"]
+        return await handle_customer_qr(phone)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error looking up customer by barcode: {e}", flush=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -6335,11 +6424,18 @@ async def get_customer_compras(phone: str):
     Used by the WhatsApp bot for the COMPRAS command.
     """
     try:
+        # Ensure customer row exists (so they get a barcode even if they haven't requested CLIENTE yet)
+        customer = None
+        try:
+            customer = await get_or_create_customer(phone)
+        except Exception as e:
+            print(f"get_or_create_customer non-fatal error: {e}", flush=True)
+
         rows = await supabase_request(
             method="GET",
             endpoint="/rest/v1/qr_rewards",
             params={
-                "select": "order_id,purchase_amount,reward_amount,status,created_at,redeemed_at",
+                "select": "order_id,purchase_amount,reward_amount,status,created_at,redeemed_at,redeemed_order_id",
                 "phone_number": f"eq.{phone}",
                 "order": "created_at.desc",
             },
@@ -6350,8 +6446,6 @@ async def get_customer_compras(phone: str):
         canjeado_total = 0.0
         for r in rows:
             status = r.get("status", "")
-            # linked = credit still available → "pendiente" for the customer
-            # redeemed = already used → "canjeado"
             if status == "redeemed":
                 estado = "canjeado"
                 canjeado_total += float(r.get("reward_amount", 0) or 0)
@@ -6365,10 +6459,12 @@ async def get_customer_compras(phone: str):
                 "reward_amount": float(r.get("reward_amount", 0) or 0),
                 "estado": estado,
                 "created_at": r.get("created_at"),
+                "redeemed_order_id": r.get("redeemed_order_id"),
             })
 
         return {
             "phone": phone,
+            "customer_barcode": (customer or {}).get("customer_barcode"),
             "tickets": tickets,
             "totals": {
                 "pendiente": round(pendiente_total, 2),
