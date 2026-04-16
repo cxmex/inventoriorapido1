@@ -5677,7 +5677,9 @@ async def api_save(payload: SavePayload):
     # Generate redemption token and PDF
     redemption_token = generate_redemption_token()
     await store_redemption_token(next_order_id, redemption_token, total)
-    
+    # Also store in qr_rewards for the WhatsApp loyalty flow
+    await store_qr_reward(next_order_id, redemption_token, total)
+
     # Use your existing QR PDF function
     pdf_buf = _build_receipt_pdf_with_qr(items_for_ticket, total, next_order_id, redemption_token)
     
@@ -6071,123 +6073,255 @@ async def store_redemption_token(order_id: int, token: str, total: float):
 
 
 def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, redemption_token: str) -> io.BytesIO:
-    """Updated PDF generation with QR code, total pieces, and discount"""
-    width = 58 * mm
-    # Calculate dynamic height based on content
-    estimated_item_height = len(items) * 22  # Approximately 22 points per item
-    base_height = 80 + 44 * mm  # Header + QR code space
-    height = max(120 * mm, base_height + estimated_item_height)
-    margin = 2 * mm
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=(width, height))
-    
-    # Calculate total pieces and discount
-    total_pieces = sum(it["qty"] for it in items)
-    
+    """PDF receipt for thermal printer:
+       - 80mm paper (enough room for full product names)
+       - dynamic height so the whole ticket fits on ONE page (no duplicates)
+       - unique QR code with WhatsApp deep link for 1% loyalty reward
+    """
+    width = 80 * mm
+    margin = 3 * mm
+
+    total_pieces = sum(int(it.get("qty", 0)) for it in items)
+
     def get_discount(qty):
         if qty > 100:
             return qty * 10
         if qty > 50:
             return qty * 5
         return 0
-    
+
     discount = get_discount(total_pieces)
-    subtotal = total + discount  # Reverse calculate subtotal
-    
-    def header():
-        y = height - margin
-        c.setFont("Helvetica-Bold", 10); c.drawCentredString(width/2, y, "TICKET DE VENTA"); y -= 12
-        c.setFont("Helvetica-Bold", 9);  c.drawCentredString(width/2, y, f"Orden #{order_id}"); y -= 10
-        _, fecha, hora = _now_strs()
-        c.setFont("Helvetica", 8); c.drawString(margin, y, f"Fecha: {fecha}"); y -= 10
-        c.drawString(margin, y, f"Hora: {hora}"); y -= 6
-        c.setStrokeColor(colors.black); c.line(margin, y, width - margin, y); y -= 10
-        c.setFont("Helvetica-Bold", 8)
-        c.drawString(margin, y, "Cant")
-        c.drawString(margin + 20, y, "Descripción")
-        c.drawRightString(width - margin, y, "Precio")
-        y -= 10
-        c.setFont("Helvetica", 8)
-        return y
-    
-    y = header()
-        
-    # Add items
-    for it in items:
-        if y < 60 * mm:  # More space needed for totals + QR
-            c.showPage()
-            y = header()
-        qty = str(it["qty"]); name = str(it["name"]); price = it["price"]; sub = it["subtotal"]
-        c.drawString(margin, y, qty)
-        c.drawString(margin + 20, y, (name[:28] + ("…" if len(name) > 28 else "")))
-        c.drawRightString(width - margin, y, f"${price:0.2f}"); y -= 10
-        c.drawRightString(width - margin, y, f"Subtotal: ${sub:0.2f}"); y -= 12
-    
-    y -= 4; c.line(margin, y, width - margin, y); y -= 12
-    
-    # Show total pieces
-    c.setFont("Helvetica-Bold", 8)
-    c.drawString(margin, y, f"Total Piezas: {total_pieces}")
-    y -= 12
-    
-    # Show subtotal
-    c.setFont("Helvetica", 8)
-    c.drawString(margin, y, "SUBTOTAL:")
-    c.drawRightString(width - margin, y, f"${subtotal:0.2f}")
+    subtotal_before = total + discount
+
+    # Reward is 1% of the final total (rounded to 2 decimals)
+    reward_amount = round(total * 0.01, 2)
+
+    # --- Dynamic height calculation -----------------------------------------
+    # Header block: ~28mm
+    # Each item: 2 lines of ~4.2mm = ~9mm (name line + "@ $x c/u  Subtotal" line)
+    # Totals block: ~18mm
+    # Legend + QR + footer: ~62mm
+    header_h   = 28 * mm
+    item_h     = 9 * mm
+    totals_h   = 18 * mm + (5 * mm if discount > 0 else 0)
+    qr_block_h = 62 * mm
+    height = header_h + (len(items) * item_h) + totals_h + qr_block_h + 2 * margin
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(width, height))
+
+    y = height - margin
+
+    # ---------- HEADER -------------------------------------------------------
+    c.setFont("Helvetica-Bold", 14)
+    c.drawCentredString(width / 2, y, "TEREX2")
+    y -= 14
+
+    c.setFont("Helvetica-Bold", 11)
+    c.drawCentredString(width / 2, y, f"Ticket #{order_id}")
+    y -= 13
+
+    _, fecha, hora = _now_strs()
+    c.setFont("Helvetica", 9)
+    c.drawCentredString(width / 2, y, f"{fecha}  {hora}")
     y -= 10
-    
-    # Show discount if applicable
-    if discount > 0:
+
+    c.setLineWidth(0.5)
+    c.line(margin, y, width - margin, y)
+    y -= 10
+
+    # Column headers
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(margin, y, "Producto")
+    c.drawRightString(width - margin, y, "Subtotal")
+    y -= 10
+    c.line(margin, y + 4, width - margin, y + 4)
+
+    # ---------- ITEMS --------------------------------------------------------
+    c.setFont("Helvetica", 9)
+    name_max_chars = 32  # fits comfortably at 9pt in ~50mm column
+
+    for it in items:
+        qty = int(it.get("qty", 0))
+        name = str(it.get("name", ""))
+        price = float(it.get("price", 0) or 0)
+        sub = float(it.get("subtotal", qty * price) or 0)
+
+        # Truncate long names
+        display_name = name if len(name) <= name_max_chars else name[:name_max_chars - 1] + "…"
+
+        # Line 1: "1x  NAME"
+        c.setFont("Helvetica", 9)
+        c.drawString(margin, y, f"{qty}x  {display_name}")
+        y -= 10
+
+        # Line 2: "    @ $75.00 c/u        $75.00"  (indented)
         c.setFont("Helvetica", 8)
-        c.drawString(margin, y, "DESCUENTO:")
+        c.setFillColor(colors.grey)
+        c.drawString(margin + 10, y, f"@ ${price:0.2f} c/u")
+        c.setFillColor(colors.black)
+        c.drawRightString(width - margin, y, f"${sub:0.2f}")
+        y -= 12
+
+    # ---------- TOTALS -------------------------------------------------------
+    c.setLineWidth(0.5)
+    c.line(margin, y + 2, width - margin, y + 2)
+    y -= 6
+
+    c.setFont("Helvetica", 9)
+    c.drawString(margin, y, f"Total piezas:")
+    c.drawRightString(width - margin, y, f"{total_pieces}")
+    y -= 11
+
+    c.setFont("Helvetica", 9)
+    c.drawString(margin, y, "Subtotal:")
+    c.drawRightString(width - margin, y, f"${subtotal_before:0.2f}")
+    y -= 11
+
+    if discount > 0:
         c.setFillColor(colors.green)
+        c.drawString(margin, y, "Descuento:")
         c.drawRightString(width - margin, y, f"-${discount:0.2f}")
         c.setFillColor(colors.black)
-        y -= 10
-    
-    # Show final total
-    c.setFont("Helvetica-Bold", 9)
+        y -= 11
+
+    c.setFont("Helvetica-Bold", 12)
     c.drawString(margin, y, "TOTAL:")
     c.drawRightString(width - margin, y, f"${total:0.2f}")
-    y -= 14
-        
-    # Add loyalty program message
-    c.setFont("Helvetica", 7)
-    c.drawCentredString(width/2, y, "¡Obtén 1% de recompensa!")
-    y -= 8
-    c.drawCentredString(width/2, y, "Escanea el código QR:")
+    y -= 16
+
+    # ---------- LOYALTY QR SECTION ------------------------------------------
+    c.setStrokeColor(colors.black)
+    c.setDash(1, 2)
+    c.line(margin, y, width - margin, y)
+    c.setDash()
     y -= 12
-    
-    # Create QR Code (doubled size: from 22mm to 44mm)
+
+    c.setFont("Helvetica-Bold", 9)
+    c.drawCentredString(width / 2, y, "ESCANEA ESTE QR CODE Y OBTEN")
+    y -= 10
+    c.drawCentredString(width / 2, y, "1% PARA TU SIGUIENTE COMPRA")
+    y -= 10
+
+    c.setFont("Helvetica", 8)
+    c.setFillColor(colors.grey)
+    c.drawCentredString(width / 2, y, f"Credito a obtener: ${reward_amount:0.2f}")
+    c.setFillColor(colors.black)
+    y -= 12
+
+    # Build QR: WhatsApp deep link with prefilled redemption message.
+    # Customer scans -> WhatsApp opens -> sends CANJEAR:<token> to the business number.
+    business_phone = os.environ.get("WHATSAPP_BUSINESS_NUMBER", "525642460019")
+    prefilled = urllib.parse.quote(f"CANJEAR:{redemption_token}")
+    qr_url = f"https://wa.me/{business_phone}?text={prefilled}"
+
     try:
-        # URL that points to your redeem page with the token
-        qr_url = f"https://view.page/sCj5OZ"
-                
-        # Generate QR code using reportlab - doubled size
+        qr_size = 40 * mm
         qr_widget = QrCodeWidget(qr_url)
-        qr_widget.barWidth = 44 * mm
-        qr_widget.barHeight = 44 * mm
-                
-        # Create drawing and add QR code
-        qr_drawing = Drawing(44 * mm, 44 * mm)
+        qr_widget.barWidth = qr_size
+        qr_widget.barHeight = qr_size
+        qr_drawing = Drawing(qr_size, qr_size)
         qr_drawing.add(qr_widget)
-                
-        # Center the QR code
-        x = (width - 44 * mm) / 2
-        y_qr = max(margin, y - 44 * mm)  # Reduced margin at bottom
-                
-        # Render QR code on PDF
-        renderPDF.draw(qr_drawing, c, x, y_qr)
-                
-        print(f"DEBUG: Generated QR code with URL: {qr_url}")
-            
+        x_qr = (width - qr_size) / 2
+        y_qr = y - qr_size
+        renderPDF.draw(qr_drawing, c, x_qr, y_qr)
+        y = y_qr - 8
     except Exception as e:
-        print(f"Error generating QR code: {e}")
-        # Fallback text
-        c.setFont("Helvetica", 6)
-        c.drawCentredString(width/2, y - 10, f"Token: {redemption_token[:16]}...")
-    
-    c.showPage(); c.save(); buf.seek(0); return buf
+        print(f"QR error: {e}", flush=True)
+        c.setFont("Helvetica", 7)
+        c.drawCentredString(width / 2, y - 10, f"Token: {redemption_token[:20]}...")
+        y -= 20
+
+    c.setFont("Helvetica", 7)
+    c.setFillColor(colors.grey)
+    c.drawCentredString(width / 2, y, "¡Gracias por su compra!")
+    c.setFillColor(colors.black)
+
+    c.showPage()
+    c.save()
+    buf.seek(0)
+    return buf
+
+
+async def store_qr_reward(order_id: int, token: str, purchase_amount: float) -> None:
+    """Insert a row into qr_rewards so the token can be redeemed later via WhatsApp."""
+    reward_amount = round(purchase_amount * 0.01, 2)
+    try:
+        await supabase_request(
+            method="POST",
+            endpoint="/rest/v1/qr_rewards",
+            json_data={
+                "qr_token": token,
+                "order_id": order_id,
+                "purchase_amount": purchase_amount,
+                "reward_amount": reward_amount,
+                "status": "pending",
+            },
+        )
+        print(f"QR reward stored: order={order_id} reward=${reward_amount}", flush=True)
+    except Exception as e:
+        print(f"ERROR storing qr_reward: {e}", flush=True)
+
+
+@app.get("/api/ticket-pdf/{token}")
+async def get_ticket_pdf_by_token(token: str):
+    """Public endpoint: returns the PDF of the ticket associated with a QR token.
+    Used by the WhatsApp bot to send the ticket as a document to the customer.
+    """
+    try:
+        # Look up qr_rewards by token
+        rewards = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/qr_rewards",
+            params={
+                "select": "order_id,qr_token,purchase_amount",
+                "qr_token": f"eq.{token}",
+                "limit": "1",
+            },
+        )
+        if not rewards:
+            raise HTTPException(status_code=404, detail="QR not found")
+
+        order_id = int(rewards[0]["order_id"])
+        total = float(rewards[0]["purchase_amount"] or 0)
+
+        # Fetch items for this order
+        items_rows = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/ventas_terex1",
+            params={
+                "select": "qty,name,price",
+                "order_id": f"eq.{order_id}",
+            },
+        )
+
+        items = []
+        for r in items_rows:
+            qty = int(r.get("qty", 1) or 1)
+            price = float(r.get("price", 0) or 0)
+            items.append({
+                "qty": qty,
+                "name": str(r.get("name", "")),
+                "price": price,
+                "subtotal": qty * price,
+            })
+
+        pdf_buf = _build_receipt_pdf_with_qr(items, total, order_id, token)
+
+        return StreamingResponse(
+            pdf_buf,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'inline; filename="ticket_{order_id}.pdf"',
+                "Cache-Control": "public, max-age=3600",
+            },
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ERROR in /api/ticket-pdf/{token}: {e}", flush=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 async def get_order_total(order_id: int):
     """Get total amount for an order from ventas_terex1"""
