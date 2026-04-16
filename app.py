@@ -6600,7 +6600,7 @@ async def get_ticket_pdf_by_token(token: str):
         order_id = int(rewards[0]["order_id"])
         total = float(rewards[0]["purchase_amount"] or 0)
 
-        # Fetch items for this order
+        # Fetch items — try terex1 first, fall back to terex2
         items_rows = await supabase_request(
             method="GET",
             endpoint="/rest/v1/ventas_terex1",
@@ -6609,6 +6609,15 @@ async def get_ticket_pdf_by_token(token: str):
                 "order_id": f"eq.{order_id}",
             },
         )
+        if not items_rows:
+            items_rows = await supabase_request(
+                method="GET",
+                endpoint="/rest/v1/ventas_terex2",
+                params={
+                    "select": "qty,name,price",
+                    "order_id": f"eq.{order_id}",
+                },
+            )
 
         items = []
         for r in items_rows:
