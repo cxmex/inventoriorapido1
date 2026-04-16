@@ -3148,6 +3148,163 @@ async def secret_menu_update_cost(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ===== AMSTERDAM CAFE — Chat messages =====
+
+@app.post("/amsterdamcafe")
+async def amsterdam_cafe_write(request: Request):
+    body = await request.json()
+    user = body.get("user", "").strip()
+    message = body.get("message", "").strip()
+    if not user or not message:
+        raise HTTPException(status_code=400, detail="user and message are required")
+
+    tz = pytz.timezone("America/Mexico_City")
+    now = datetime.now(tz).isoformat()
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"{SUPABASE_URL}/rest/v1/amsterdamcafe",
+            headers=HEADERS,
+            json={"user": user, "message": message, "created_at": now}
+        )
+
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+    return JSONResponse({"ok": True, "data": resp.json()})
+
+
+@app.get("/amsterdamcafe", response_class=HTMLResponse)
+async def amsterdam_cafe_page(request: Request):
+    return templates.TemplateResponse(request=request, name="amsterdamcafe.html", context={})
+
+
+@app.get("/amsterdamcafe/messages")
+async def amsterdam_cafe_messages():
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/amsterdamcafe",
+            headers=HEADERS,
+            params={"select": "*", "order": "created_at.desc", "limit": "100"}
+        )
+    if resp.status_code >= 400:
+        return JSONResponse({"messages": []})
+    return JSONResponse({"messages": resp.json()})
+
+
+# ===== IMAGENES X ESTILO — Create estilo from photos with AI naming =====
+
+@app.get("/imagenesxestilo", response_class=HTMLResponse)
+async def imagenes_x_estilo_page(request: Request):
+    return templates.TemplateResponse(request=request, name="imagenesxestilo.html", context={})
+
+
+@app.post("/imagenesxestilo/analyze")
+async def imagenes_x_estilo_analyze(request: Request):
+    """Analyze uploaded images with Claude Vision to suggest a trendy estilo name."""
+    import base64
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY no esta configurada en el servidor")
+
+    body = await request.json()
+    images = body.get("images", [])
+    if not images:
+        raise HTTPException(status_code=400, detail="No se enviaron imagenes")
+
+    # Fetch existing estilo names for context
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/inventario_estilos",
+                headers={**HEADERS, "Range": "0-999"},
+                params={"select": "nombre", "prioridad": "eq.1", "order": "id.desc", "limit": "80"}
+            )
+        existing_names = [r["nombre"] for r in resp.json() if r.get("nombre")] if resp.status_code < 400 else []
+    except Exception:
+        existing_names = []
+
+    sample_names = ", ".join(existing_names[:40]) if existing_names else "FUN FLORES, GALAXY DREAMS, CRYSTAL WAVE, MIDNIGHT BLOOM, SAKURA PINK"
+
+    # Build Claude API content with images
+    content = []
+    for img in images[:5]:
+        content.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": img.get("type", "image/jpeg"),
+                "data": img["data"]
+            }
+        })
+
+    content.append({
+        "type": "text",
+        "text": f"""You are a creative product naming expert for a trendy phone case store in Mexico.
+
+Analyze the phone case design(s) in these images. Based on the visual style (colors, patterns, characters, textures, themes), suggest a catchy, short product name (2-3 words max, UPPERCASE).
+
+The name should be:
+- Trendy and appealing to young Mexican consumers
+- Similar in style to these existing product names from our catalog: {sample_names}
+- Short, memorable, and marketable
+- In Spanish or English (mix is OK, like our existing names)
+- Descriptive of the visual design
+
+Respond ONLY in this exact JSON format, nothing else:
+{{"nombre": "SUGGESTED NAME", "reason": "Brief explanation of why this name fits the design", "alternatives": ["ALT NAME 1", "ALT NAME 2", "ALT NAME 3"]}}"""
+    })
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            api_resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json"
+                },
+                json={
+                    "model": "claude-sonnet-4-20250514",
+                    "max_tokens": 300,
+                    "messages": [{"role": "user", "content": content}]
+                }
+            )
+
+        if api_resp.status_code >= 400:
+            error_body = api_resp.text
+            print(f"Anthropic API error: {api_resp.status_code} {error_body}", flush=True)
+            raise HTTPException(status_code=502, detail=f"Error del servicio de IA: {api_resp.status_code}")
+
+        api_data = api_resp.json()
+        text_response = api_data.get("content", [{}])[0].get("text", "")
+
+        # Parse JSON from response
+        try:
+            result = json.loads(text_response)
+        except json.JSONDecodeError:
+            # Try to extract JSON from the response
+            import re as _re
+            match = _re.search(r'\{.*\}', text_response, _re.DOTALL)
+            if match:
+                result = json.loads(match.group())
+            else:
+                result = {"nombre": "NUEVO ESTILO", "reason": "No se pudo interpretar la respuesta de IA", "alternatives": []}
+
+        return JSONResponse({
+            "nombre": result.get("nombre", "NUEVO ESTILO"),
+            "reason": result.get("reason", ""),
+            "alternatives": result.get("alternatives", [])
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"AI analysis error: {e}", flush=True)
+        raise HTTPException(status_code=500, detail=f"Error en analisis de IA: {str(e)}")
+
+
 @app.get("/verinventariodaily", response_class=HTMLResponse)
 async def ver_ventas_por_semana(request: Request):
     try:
@@ -4678,26 +4835,69 @@ async def delete_image(image_id: int):
                 headers=HEADERS,
                 params={"select": "id", "id": f"eq.{image_id}"}
             )
-            
+
             if check_response.status_code == 200:
                 check_data = check_response.json()
                 if not check_data:
                     raise HTTPException(status_code=404, detail="Image not found")
-            
+
             # Delete the image
             delete_response = await client.delete(
                 f"{SUPABASE_URL}/rest/v1/image_uploads",
                 headers=HEADERS,
                 params={"id": f"eq.{image_id}"}
             )
-            
+
             if delete_response.status_code not in [200, 204]:
                 raise HTTPException(status_code=500, detail="Failed to delete image")
-            
+
             return {"message": "Image deleted successfully"}
-    
+
     except Exception as e:
         logger.error(f"Error deleting image: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/image/delete-by-url")
+async def delete_image_by_url(request: Request):
+    """Delete image by public_url (removes DB row + storage file)."""
+    try:
+        body = await request.json()
+        public_url = (body.get("public_url") or "").strip()
+        if not public_url:
+            raise HTTPException(status_code=400, detail="public_url required")
+
+        # Derive storage path + bucket from the URL
+        marker = "/storage/v1/object/public/"
+        if marker not in public_url:
+            raise HTTPException(status_code=400, detail="Invalid storage URL")
+        after = public_url.split(marker, 1)[1]
+        bucket, _, storage_path = after.partition("/")
+        if not bucket or not storage_path:
+            raise HTTPException(status_code=400, detail="Could not parse bucket/path from URL")
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            # 1. Delete DB row (if any) matching public_url
+            db_resp = await client.delete(
+                f"{SUPABASE_URL}/rest/v1/image_uploads",
+                headers=HEADERS,
+                params={"public_url": f"eq.{public_url}"}
+            )
+            db_ok = db_resp.status_code in (200, 204)
+
+            # 2. Delete the actual file in storage
+            storage_resp = await client.delete(
+                f"{SUPABASE_URL}/storage/v1/object/{bucket}/{storage_path}",
+                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            )
+            storage_ok = storage_resp.status_code in (200, 204)
+
+        return {"db_deleted": db_ok, "storage_deleted": storage_ok, "bucket": bucket, "path": storage_path}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting image by url: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/test-estilo/{estilo_id}")

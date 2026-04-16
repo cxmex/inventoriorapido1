@@ -143,15 +143,15 @@
             deleteModal = new bootstrap.Modal(document.getElementById('deleteModal'));
             loadEstilos();
 
-            // Event delegation for delete button clicks (handles dynamically rendered buttons)
+            // Event delegation for delete button clicks
             document.body.addEventListener('click', function(e) {
                 const btn = e.target.closest('.delete-btn');
                 if (!btn) return;
                 e.preventDefault();
                 e.stopPropagation();
-                const imageId = btn.dataset.imageId;
-                console.log('Trash clicked — image id:', imageId);
-                if (imageId) confirmDeleteImage(parseInt(imageId));
+                const imageUrl = btn.dataset.imageUrl;
+                console.log('Trash clicked — image url:', imageUrl);
+                if (imageUrl) confirmDeleteImageByUrl(imageUrl);
             });
 
             document.getElementById('back-to-estilos').addEventListener('click', showEstilosView);
@@ -324,14 +324,13 @@
         }
 
         function createImageCard(image) {
-            console.log('Rendering image card:', image);
             const createdDate = new Date(image.created_at).toLocaleDateString('es-MX', {day:'2-digit', month:'short', year:'numeric'});
-            const imgId = image.id ?? image.ID ?? image.image_id ?? '';
+            const urlEscaped = image.public_url.replace(/"/g, '&quot;');
             return `
                 <div class="image-card">
                     <img src="${image.public_url}" alt="${image.file_name}" loading="lazy"
                          onclick="openLightbox('${image.public_url}')" style="cursor:zoom-in;">
-                    <button type="button" class="delete-btn" data-image-id="${imgId}" title="Eliminar">
+                    <button type="button" class="delete-btn" data-image-url="${urlEscaped}" title="Eliminar">
                         <i class="bi bi-trash"></i>
                     </button>
                     <div class="image-overlay">
@@ -394,28 +393,27 @@
             input.value = '';
         }
 
-        async function confirmDeleteImage(imageId) {
-            console.log('Delete clicked for image', imageId);
+        async function confirmDeleteImageByUrl(imageUrl) {
             if (!confirm('Eliminar esta imagen?')) return;
             try {
-                const response = await fetch(`/api/image/${imageId}`, { method: 'DELETE' });
-                console.log('Delete response:', response.status);
+                const response = await fetch('/api/image/delete-by-url', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ public_url: imageUrl }),
+                });
+                const data = await response.json().catch(() => ({}));
+                console.log('Delete response:', response.status, data);
                 if (response.ok) {
                     await selectEstilo(currentEstiloId);
                     showAlert('Imagen eliminada', 'success');
                 } else {
-                    const errText = await response.text();
-                    console.error('Delete failed:', errText);
-                    showAlert('Error al eliminar la imagen: ' + response.status, 'danger');
+                    showAlert('Error al eliminar: ' + (data.detail || response.status), 'danger');
                 }
             } catch (error) {
                 console.error('Delete error:', error);
                 showAlert('Error al eliminar la imagen', 'danger');
             }
         }
-
-        // Kept for any lingering references
-        async function deleteImage(imageId) { return confirmDeleteImage(imageId); }
 
         function showEstilosView() {
             document.getElementById('color-details').style.display = 'none';
