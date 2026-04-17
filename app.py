@@ -5731,15 +5731,67 @@ async def api_save(payload: SavePayload):
 
     # Use your existing QR PDF function
     pdf_buf = _build_receipt_pdf_with_qr(items_for_ticket, total, next_order_id, redemption_token)
-    
+
+    # Read the PDF bytes so we can both store and return them
+    pdf_bytes = pdf_buf.read()
+
+    # Upload a copy to the "tickets" storage bucket (non-blocking)
+    asyncio.create_task(upload_ticket_to_storage(next_order_id, pdf_bytes))
+
     filename = f"ticket_{next_order_id}_{int(datetime.now().timestamp()*1000)}.pdf"
-    
+
     return StreamingResponse(
-        pdf_buf,
+        io.BytesIO(pdf_bytes),
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
+
+
+TICKET_BUCKET = "tickets"
+
+
+async def upload_ticket_to_storage(order_id: int, pdf_bytes: bytes):
+    """Upload the ticket PDF to Supabase Storage bucket 'tickets'.
+    Creates the bucket automatically if it doesn't exist yet.
+    Files are stored as tickets/{order_id}.pdf and are publicly accessible.
+    """
+    storage_path = f"{order_id}.pdf"
+    storage_headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            # Upload
+            resp = await client.post(
+                f"{SUPABASE_URL}/storage/v1/object/{TICKET_BUCKET}/{storage_path}",
+                headers={**storage_headers, "Content-Type": "application/pdf"},
+                content=pdf_bytes,
+            )
+
+            # If bucket doesn't exist (404/400), create it and retry
+            if resp.status_code in (400, 404):
+                create_resp = await client.post(
+                    f"{SUPABASE_URL}/storage/v1/bucket",
+                    headers={**storage_headers, "Content-Type": "application/json"},
+                    json={"id": TICKET_BUCKET, "name": TICKET_BUCKET, "public": True},
+                )
+                print(f"Bucket create: {create_resp.status_code} {create_resp.text[:200]}", flush=True)
+                # Retry upload
+                resp = await client.post(
+                    f"{SUPABASE_URL}/storage/v1/object/{TICKET_BUCKET}/{storage_path}",
+                    headers={**storage_headers, "Content-Type": "application/pdf"},
+                    content=pdf_bytes,
+                )
+
+            if resp.status_code < 400:
+                public_url = f"{SUPABASE_URL}/storage/v1/object/public/{TICKET_BUCKET}/{storage_path}"
+                print(f"Ticket PDF uploaded: {public_url}", flush=True)
+            else:
+                print(f"Ticket PDF upload failed: {resp.status_code} {resp.text[:200]}", flush=True)
+    except Exception as e:
+        print(f"Ticket PDF upload error: {e}", flush=True)
 
 
 async def process_loyalty_deduction(product, order_id: int, fecha: str, hora: str):
