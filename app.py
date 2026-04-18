@@ -6173,10 +6173,11 @@ async def store_redemption_token(order_id: int, token: str, total: float):
 
 
 
-def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, redemption_token: str) -> io.BytesIO:
-    """Summary-only ticket for thermal printer (80mm).
-    Shows ONLY totals + QR code. No item detail — customers see the full
-    breakdown when they scan the QR via WhatsApp.
+def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int,
+                                redemption_token: str, show_items: bool = False) -> io.BytesIO:
+    """PDF receipt for 80mm thermal printer.
+    show_items=False  → summary-only (for printing at POS)
+    show_items=True   → full item detail (sent via WhatsApp after QR scan)
     """
     width = 80 * mm
     margin = 3 * mm
@@ -6192,8 +6193,12 @@ def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, r
     subtotal_before = total + discount
     reward_amount = round(total * 0.01, 2)
 
-    # Fixed height — no items to enumerate, ticket is always short
-    height = 165 * mm + (5 * mm if discount > 0 else 0)
+    # Height: fixed for summary, dynamic for detailed
+    if show_items:
+        item_h = 9 * mm
+        height = 28 * mm + (len(items) * item_h) + 20 * mm + (5 * mm if discount > 0 else 0) + 30 * mm + 2 * margin
+    else:
+        height = 165 * mm + (5 * mm if discount > 0 else 0)
 
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=(width, height))
@@ -6217,7 +6222,38 @@ def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, r
     c.line(margin, y, width - margin, y)
     y -= 12
 
-    # ---------- SUMMARY (no individual items) --------------------------------
+    # ---------- ITEMS (only when show_items=True) ----------------------------
+    if show_items:
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(margin, y, "Producto")
+        c.drawRightString(width - margin, y, "Subtotal")
+        y -= 10
+        c.line(margin, y + 4, width - margin, y + 4)
+
+        c.setFont("Helvetica", 9)
+        for it in items:
+            qty = int(it.get("qty", 0))
+            name = str(it.get("name", ""))
+            price = float(it.get("price", 0) or 0)
+            sub = float(it.get("subtotal", qty * price) or 0)
+            display_name = name if len(name) <= 32 else name[:31] + "…"
+
+            c.setFont("Helvetica", 9)
+            c.drawString(margin, y, f"{qty}x  {display_name}")
+            y -= 10
+
+            c.setFont("Helvetica", 8)
+            c.setFillColor(colors.grey)
+            c.drawString(margin + 10, y, f"@ ${price:0.2f} c/u")
+            c.setFillColor(colors.black)
+            c.drawRightString(width - margin, y, f"${sub:0.2f}")
+            y -= 12
+
+        c.setLineWidth(0.5)
+        c.line(margin, y + 2, width - margin, y + 2)
+        y -= 6
+
+    # ---------- TOTALS -------------------------------------------------------
     c.setFont("Helvetica", 10)
     c.drawString(margin, y, "Total piezas:")
     c.drawRightString(width - margin, y, f"{total_pieces}")
@@ -6239,56 +6275,58 @@ def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, r
     c.drawRightString(width - margin, y, f"${total:0.2f}")
     y -= 16
 
-    # ---------- QR + LOYALTY SECTION -----------------------------------------
-    c.setStrokeColor(colors.black)
-    c.setDash(1, 2)
-    c.line(margin, y, width - margin, y)
-    c.setDash()
-    y -= 12
+    if not show_items:
+        # ---------- QR + LOYALTY (only on printed summary) -------------------
+        c.setStrokeColor(colors.black)
+        c.setDash(1, 2)
+        c.line(margin, y, width - margin, y)
+        c.setDash()
+        y -= 12
 
-    c.setFont("Helvetica-Bold", 9)
-    c.drawCentredString(width / 2, y, "ESCANEA ESTE QR CODE Y OBTEN")
-    y -= 10
-    c.drawCentredString(width / 2, y, "1% PARA TU SIGUIENTE COMPRA")
-    y -= 10
+        c.setFont("Helvetica-Bold", 9)
+        c.drawCentredString(width / 2, y, "ESCANEA ESTE QR CODE Y OBTEN")
+        y -= 10
+        c.drawCentredString(width / 2, y, "1% PARA TU SIGUIENTE COMPRA")
+        y -= 10
 
-    c.setFont("Helvetica", 8)
-    c.setFillColor(colors.grey)
-    c.drawCentredString(width / 2, y, f"Credito a obtener: ${reward_amount:0.2f}")
-    c.setFillColor(colors.black)
-    y -= 12
+        c.setFont("Helvetica", 8)
+        c.setFillColor(colors.grey)
+        c.drawCentredString(width / 2, y, f"Credito a obtener: ${reward_amount:0.2f}")
+        c.setFillColor(colors.black)
+        y -= 12
 
-    # QR code — WhatsApp deep link
-    business_phone = os.environ.get("WHATSAPP_BUSINESS_NUMBER", "525642460019")
-    prefilled = urllib.parse.quote(f"CANJEAR:{redemption_token}")
-    qr_url = f"https://wa.me/{business_phone}?text={prefilled}"
+        business_phone = os.environ.get("WHATSAPP_BUSINESS_NUMBER", "525642460019")
+        prefilled = urllib.parse.quote(f"CANJEAR:{redemption_token}")
+        qr_url = f"https://wa.me/{business_phone}?text={prefilled}"
 
-    try:
-        qr_size = 40 * mm
-        qr_widget = QrCodeWidget(qr_url)
-        qr_widget.barWidth = qr_size
-        qr_widget.barHeight = qr_size
-        qr_drawing = Drawing(qr_size, qr_size)
-        qr_drawing.add(qr_widget)
-        x_qr = (width - qr_size) / 2
-        y_qr = y - qr_size
-        renderPDF.draw(qr_drawing, c, x_qr, y_qr)
-        y = y_qr - 8
-    except Exception as e:
-        print(f"QR error: {e}", flush=True)
+        try:
+            qr_size = 40 * mm
+            qr_widget = QrCodeWidget(qr_url)
+            qr_widget.barWidth = qr_size
+            qr_widget.barHeight = qr_size
+            qr_drawing = Drawing(qr_size, qr_size)
+            qr_drawing.add(qr_widget)
+            x_qr = (width - qr_size) / 2
+            y_qr = y - qr_size
+            renderPDF.draw(qr_drawing, c, x_qr, y_qr)
+            y = y_qr - 8
+        except Exception as e:
+            print(f"QR error: {e}", flush=True)
+            c.setFont("Helvetica", 7)
+            c.drawCentredString(width / 2, y - 10, f"Token: {redemption_token[:20]}...")
+            y -= 20
+
         c.setFont("Helvetica", 7)
-        c.drawCentredString(width / 2, y - 10, f"Token: {redemption_token[:20]}...")
-        y -= 20
+        c.setFillColor(colors.grey)
+        c.drawCentredString(width / 2, y, "TAMBIEN PODRA VER EL DETALLE DE SU")
+        y -= 8
+        c.drawCentredString(width / 2, y, "COMPRA, UNA VEZ ESCANEADO EL")
+        y -= 8
+        c.drawCentredString(width / 2, y, "CODIGO QR EN SU WHATSAPP")
+        y -= 10
 
-    # ---------- DETAIL-VIA-WHATSAPP LEGEND -----------------------------------
     c.setFont("Helvetica", 7)
     c.setFillColor(colors.grey)
-    c.drawCentredString(width / 2, y, "TAMBIEN PODRA VER EL DETALLE DE SU")
-    y -= 8
-    c.drawCentredString(width / 2, y, "COMPRA, UNA VEZ ESCANEADO EL")
-    y -= 8
-    c.drawCentredString(width / 2, y, "CODIGO QR EN SU WHATSAPP")
-    y -= 10
     c.drawCentredString(width / 2, y, "¡Gracias por su compra!")
     c.setFillColor(colors.black)
 
@@ -6664,7 +6702,7 @@ async def get_ticket_pdf_by_token(token: str):
                 "subtotal": qty * price,
             })
 
-        pdf_buf = _build_receipt_pdf_with_qr(items, total, order_id, token)
+        pdf_buf = _build_receipt_pdf_with_qr(items, total, order_id, token, show_items=True)
 
         return StreamingResponse(
             pdf_buf,
