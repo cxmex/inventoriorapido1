@@ -6174,10 +6174,12 @@ async def store_redemption_token(order_id: int, token: str, total: float):
 
 
 def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int,
-                                redemption_token: str, show_items: bool = False) -> io.BytesIO:
+                                redemption_token: str, show_items: bool = False,
+                                fecha: str = None, hora: str = None) -> io.BytesIO:
     """PDF receipt for 80mm thermal printer.
     show_items=False  → summary-only (for printing at POS)
     show_items=True   → full item detail (sent via WhatsApp after QR scan)
+    fecha/hora: if provided, use these instead of current time (for WhatsApp re-generation).
     """
     width = 80 * mm
     margin = 3 * mm
@@ -6192,6 +6194,13 @@ def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int,
     discount = get_discount(total_pieces)
     subtotal_before = total + discount
     reward_amount = round(total * 0.01, 2)
+
+    # Use provided fecha/hora or compute Mexico City time
+    if not fecha or not hora:
+        mexico_tz = pytz.timezone("America/Mexico_City")
+        now = datetime.now(mexico_tz)
+        fecha = fecha or now.strftime("%Y-%m-%d")
+        hora = hora or now.strftime("%H:%M:%S")
 
     # Height: fixed for summary, dynamic for detailed
     if show_items:
@@ -6213,7 +6222,6 @@ def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int,
     c.drawCentredString(width / 2, y, f"Ticket #{order_id}")
     y -= 13
 
-    _, fecha, hora = _now_strs()
     c.setFont("Helvetica", 9)
     c.drawCentredString(width / 2, y, f"{fecha}  {hora}")
     y -= 10
@@ -6677,7 +6685,7 @@ async def get_ticket_pdf_by_token(token: str):
             method="GET",
             endpoint="/rest/v1/ventas_terex1",
             params={
-                "select": "qty,name,price",
+                "select": "qty,name,price,fecha,hora",
                 "order_id": f"eq.{order_id}",
             },
         )
@@ -6686,10 +6694,14 @@ async def get_ticket_pdf_by_token(token: str):
                 method="GET",
                 endpoint="/rest/v1/ventas_terex2",
                 params={
-                    "select": "qty,name,price",
+                    "select": "qty,name,price,fecha,hora",
                     "order_id": f"eq.{order_id}",
                 },
             )
+
+        # Extract the original sale fecha/hora from the first row
+        sale_fecha = (items_rows[0].get("fecha") or "") if items_rows else ""
+        sale_hora = (items_rows[0].get("hora") or "") if items_rows else ""
 
         items = []
         for r in items_rows:
@@ -6702,7 +6714,8 @@ async def get_ticket_pdf_by_token(token: str):
                 "subtotal": qty * price,
             })
 
-        pdf_buf = _build_receipt_pdf_with_qr(items, total, order_id, token, show_items=True)
+        pdf_buf = _build_receipt_pdf_with_qr(items, total, order_id, token,
+                                              show_items=True, fecha=sale_fecha, hora=sale_hora)
 
         return StreamingResponse(
             pdf_buf,
