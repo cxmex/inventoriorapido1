@@ -6174,10 +6174,9 @@ async def store_redemption_token(order_id: int, token: str, total: float):
 
 
 def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, redemption_token: str) -> io.BytesIO:
-    """PDF receipt for thermal printer:
-       - 80mm paper (enough room for full product names)
-       - dynamic height so the whole ticket fits on ONE page (no duplicates)
-       - unique QR code with WhatsApp deep link for 1% loyalty reward
+    """Summary-only ticket for thermal printer (80mm).
+    Shows ONLY totals + QR code. No item detail — customers see the full
+    breakdown when they scan the QR via WhatsApp.
     """
     width = 80 * mm
     margin = 3 * mm
@@ -6185,37 +6184,24 @@ def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, r
     total_pieces = sum(int(it.get("qty", 0)) for it in items)
 
     def get_discount(qty):
-        if qty > 100:
-            return qty * 10
-        if qty > 50:
-            return qty * 5
+        if qty > 100: return qty * 10
+        if qty > 50:  return qty * 5
         return 0
 
     discount = get_discount(total_pieces)
     subtotal_before = total + discount
-
-    # Reward is 1% of the final total (rounded to 2 decimals)
     reward_amount = round(total * 0.01, 2)
 
-    # --- Dynamic height calculation -----------------------------------------
-    # Header block: ~28mm
-    # Each item: 2 lines of ~4.2mm = ~9mm (name line + "@ $x c/u  Subtotal" line)
-    # Totals block: ~18mm
-    # Legend + QR + footer: ~62mm
-    header_h   = 28 * mm
-    item_h     = 9 * mm
-    totals_h   = 18 * mm + (5 * mm if discount > 0 else 0)
-    qr_block_h = 62 * mm
-    height = header_h + (len(items) * item_h) + totals_h + qr_block_h + 2 * margin
+    # Fixed height — no items to enumerate, ticket is always short
+    height = 165 * mm + (5 * mm if discount > 0 else 0)
 
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=(width, height))
-
     y = height - margin
 
     # ---------- HEADER -------------------------------------------------------
     c.setFont("Helvetica-Bold", 14)
-    c.drawCentredString(width / 2, y, "TEREX2")
+    c.drawCentredString(width / 2, y, "TEREX1")
     y -= 14
 
     c.setFont("Helvetica-Bold", 11)
@@ -6229,69 +6215,31 @@ def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, r
 
     c.setLineWidth(0.5)
     c.line(margin, y, width - margin, y)
-    y -= 10
+    y -= 12
 
-    # Column headers
-    c.setFont("Helvetica-Bold", 9)
-    c.drawString(margin, y, "Producto")
-    c.drawRightString(width - margin, y, "Subtotal")
-    y -= 10
-    c.line(margin, y + 4, width - margin, y + 4)
-
-    # ---------- ITEMS --------------------------------------------------------
-    c.setFont("Helvetica", 9)
-    name_max_chars = 32  # fits comfortably at 9pt in ~50mm column
-
-    for it in items:
-        qty = int(it.get("qty", 0))
-        name = str(it.get("name", ""))
-        price = float(it.get("price", 0) or 0)
-        sub = float(it.get("subtotal", qty * price) or 0)
-
-        # Truncate long names
-        display_name = name if len(name) <= name_max_chars else name[:name_max_chars - 1] + "…"
-
-        # Line 1: "1x  NAME"
-        c.setFont("Helvetica", 9)
-        c.drawString(margin, y, f"{qty}x  {display_name}")
-        y -= 10
-
-        # Line 2: "    @ $75.00 c/u        $75.00"  (indented)
-        c.setFont("Helvetica", 8)
-        c.setFillColor(colors.grey)
-        c.drawString(margin + 10, y, f"@ ${price:0.2f} c/u")
-        c.setFillColor(colors.black)
-        c.drawRightString(width - margin, y, f"${sub:0.2f}")
-        y -= 12
-
-    # ---------- TOTALS -------------------------------------------------------
-    c.setLineWidth(0.5)
-    c.line(margin, y + 2, width - margin, y + 2)
-    y -= 6
-
-    c.setFont("Helvetica", 9)
-    c.drawString(margin, y, f"Total piezas:")
+    # ---------- SUMMARY (no individual items) --------------------------------
+    c.setFont("Helvetica", 10)
+    c.drawString(margin, y, "Total piezas:")
     c.drawRightString(width - margin, y, f"{total_pieces}")
-    y -= 11
+    y -= 13
 
-    c.setFont("Helvetica", 9)
     c.drawString(margin, y, "Subtotal:")
     c.drawRightString(width - margin, y, f"${subtotal_before:0.2f}")
-    y -= 11
+    y -= 13
 
     if discount > 0:
         c.setFillColor(colors.green)
         c.drawString(margin, y, "Descuento:")
         c.drawRightString(width - margin, y, f"-${discount:0.2f}")
         c.setFillColor(colors.black)
-        y -= 11
+        y -= 13
 
-    c.setFont("Helvetica-Bold", 12)
+    c.setFont("Helvetica-Bold", 13)
     c.drawString(margin, y, "TOTAL:")
     c.drawRightString(width - margin, y, f"${total:0.2f}")
     y -= 16
 
-    # ---------- LOYALTY QR SECTION ------------------------------------------
+    # ---------- QR + LOYALTY SECTION -----------------------------------------
     c.setStrokeColor(colors.black)
     c.setDash(1, 2)
     c.line(margin, y, width - margin, y)
@@ -6310,8 +6258,7 @@ def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, r
     c.setFillColor(colors.black)
     y -= 12
 
-    # Build QR: WhatsApp deep link with prefilled redemption message.
-    # Customer scans -> WhatsApp opens -> sends CANJEAR:<token> to the business number.
+    # QR code — WhatsApp deep link
     business_phone = os.environ.get("WHATSAPP_BUSINESS_NUMBER", "525642460019")
     prefilled = urllib.parse.quote(f"CANJEAR:{redemption_token}")
     qr_url = f"https://wa.me/{business_phone}?text={prefilled}"
@@ -6333,8 +6280,15 @@ def _build_receipt_pdf_with_qr(items: list[dict], total: float, order_id: int, r
         c.drawCentredString(width / 2, y - 10, f"Token: {redemption_token[:20]}...")
         y -= 20
 
+    # ---------- DETAIL-VIA-WHATSAPP LEGEND -----------------------------------
     c.setFont("Helvetica", 7)
     c.setFillColor(colors.grey)
+    c.drawCentredString(width / 2, y, "TAMBIEN PODRA VER EL DETALLE DE SU")
+    y -= 8
+    c.drawCentredString(width / 2, y, "COMPRA, UNA VEZ ESCANEADO EL")
+    y -= 8
+    c.drawCentredString(width / 2, y, "CODIGO QR EN SU WHATSAPP")
+    y -= 10
     c.drawCentredString(width / 2, y, "¡Gracias por su compra!")
     c.setFillColor(colors.black)
 
