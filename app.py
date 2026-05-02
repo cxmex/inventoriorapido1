@@ -5020,14 +5020,15 @@ async def get_colors_with_images(estilo_id: int):
             
             colors_data = colors_response.json()
             
-            # Get images for this estilo
+            # Get images for this estilo — ordered by user-set display_order (0 = primary)
+            # then by recency. display_order column added in migrations_image_order.sql.
             images_response = await client.get(
                 f"{SUPABASE_URL}/rest/v1/image_uploads",
                 headers=HEADERS,
                 params={
-                    "select": "id,color_id,file_name,public_url,description,created_at",
+                    "select": "id,color_id,file_name,public_url,description,created_at,display_order",
                     "estilo_id": f"eq.{estilo_id}",
-                    "order": "created_at.desc"
+                    "order": "display_order.asc.nullslast,created_at.desc"
                 }
             )
             
@@ -5114,6 +5115,56 @@ async def upload_color_image(estilo_id: int, color_id: int, file: UploadFile = F
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/image/{image_id}/set-primary")
+async def set_primary_image(image_id: int):
+    """Mark this image as the FIRST one to show for its (estilo, color).
+    Sets display_order=0 on chosen image, resets siblings to 100.
+    Calls the set_primary_image() Postgres function from migrations_image_order.sql.
+    Falls back to two REST writes if the RPC isn't installed yet.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Try the RPC first (atomic)
+            rpc = await client.post(
+                f"{SUPABASE_URL}/rest/v1/rpc/set_primary_image",
+                headers={**HEADERS, "Content-Type": "application/json"},
+                json={"p_image_id": image_id},
+            )
+            if rpc.status_code in (200, 204):
+                return {"ok": True, "image_id": image_id, "via": "rpc"}
+
+            # Fallback: look up estilo+color, reset siblings to 100, set this to 0
+            lookup = await client.get(
+                f"{SUPABASE_URL}/rest/v1/image_uploads",
+                headers=HEADERS,
+                params={"select": "estilo_id,color_id", "id": f"eq.{image_id}"},
+            )
+            if lookup.status_code != 200 or not lookup.json():
+                raise HTTPException(status_code=404, detail="Image not found")
+            row = lookup.json()[0]
+            eid, cid = row["estilo_id"], row["color_id"]
+
+            await client.patch(
+                f"{SUPABASE_URL}/rest/v1/image_uploads",
+                headers={**HEADERS, "Content-Type": "application/json"},
+                params={"estilo_id": f"eq.{eid}", "color_id": f"eq.{cid}",
+                        "id": f"neq.{image_id}"},
+                json={"display_order": 100},
+            )
+            await client.patch(
+                f"{SUPABASE_URL}/rest/v1/image_uploads",
+                headers={**HEADERS, "Content-Type": "application/json"},
+                params={"id": f"eq.{image_id}"},
+                json={"display_order": 0},
+            )
+            return {"ok": True, "image_id": image_id, "via": "rest_fallback"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"set_primary_image err: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

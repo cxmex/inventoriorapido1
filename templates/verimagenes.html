@@ -38,6 +38,11 @@
         .image-overlay { position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(transparent, rgba(0,0,0,0.7)); color: white; padding: 0.5rem; font-size: 0.75rem; }
         .delete-btn { position: absolute; top: 6px; right: 6px; background: rgba(220,53,69,0.9); border: none; border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; color: white; opacity: 0.85; transition: all 0.15s; font-size: 0.9rem; z-index: 5; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.3); }
         .delete-btn:hover, .delete-btn:active { opacity: 1; transform: scale(1.1); background: rgba(220,53,69,1); }
+        .primary-btn { position: absolute; top: 6px; left: 6px; background: rgba(0,0,0,0.55); border: none; border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; color: #ffd54f; opacity: 0.85; transition: all 0.15s; font-size: 0.95rem; z-index: 5; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.3); }
+        .primary-btn:hover { opacity: 1; transform: scale(1.1); background: rgba(0,0,0,0.75); }
+        .primary-btn.active { background: #ffd54f; color: #333; }
+        .primary-badge { position: absolute; bottom: 38px; left: 6px; background: #ffd54f; color: #333; font-size: 0.65rem; font-weight: 700; padding: 2px 7px; border-radius: 3px; letter-spacing: 0.5px; z-index: 5; box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
+        .image-card.is-primary { box-shadow: 0 0 0 3px #ffd54f, 0 2px 6px rgba(0,0,0,0.15); }
         .upload-zone { border: 2px dashed #cbd5e1; border-radius: 10px; padding: 1.5rem; text-align: center; color: #94a3b8; cursor: pointer; transition: all 0.2s; min-height: 100px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
         .upload-zone:hover { border-color: #0d6efd; color: #0d6efd; background: #eff6ff; }
         .no-images-msg { color: #94a3b8; text-align: center; padding: 1rem; font-size: 0.9rem; }
@@ -326,19 +331,44 @@
         function createImageCard(image) {
             const createdDate = new Date(image.created_at).toLocaleDateString('es-MX', {day:'2-digit', month:'short', year:'numeric'});
             const urlEscaped = image.public_url.replace(/"/g, '&quot;');
+            const isPrimary = (image.display_order ?? 100) === 0;
+            const primaryBadge = isPrimary
+                ? `<span class="primary-badge">PRIMERA</span>`
+                : '';
+            const starIcon = isPrimary ? 'bi-star-fill' : 'bi-star';
+            const starTitle = isPrimary
+                ? 'Esta imagen aparece primero'
+                : 'Marcar como primera imagen';
             return `
-                <div class="image-card">
+                <div class="image-card ${isPrimary ? 'is-primary' : ''}">
                     <img src="${image.public_url}" alt="${image.file_name}" loading="lazy"
                          onclick="openLightbox('${image.public_url}')" style="cursor:zoom-in;">
+                    <button type="button" class="primary-btn ${isPrimary ? 'active' : ''}"
+                            onclick="setPrimaryImage(${image.id})" title="${starTitle}">
+                        <i class="bi ${starIcon}"></i>
+                    </button>
                     <button type="button" class="delete-btn" data-image-url="${urlEscaped}" title="Eliminar">
                         <i class="bi bi-trash"></i>
                     </button>
+                    ${primaryBadge}
                     <div class="image-overlay">
                         <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${image.file_name}</div>
                         <div style="opacity:0.8;">${createdDate}</div>
                     </div>
                 </div>
             `;
+        }
+
+        async function setPrimaryImage(imageId) {
+            try {
+                const r = await fetch(`/api/image/${imageId}/set-primary`, { method: 'POST' });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                if (typeof currentEstiloId !== 'undefined' && currentEstiloId) {
+                    selectEstilo(currentEstiloId);
+                }
+            } catch (e) {
+                alert('No se pudo marcar como primera imagen: ' + e.message);
+            }
         }
 
         // Lightbox
