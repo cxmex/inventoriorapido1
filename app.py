@@ -2126,30 +2126,10 @@ async def secret_menu_estilo_metrics(request: Request):
                 weekly_by_estilo[est] = {}
             weekly_by_estilo[est][week] = weekly_by_estilo[est].get(week, 0) + rev
 
-        # Batch-fetch first image URL for every estilo (one storage list call per estilo, in parallel)
-        estilo_ids = [e["id"] for e in estilos]
-        storage_headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
-
-        image_map = {}  # estilo_id -> first image url
-        # Fetch in batches of 30 to avoid too many concurrent requests
-        for i in range(0, len(estilo_ids), 30):
-            batch = estilo_ids[i:i+30]
-            async with httpx.AsyncClient(timeout=15) as client:
-                resps = await asyncio.gather(*[
-                    client.post(
-                        f"{SUPABASE_URL}/storage/v1/object/list/images_estilos",
-                        headers=storage_headers,
-                        json={"prefix": f"{eid}/", "limit": 1}
-                    ) for eid in batch
-                ], return_exceptions=True)
-            for eid, resp in zip(batch, resps):
-                if isinstance(resp, Exception) or resp.status_code >= 400:
-                    continue
-                files = resp.json()
-                for f in files:
-                    if f.get("name") and f.get("id"):
-                        image_map[eid] = f"{SUPABASE_URL}/storage/v1/object/public/images_estilos/{eid}/{f['name']}"
-                        break
+        # Use shared bulk-thumbs helper (bucket first + image_uploads color fallback)
+        estilo_ids = [int(e["id"]) for e in estilos]
+        ids_csv = ",".join(str(i) for i in estilo_ids)
+        image_map = await secretmenu_thumbs(ids=ids_csv) if estilo_ids else {}
 
         # Build combined data per estilo
         combined = []
@@ -5243,6 +5223,133 @@ async def delete_image_by_url(request: Request):
     except Exception as e:
         logger.error(f"Error deleting image by url: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Secret-menu thumbnails: bulk endpoint ───────────────────────────────
+# Returns one reference image per estilo. Priority:
+#   1) images_estilos bucket (estilo-level)
+#   2) image_uploads (color-level) — fallback when no estilo image exists
+# Designed for fast bulk lookup so secret-menu pages can render thumbs
+# without making N separate calls.
+
+_thumb_cache: dict[int, tuple[str, float]] = {}  # estilo_id -> (url, expires_at)
+_THUMB_CACHE_TTL = 600  # 10 min
+
+@app.get("/api/secretmenu/thumbs")
+async def secretmenu_thumbs(ids: str = ""):
+    """Bulk thumbnail lookup. ids='1,2,3' or omit for ALL estilos.
+    Returns {estilo_id: thumb_url}. Empty string url if none found.
+    """
+    import time as _time
+    try:
+        now = _time.time()
+
+        # Build the asin list
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            if ids.strip():
+                want = [int(x) for x in ids.split(",") if x.strip().isdigit()]
+            else:
+                resp = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/inventario_estilos",
+                    headers={**HEADERS, "Range": "0-9999"},
+                    params={"select": "id"},
+                )
+                want = [int(r["id"]) for r in resp.json()] if resp.status_code < 400 else []
+
+            # Serve cache where possible
+            out: dict[int, str] = {}
+            need_lookup: list[int] = []
+            for eid in want:
+                cached = _thumb_cache.get(eid)
+                if cached and cached[1] > now:
+                    out[eid] = cached[0]
+                else:
+                    need_lookup.append(eid)
+
+            if not need_lookup:
+                return out
+
+            # Pull image_uploads for color-level fallback (one call covers everything)
+            color_thumbs: dict[int, str] = {}
+            color_resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/image_uploads",
+                headers={**HEADERS, "Range": "0-9999"},
+                params={"select": "estilo_id,public_url",
+                        "public_url": "not.is.null",
+                        "order": "created_at.asc"},
+            )
+            if color_resp.status_code < 400:
+                for row in color_resp.json():
+                    eid = row.get("estilo_id")
+                    url = row.get("public_url")
+                    if eid is not None and url and eid not in color_thumbs:
+                        color_thumbs[int(eid)] = url
+
+            # Probe images_estilos bucket per estilo (parallelized in batches of 30)
+            storage_headers = {"apikey": SUPABASE_KEY,
+                               "Authorization": f"Bearer {SUPABASE_KEY}",
+                               "Content-Type": "application/json"}
+            bucket_thumbs: dict[int, str] = {}
+            for i in range(0, len(need_lookup), 30):
+                batch = need_lookup[i:i+30]
+                resps = await asyncio.gather(*[
+                    client.post(
+                        f"{SUPABASE_URL}/storage/v1/object/list/images_estilos",
+                        headers=storage_headers,
+                        json={"prefix": f"{eid}/", "limit": 1},
+                    ) for eid in batch
+                ], return_exceptions=True)
+                for eid, resp in zip(batch, resps):
+                    if isinstance(resp, Exception): continue
+                    if resp.status_code >= 400: continue
+                    files = resp.json()
+                    for f in files:
+                        if f.get("name") and f.get("id"):
+                            bucket_thumbs[eid] = (
+                                f"{SUPABASE_URL}/storage/v1/object/public/images_estilos/"
+                                f"{eid}/{f['name']}"
+                            )
+                            break
+
+            # Merge with bucket priority + color fallback
+            expires = now + _THUMB_CACHE_TTL
+            for eid in need_lookup:
+                url = bucket_thumbs.get(eid) or color_thumbs.get(eid, "")
+                out[eid] = url
+                _thumb_cache[eid] = (url, expires)
+
+            return out
+    except Exception as e:
+        logger.error(f"secretmenu_thumbs error: {e}")
+        return {}
+
+
+# Same lookup but BY estilo NAME (for secret-menu pages that don't have ids)
+@app.get("/api/secretmenu/thumbs-by-name")
+async def secretmenu_thumbs_by_name(names: str = ""):
+    """names='Estilo A,Estilo B'. Returns {name: thumb_url}."""
+    try:
+        wanted = [n.strip() for n in names.split(",") if n.strip()]
+        if not wanted:
+            return {}
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            # Look up id for each name (single query with in.())
+            in_list = ",".join(f'"{n.replace(chr(34), "")}"' for n in wanted)
+            resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/inventario_estilos",
+                headers={**HEADERS, "Range": "0-999"},
+                params={"select": "id,nombre", "nombre": f"in.({in_list})"},
+            )
+            if resp.status_code >= 400: return {}
+            name_to_id = {r["nombre"]: int(r["id"]) for r in resp.json()}
+        # Reuse the bulk endpoint to fetch URLs
+        ids_csv = ",".join(str(i) for i in name_to_id.values())
+        url_map = await secretmenu_thumbs(ids=ids_csv)
+        return {name: url_map.get(eid, "") for name, eid in name_to_id.items()}
+    except Exception as e:
+        logger.error(f"thumbs-by-name error: {e}")
+        return {}
+
 
 @app.get("/api/test-estilo/{estilo_id}")
 async def test_specific_estilo(estilo_id: int):
