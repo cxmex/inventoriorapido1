@@ -5341,19 +5341,35 @@ async def get_colors_with_images(estilo_id: int):
             if not estilo_data:
                 raise HTTPException(status_code=404, detail="Estilo not found")
             
-            # Get all colors for this estilo (any barcode in inventario1)
-            inventory_response = await client.get(
-                f"{SUPABASE_URL}/rest/v1/inventario1",
-                headers=HEADERS,
-                params={"select": "color_id", "estilo_id": f"eq.{estilo_id}"}
+            # Get color_ids from BOTH inventario1 (SKU rows) AND image_uploads.
+            # Without the second source, a color whose only existence is an
+            # image upload (no inventario1 SKU yet) never shows up — and the
+            # image you uploaded becomes invisible.
+            inventory_response, uploaded_colors_resp = await asyncio.gather(
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/inventario1",
+                    headers=HEADERS,
+                    params={"select": "color_id", "estilo_id": f"eq.{estilo_id}"}
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/image_uploads",
+                    headers=HEADERS,
+                    params={"select": "color_id", "estilo_id": f"eq.{estilo_id}",
+                            "color_id": "not.is.null"}
+                ),
             )
-            
+
             if inventory_response.status_code != 200:
                 raise HTTPException(status_code=500, detail="Could not fetch inventory")
-            
-            inventory_data = inventory_response.json()
-            color_ids = list(set([item['color_id'] for item in inventory_data if item['color_id']]))
-            
+
+            color_ids = set()
+            for item in inventory_response.json():
+                if item.get('color_id'): color_ids.add(item['color_id'])
+            if uploaded_colors_resp.status_code == 200:
+                for item in uploaded_colors_resp.json():
+                    if item.get('color_id'): color_ids.add(item['color_id'])
+            color_ids = list(color_ids)
+
             if not color_ids:
                 return {"estilo": estilo_data[0], "colors": []}
             
