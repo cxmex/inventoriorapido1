@@ -3093,6 +3093,375 @@ async def market_intel_dashboard(request: Request):
         )
 
 
+# ── Branch Transfer Recommendations ─────────────────────────────────────
+@app.get("/secretmenu/transfers", response_class=HTMLResponse)
+async def secret_menu_transfers(request: Request):
+    """Recommend stock transfers between Sucursal 1 (terex1) and Sucursal 2 (terex2).
+    A SKU is a transfer candidate when one branch has stock and the other has
+    zero stock + recent sales — meaning we're losing sales we could have made."""
+    try:
+        days = int(request.query_params.get("days", 30))
+        from datetime import datetime, timedelta
+        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+        async def fetch_all_inv(client):
+            out, off = [], 0
+            while True:
+                r = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/inventario1",
+                    headers={**HEADERS, "Range": f"{off}-{off+999}"},
+                    params={"select": "estilo_id,modelo_id,color_id,estilo,modelo,color,terex1,terex2,precio,prioridad"},
+                )
+                if r.status_code not in (200,206): break
+                b = r.json()
+                if not b: break
+                out += b
+                if len(b) < 1000: break
+                off += 1000
+            return out
+
+        async def fetch_sales(client, table, days_back):
+            cut = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+            out, off = [], 0
+            while True:
+                r = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/{table}",
+                    headers={**HEADERS, "Range": f"{off}-{off+999}"},
+                    params={"select": "estilo_id,modelo_id,color_id,qty",
+                            "fecha": f"gte.{cut}"},
+                )
+                if r.status_code not in (200,206): break
+                b = r.json()
+                if not b: break
+                out += b
+                if len(b) < 1000: break
+                off += 1000
+            return out
+
+        async with httpx.AsyncClient(timeout=45) as client:
+            inv, s1, s2 = await asyncio.gather(
+                fetch_all_inv(client),
+                fetch_sales(client, "ventas_terex1", days),
+                fetch_sales(client, "ventas_terex2", days),
+            )
+
+        # Build sales map per (estilo, modelo, color, branch)
+        def sales_map(rows):
+            m = {}
+            for r in rows:
+                key = (r.get("estilo_id"), r.get("modelo_id"), r.get("color_id"))
+                m[key] = m.get(key, 0) + int(r.get("qty") or 0)
+            return m
+        sold_s1 = sales_map(s1)
+        sold_s2 = sales_map(s2)
+
+        recs = []
+        for row in inv:
+            t1 = int(row.get("terex1") or 0)
+            t2 = int(row.get("terex2") or 0)
+            if t1 == 0 and t2 == 0: continue
+            key = (row.get("estilo_id"), row.get("modelo_id"), row.get("color_id"))
+            v1 = sold_s1.get(key, 0)
+            v2 = sold_s2.get(key, 0)
+
+            # Direction: from the branch with stock + lower velocity → to the branch
+            # with no stock + recent demand
+            from_b, to_b, qty_to_send, lost_demand = None, None, 0, 0
+
+            # S1 has stock, S2 is out + selling
+            if t2 == 0 and v2 > 0 and t1 > 0:
+                qty_to_send = min(t1 - 1, max(1, v2 // 2))  # send half of S2's monthly demand
+                if qty_to_send > 0:
+                    from_b, to_b, lost_demand = "S1", "S2", v2
+            # S2 has stock, S1 is out + selling
+            elif t1 == 0 and v1 > 0 and t2 > 0:
+                qty_to_send = min(t2 - 1, max(1, v1 // 2))
+                if qty_to_send > 0:
+                    from_b, to_b, lost_demand = "S2", "S1", v1
+
+            if not from_b: continue
+
+            price = float(row.get("precio") or 0)
+            recs.append({
+                "estilo": row.get("estilo") or "",
+                "modelo": row.get("modelo") or "",
+                "color":  row.get("color") or "",
+                "estilo_id": row.get("estilo_id"),
+                "from_branch": from_b,
+                "to_branch":   to_b,
+                "qty_to_send": qty_to_send,
+                "from_stock":  t1 if from_b == "S1" else t2,
+                "to_stock":    t2 if to_b == "S2" else t1,
+                "lost_demand_units": lost_demand,
+                "lost_demand_revenue": lost_demand * price,
+                "price": price,
+                "prioridad": row.get("prioridad") or 0,
+            })
+
+        # Sort by lost revenue (most urgent first)
+        recs.sort(key=lambda r: -r["lost_demand_revenue"])
+
+        total_lost = sum(r["lost_demand_revenue"] for r in recs)
+        total_units = sum(r["qty_to_send"] for r in recs)
+
+        return templates.TemplateResponse(
+            request=request, name="secret_transfers.html",
+            context={"recs": recs[:200], "days": days,
+                     "total_lost": total_lost, "total_units": total_units,
+                     "n_recs": len(recs)},
+        )
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return templates.TemplateResponse(
+            request=request, name="secret_transfers.html",
+            context={"recs": [], "days": 30, "total_lost": 0, "total_units": 0,
+                     "n_recs": 0, "error_message": str(e)},
+        )
+
+
+# ── Customer cohort + churn dashboard ──────────────────────────────────
+@app.get("/secretmenu/customers", response_class=HTMLResponse)
+async def secret_menu_customers(request: Request):
+    """Customer cohort dashboard. Buckets every WhatsApp-tagged customer by
+    recency (active / at-risk / churned / lost) and shows LTV."""
+    try:
+        from datetime import datetime, timedelta, date
+        today = datetime.now().date()
+
+        async def fetch_year(client, table):
+            cut = (today - timedelta(days=365)).strftime("%Y-%m-%d")
+            out, off = [], 0
+            while True:
+                r = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/{table}",
+                    headers={**HEADERS, "Range": f"{off}-{off+999}"},
+                    params={"select": "fecha,whatsapp,total,qty,order_id",
+                            "fecha": f"gte.{cut}",
+                            "whatsapp": "not.is.null"},
+                )
+                if r.status_code not in (200,206): break
+                b = r.json()
+                if not b: break
+                out += b
+                if len(b) < 1000: break
+                off += 1000
+            return out
+
+        async with httpx.AsyncClient(timeout=45) as client:
+            s1, s2 = await asyncio.gather(
+                fetch_year(client, "ventas_terex1"),
+                fetch_year(client, "ventas_terex2"),
+            )
+
+        # Build per-customer: branches, total spend, last/first purchase, n_orders
+        from collections import defaultdict
+        by_wa = defaultdict(lambda: {"branches": set(), "total": 0.0,
+                                     "orders": set(), "first": None, "last": None,
+                                     "qty": 0})
+        def _ingest(rows, branch):
+            for r in rows:
+                wa = (r.get("whatsapp") or "").strip()
+                if not wa or wa.lower() in ("","none","null"): continue
+                d = by_wa[wa]
+                d["branches"].add(branch)
+                d["total"] += float(r.get("total") or 0)
+                d["orders"].add(r.get("order_id"))
+                d["qty"] += int(r.get("qty") or 0)
+                f = r.get("fecha")
+                if f:
+                    try:
+                        fd = datetime.strptime(str(f)[:10], "%Y-%m-%d").date()
+                        if d["first"] is None or fd < d["first"]: d["first"] = fd
+                        if d["last"]  is None or fd > d["last"]:  d["last"]  = fd
+                    except: pass
+        _ingest(s1, "S1"); _ingest(s2, "S2")
+
+        # Bucket by recency
+        cohorts = {"active": [], "at_risk": [], "churned": [], "lost": []}
+        for wa, d in by_wa.items():
+            if not d["last"]: continue
+            days_since = (today - d["last"]).days
+            if   days_since <= 30:  bucket = "active"
+            elif days_since <= 60:  bucket = "at_risk"
+            elif days_since <= 180: bucket = "churned"
+            else:                   bucket = "lost"
+            cohorts[bucket].append({
+                "whatsapp": wa,
+                "total": round(d["total"], 2),
+                "n_orders": len(d["orders"]),
+                "qty": d["qty"],
+                "first": d["first"].isoformat() if d["first"] else "",
+                "last":  d["last"].isoformat()  if d["last"]  else "",
+                "days_since": days_since,
+                "branches": sorted(d["branches"]),
+                "is_cross_branch": len(d["branches"]) >= 2,
+            })
+
+        cohort_summary = {}
+        for k, lst in cohorts.items():
+            lst.sort(key=lambda x: -x["total"])
+            cohort_summary[k] = {
+                "n": len(lst),
+                "ltv_total": round(sum(x["total"] for x in lst), 2),
+                "ltv_avg": round(sum(x["total"] for x in lst) / len(lst), 2) if lst else 0,
+                "top": lst[:25],
+            }
+
+        n_total = sum(s["n"] for s in cohort_summary.values())
+        n_cross_branch = sum(1 for d in by_wa.values() if len(d["branches"]) >= 2)
+
+        return templates.TemplateResponse(
+            request=request, name="secret_customers.html",
+            context={"cohorts": cohort_summary, "n_total": n_total,
+                     "n_cross_branch": n_cross_branch},
+        )
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return templates.TemplateResponse(
+            request=request, name="secret_customers.html",
+            context={"cohorts": {}, "n_total": 0, "n_cross_branch": 0,
+                     "error_message": str(e)},
+        )
+
+
+# ── Margin × Velocity 2x2 quadrant ──────────────────────────────────────
+@app.get("/secretmenu/margin-velocity", response_class=HTMLResponse)
+async def secret_menu_margin_velocity(request: Request):
+    """Plot every estilo on margin vs sell-through-rate. Quadrants:
+       ⭐ Stars (high margin + high velocity), 💰 Cash cows (low margin + high vel),
+       ❓ Question marks (high margin + low vel), 💀 Dogs (low margin + low vel)."""
+    try:
+        from datetime import datetime, timedelta
+        days = int(request.query_params.get("days", 90))
+        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+        async def fetch_all_inv(client):
+            out, off = [], 0
+            while True:
+                r = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/inventario1",
+                    headers={**HEADERS, "Range": f"{off}-{off+999}"},
+                    params={"select": "estilo_id,terex1,terex2"},
+                )
+                if r.status_code not in (200,206): break
+                b = r.json()
+                if not b: break
+                out += b
+                if len(b) < 1000: break
+                off += 1000
+            return out
+
+        async def fetch_sales(client, table):
+            out, off = [], 0
+            while True:
+                r = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/{table}",
+                    headers={**HEADERS, "Range": f"{off}-{off+999}"},
+                    params={"select": "estilo_id,qty,price,cost,total",
+                            "fecha": f"gte.{cutoff}"},
+                )
+                if r.status_code not in (200,206): break
+                b = r.json()
+                if not b: break
+                out += b
+                if len(b) < 1000: break
+                off += 1000
+            return out
+
+        async with httpx.AsyncClient(timeout=45) as client:
+            est_r, inv, s1, s2 = await asyncio.gather(
+                client.get(f"{SUPABASE_URL}/rest/v1/inventario_estilos",
+                           headers={**HEADERS, "Range": "0-9999"},
+                           params={"select": "id,nombre,supplier,prioridad,precio,cost"}),
+                fetch_all_inv(client),
+                fetch_sales(client, "ventas_terex1"),
+                fetch_sales(client, "ventas_terex2"),
+            )
+
+        est_meta = {int(e["id"]): e for e in (est_r.json() or [])}
+
+        # Stock per estilo
+        stock_by_est = {}
+        for r in inv:
+            eid = r.get("estilo_id")
+            if eid is None: continue
+            stock_by_est[int(eid)] = stock_by_est.get(int(eid), 0) + int(r.get("terex1") or 0) + int(r.get("terex2") or 0)
+
+        # Sales aggregates per estilo
+        from collections import defaultdict
+        sales_by_est = defaultdict(lambda: {"qty": 0, "rev": 0.0, "cost": 0.0})
+        for src in (s1, s2):
+            for r in src:
+                eid = r.get("estilo_id")
+                if eid is None: continue
+                d = sales_by_est[int(eid)]
+                qty = int(r.get("qty") or 0)
+                price = float(r.get("price") or 0)
+                cost = float(r.get("cost") or 0)
+                d["qty"] += qty
+                d["rev"] += float(r.get("total") or qty * price)
+                d["cost"] += qty * cost
+
+        # Build per-estilo metric rows
+        metrics = []
+        for eid, sd in sales_by_est.items():
+            if sd["qty"] == 0: continue
+            stk = stock_by_est.get(eid, 0)
+            margin_pct = ((sd["rev"] - sd["cost"]) / sd["rev"] * 100) if sd["rev"] > 0 else 0
+            # sell-through = sold / (sold + remaining stock)
+            sell_through = (sd["qty"] / (sd["qty"] + stk)) * 100 if (sd["qty"] + stk) > 0 else 0
+            meta = est_meta.get(eid, {})
+            metrics.append({
+                "estilo_id": eid,
+                "nombre": meta.get("nombre") or f"Estilo {eid}",
+                "supplier": meta.get("supplier") or "",
+                "qty": sd["qty"],
+                "revenue": round(sd["rev"], 2),
+                "margin_pct": round(margin_pct, 1),
+                "margin_dollars": round(sd["rev"] - sd["cost"], 2),
+                "sell_through": round(sell_through, 1),
+                "stock_remaining": stk,
+            })
+
+        # Compute medians for quadrant cutoffs
+        margins = sorted(m["margin_pct"] for m in metrics)
+        velocities = sorted(m["sell_through"] for m in metrics)
+        med_margin = margins[len(margins)//2] if margins else 0
+        med_velocity = velocities[len(velocities)//2] if velocities else 0
+
+        # Classify each
+        for m in metrics:
+            hi_mar = m["margin_pct"] >= med_margin
+            hi_vel = m["sell_through"] >= med_velocity
+            if hi_mar and hi_vel:   m["quadrant"] = "star"
+            elif not hi_mar and hi_vel: m["quadrant"] = "cashcow"
+            elif hi_mar and not hi_vel: m["quadrant"] = "question"
+            else:                       m["quadrant"] = "dog"
+
+        # Group + sort by margin_dollars
+        quadrants = {"star": [], "cashcow": [], "question": [], "dog": []}
+        for m in metrics:
+            quadrants[m["quadrant"]].append(m)
+        for k in quadrants:
+            quadrants[k].sort(key=lambda x: -x["margin_dollars"])
+
+        return templates.TemplateResponse(
+            request=request, name="secret_margin_velocity.html",
+            context={"quadrants": quadrants, "days": days,
+                     "med_margin": round(med_margin, 1),
+                     "med_velocity": round(med_velocity, 1),
+                     "n_total": len(metrics)},
+        )
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return templates.TemplateResponse(
+            request=request, name="secret_margin_velocity.html",
+            context={"quadrants": {"star":[],"cashcow":[],"question":[],"dog":[]},
+                     "days": 90, "med_margin": 0, "med_velocity": 0,
+                     "n_total": 0, "error_message": str(e)},
+        )
+
+
 @app.get("/secretmenu/dailysales", response_class=HTMLResponse)
 async def secret_menu_daily_sales(request: Request):
     try:
