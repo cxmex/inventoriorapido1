@@ -5385,8 +5385,9 @@ async def get_colors_with_images(estilo_id: int):
             
             colors_data = colors_response.json()
             
-            # Get images for this estilo — ordered by user-set display_order (0 = primary)
-            # then by recency. display_order column added in migrations_image_order.sql.
+            # Get images for this estilo. Try display_order first (only present
+            # if migrations_image_order.sql was applied); fall back to plain
+            # created_at sort if the column doesn't exist.
             images_response = await client.get(
                 f"{SUPABASE_URL}/rest/v1/image_uploads",
                 headers=HEADERS,
@@ -5396,6 +5397,17 @@ async def get_colors_with_images(estilo_id: int):
                     "order": "display_order.asc.nullslast,created_at.desc"
                 }
             )
+            if images_response.status_code == 400 and "display_order" in (images_response.text or ""):
+                # Fallback: column doesn't exist in this deploy
+                images_response = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/image_uploads",
+                    headers=HEADERS,
+                    params={
+                        "select": "id,color_id,file_name,public_url,description,created_at",
+                        "estilo_id": f"eq.{estilo_id}",
+                        "order": "created_at.desc"
+                    }
+                )
             
             # Group images by color_id
             images_by_color = {}
