@@ -38,6 +38,21 @@
       background: #f5f5f5;
       font-weight: bold;
     }
+    .ac-wrap { position: relative; display: inline-block; }
+    .ac-list {
+      position: absolute; top: 100%; left: 0; right: 0;
+      background: #fff; border: 1px solid #ccc; border-top: none;
+      max-height: 220px; overflow-y: auto; z-index: 50;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.08); display: none;
+    }
+    .ac-item { padding: 6px 10px; cursor: pointer; font-size: 14px; }
+    .ac-item:hover { background: #fffde7; }
+    .ac-item .small { color: #888; font-size: 12px; }
+    .ac-empty { padding: 8px 10px; color: #888; font-size: 13px; }
+    .cliente-badge {
+      display: inline-block; background: #ffeb3b; color: #5d4037;
+      padding: 4px 10px; border-radius: 12px; font-weight: bold; margin-left: 10px;
+    }
   </style>
 </head>
 <body>
@@ -54,8 +69,31 @@
     <span id="status" class="status"></span>
   </div>
 
+  <div class="row" style="background:#fff8e1; padding:8px; border-radius:6px; border:1px solid #ffc107; flex-wrap:wrap;">
+    <strong style="color:#5d4037;">Buscar cliente:</strong>
+    <div class="ac-wrap">
+      <input id="cliente-name" type="text" placeholder="Nombre..." style="width:200px; background:white;" autocomplete="off" />
+      <div id="cliente-name-results" class="ac-list"></div>
+    </div>
+    <div class="ac-wrap">
+      <input id="cliente-whatsapp" type="text" placeholder="WhatsApp..." style="width:160px; background:white;" autocomplete="off" />
+      <div id="cliente-whatsapp-results" class="ac-list"></div>
+    </div>
+    <button id="btn-new-cliente" class="btn" type="button">+ Nuevo Cliente</button>
+    <span id="cliente-selected"></span>
+  </div>
+
+  <div id="new-cliente-form" class="row" style="display:none; background:#e3f2fd; padding:10px; border-radius:6px; border:1px solid #2196f3; flex-wrap:wrap;">
+    <strong style="color:#0d47a1;">Nuevo Cliente:</strong>
+    <input id="new-cliente-name" type="text" placeholder="Nombre" style="width:200px;" />
+    <input id="new-cliente-whatsapp" type="text" placeholder="WhatsApp" style="width:160px;" />
+    <button id="btn-save-new-cliente" class="btn" type="button">Guardar</button>
+    <button id="btn-cancel-new-cliente" class="btn" type="button">Cancelar</button>
+    <span id="new-cliente-status" class="status"></span>
+  </div>
+
   <div class="row" style="background:#e8f5e9; padding:8px; border-radius:6px; border:1px solid #4caf50;">
-    <label for="cliente-barcode" style="font-weight:bold; color:#2e7d32;">Cliente:</label>
+    <label for="cliente-barcode" style="font-weight:bold; color:#2e7d32;">Cliente (barcode):</label>
     <input id="cliente-barcode" type="text" placeholder="Escanea el barcode del cliente aqui" style="width:320px; background:white;" />
     <span id="cliente-status" class="status"></span>
   </div>
@@ -295,30 +333,38 @@
 
     async function saveTransaction() {
       const products = getProducts();
-      
+
       if (products.length === 0) {
         saveMsg.textContent = 'Agrega productos primero';
         saveMsg.className = 'status error';
         return;
       }
-      
+
       const paymentMethod = document.querySelector('input[name="payment-method"]:checked').value;
-      
+
       saveBtn.disabled = true;
       saveMsg.textContent = 'Guardando...';
       saveMsg.className = 'status';
-      
+
       try {
         console.log('Saving products:', products);
         console.log('Payment method:', paymentMethod);
-        
+        console.log('Cliente:', selectedCliente);
+
+        const body = {
+          products: products,
+          payment_method: paymentMethod,
+        };
+        if (selectedCliente) {
+          body.cliente_id = selectedCliente.id;
+          body.cliente = selectedCliente.cliente || null;
+          body.whatsapp = selectedCliente.whatsapp || null;
+        }
+
         const response = await fetch('/api/save', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            products: products,
-            payment_method: paymentMethod 
-          })
+          body: JSON.stringify(body)
         });
         
         if (!response.ok) {
@@ -338,7 +384,8 @@
         
         tbody.innerHTML = '';
         recalcTotal();
-        
+        clearSelectedCliente();
+
         saveMsg.textContent = 'Venta guardada y ticket descargado ✅';
         saveMsg.className = 'status success';
         
@@ -355,6 +402,156 @@
         }, 3000);
       }
     }
+
+    // ─── Customer picker (name + WhatsApp) ─────────────────────────────
+    let selectedCliente = null;
+
+    const clienteNameInput = document.getElementById('cliente-name');
+    const clienteWhatsappInput = document.getElementById('cliente-whatsapp');
+    const clienteNameResults = document.getElementById('cliente-name-results');
+    const clienteWhatsappResults = document.getElementById('cliente-whatsapp-results');
+    const clienteSelectedEl = document.getElementById('cliente-selected');
+    const newClienteBtn = document.getElementById('btn-new-cliente');
+    const newClienteForm = document.getElementById('new-cliente-form');
+    const newClienteName = document.getElementById('new-cliente-name');
+    const newClienteWhatsapp = document.getElementById('new-cliente-whatsapp');
+    const saveNewClienteBtn = document.getElementById('btn-save-new-cliente');
+    const cancelNewClienteBtn = document.getElementById('btn-cancel-new-cliente');
+    const newClienteStatus = document.getElementById('new-cliente-status');
+
+    function renderClienteBadge() {
+      if (!selectedCliente) {
+        clienteSelectedEl.innerHTML = '';
+        return;
+      }
+      const label = selectedCliente.cliente || selectedCliente.whatsapp || `#${selectedCliente.id}`;
+      const wa = selectedCliente.whatsapp ? ` · ${selectedCliente.whatsapp}` : '';
+      clienteSelectedEl.innerHTML =
+        `<span class="cliente-badge">✅ ${label}${wa}</span>` +
+        ` <button type="button" class="btn" id="btn-clear-cliente" style="padding:2px 8px;">Quitar</button>`;
+      document.getElementById('btn-clear-cliente').onclick = clearSelectedCliente;
+    }
+
+    function clearSelectedCliente() {
+      selectedCliente = null;
+      clienteNameInput.value = '';
+      clienteWhatsappInput.value = '';
+      clienteNameResults.style.display = 'none';
+      clienteWhatsappResults.style.display = 'none';
+      renderClienteBadge();
+    }
+
+    function pickCliente(c) {
+      selectedCliente = c;
+      clienteNameInput.value = c.cliente || '';
+      clienteWhatsappInput.value = c.whatsapp || '';
+      clienteNameResults.style.display = 'none';
+      clienteWhatsappResults.style.display = 'none';
+      renderClienteBadge();
+    }
+
+    function renderClienteResults(container, results) {
+      if (!results || results.length === 0) {
+        container.innerHTML = '<div class="ac-empty">Sin resultados — usa "+ Nuevo Cliente"</div>';
+        container.style.display = 'block';
+        return;
+      }
+      container.innerHTML = results.map(r => {
+        const name = r.cliente || '(sin nombre)';
+        const wa = r.whatsapp ? `<span class="small"> · ${r.whatsapp}</span>` : '';
+        const city = r.city ? `<span class="small"> · ${r.city}</span>` : '';
+        return `<div class="ac-item" data-id="${r.id}">${name}${wa}${city}</div>`;
+      }).join('');
+      container.style.display = 'block';
+      container.querySelectorAll('.ac-item').forEach(el => {
+        el.onclick = () => {
+          const id = parseInt(el.getAttribute('data-id'));
+          const c = results.find(r => r.id === id);
+          if (c) pickCliente(c);
+        };
+      });
+    }
+
+    function debounce(fn, ms) {
+      let t;
+      return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+    }
+
+    async function searchCliente(q, by, container) {
+      q = (q || '').trim();
+      if (q.length < 1) { container.style.display = 'none'; return; }
+      try {
+        const res = await fetch(`/api/search_cliente?q=${encodeURIComponent(q)}&by=${by}`);
+        const data = await res.json();
+        renderClienteResults(container, data);
+      } catch (e) {
+        console.error('searchCliente error:', e);
+      }
+    }
+
+    const onNameInput = debounce(() => searchCliente(clienteNameInput.value, 'name', clienteNameResults), 200);
+    const onWaInput = debounce(() => searchCliente(clienteWhatsappInput.value, 'whatsapp', clienteWhatsappResults), 200);
+    clienteNameInput.addEventListener('input', onNameInput);
+    clienteWhatsappInput.addEventListener('input', onWaInput);
+
+    // Hide dropdowns when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!clienteNameInput.contains(e.target) && !clienteNameResults.contains(e.target)) {
+        clienteNameResults.style.display = 'none';
+      }
+      if (!clienteWhatsappInput.contains(e.target) && !clienteWhatsappResults.contains(e.target)) {
+        clienteWhatsappResults.style.display = 'none';
+      }
+    });
+
+    // ─── New customer form ─────────────────────────────────────────────
+    newClienteBtn.addEventListener('click', () => {
+      newClienteForm.style.display = newClienteForm.style.display === 'none' ? 'flex' : 'none';
+      newClienteName.value = clienteNameInput.value || '';
+      newClienteWhatsapp.value = clienteWhatsappInput.value || '';
+      newClienteStatus.textContent = '';
+      if (newClienteForm.style.display !== 'none') newClienteName.focus();
+    });
+
+    cancelNewClienteBtn.addEventListener('click', () => {
+      newClienteForm.style.display = 'none';
+      newClienteStatus.textContent = '';
+    });
+
+    saveNewClienteBtn.addEventListener('click', async () => {
+      const name = newClienteName.value.trim();
+      const wa = newClienteWhatsapp.value.trim();
+      if (!name && !wa) {
+        newClienteStatus.textContent = 'Nombre o WhatsApp requerido';
+        newClienteStatus.className = 'status error';
+        return;
+      }
+      saveNewClienteBtn.disabled = true;
+      newClienteStatus.textContent = 'Guardando...';
+      newClienteStatus.className = 'status';
+      try {
+        const res = await fetch('/api/create_cliente', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cliente: name, whatsapp: wa })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || 'Error');
+        }
+        const c = await res.json();
+        pickCliente(c);
+        newClienteForm.style.display = 'none';
+        newClienteName.value = '';
+        newClienteWhatsapp.value = '';
+        newClienteStatus.textContent = '';
+      } catch (e) {
+        newClienteStatus.textContent = `Error: ${e.message}`;
+        newClienteStatus.className = 'status error';
+      } finally {
+        saveNewClienteBtn.disabled = false;
+      }
+    });
 
     // Event listeners
     addBtn.addEventListener('click', searchBarcode);

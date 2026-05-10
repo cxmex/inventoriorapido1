@@ -154,6 +154,9 @@ class ProductIn(BaseModel):
 class SavePayload(BaseModel):
     products: list[dict]
     payment_method: Optional[str] = "efectivo"
+    cliente_id: Optional[int] = None
+    cliente: Optional[str] = None
+    whatsapp: Optional[str] = None
 
 
 class InventarioEstilo(BaseModel):
@@ -6467,7 +6470,10 @@ async def api_save(payload: SavePayload):
             "modelo_id": inv.get("modelo_id", ""),
             "estilo": inv.get("estilo", ""),
             "estilo_id": inv.get("estilo_id", ""),
-            "payment_method": payment_method  # Add payment method
+            "payment_method": payment_method,  # Add payment method
+            "id_cliente": payload.cliente_id,
+            "cliente": payload.cliente,
+            "whatsapp": payload.whatsapp,
         }
 
         await supabase_request(
@@ -7247,6 +7253,53 @@ async def get_or_create_customer(phone: str) -> dict:
     )
     customer["customer_barcode"] = bc
     return customer
+
+
+@app.get("/api/search_cliente")
+async def search_cliente(q: str, by: str = "name", limit: int = 10):
+    """Autocomplete lookup for nota1 customer picker.
+    by=name  → ilike on clientes.cliente
+    by=whatsapp → ilike on clientes.whatsapp
+    """
+    q = (q or "").strip()
+    if not q:
+        return []
+
+    column = "cliente" if by == "name" else "whatsapp"
+    rows = await supabase_request(
+        method="GET",
+        endpoint="/rest/v1/clientes",
+        params={
+            "select": "id,cliente,whatsapp,tel,city",
+            column: f"ilike.*{q}*",
+            "order": f"{column}.asc",
+            "limit": str(max(1, min(limit, 25))),
+        },
+    )
+    return rows or []
+
+
+@app.post("/api/create_cliente")
+async def create_cliente(payload: dict):
+    """Create a new row in clientes from the nota1 'Nuevo Cliente' button."""
+    cliente = (payload.get("cliente") or "").strip()
+    whatsapp = (payload.get("whatsapp") or "").strip() or None
+    city = (payload.get("city") or "").strip() or None
+    tel = (payload.get("tel") or "").strip() or None
+
+    if not cliente and not whatsapp:
+        raise HTTPException(status_code=400, detail="Nombre o WhatsApp requerido")
+
+    record = {"cliente": cliente or None, "whatsapp": whatsapp, "city": city, "tel": tel}
+
+    rows = await supabase_request(
+        method="POST",
+        endpoint="/rest/v1/clientes",
+        json_data=record,
+    )
+    if not rows:
+        raise HTTPException(status_code=500, detail="No se pudo crear el cliente")
+    return rows[0]
 
 
 @app.api_route("/api/customer-barcode/{phone}", methods=["GET", "HEAD"])
