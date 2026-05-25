@@ -1,0 +1,312 @@
+{% extends "base.html" %}
+
+{% block title %}Amsterdam Cafe{% endblock %}
+
+{% block content %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+<div class="container mt-4" style="max-width:600px;">
+    <h2 class="text-center mb-4"><i class="bi bi-cup-hot-fill me-2"></i>Amsterdam Cafe</h2>
+
+    <!-- User name -->
+    <div class="mb-3">
+        <input type="text" class="form-control form-control-lg" id="userName" placeholder="Tu nombre..." autocomplete="off">
+    </div>
+
+    <!-- Voice record button -->
+    <div class="text-center mb-4">
+        <button class="btn btn-lg rounded-circle shadow" id="micBtn" style="width:100px;height:100px;font-size:2.5rem;background:#dc3545;color:white;border:none;">
+            <i class="bi bi-mic-fill"></i>
+        </button>
+        <p class="mt-2 text-muted" id="micStatus">Toca para hablar</p>
+    </div>
+
+    <!-- Voice Tab / Cuenta -->
+    <div class="card shadow-sm mb-4" id="tabCard" style="display:none;">
+        <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+            <h6 class="mb-0"><i class="bi bi-receipt me-1"></i> Cuenta</h6>
+            <button class="btn btn-sm btn-outline-light" id="clearTabBtn"><i class="bi bi-trash"></i></button>
+        </div>
+        <div class="card-body p-0">
+            <table class="table table-sm mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Item</th>
+                        <th class="text-end">Precio</th>
+                        <th style="width:40px;"></th>
+                    </tr>
+                </thead>
+                <tbody id="tabBody"></tbody>
+                <tfoot class="table-dark">
+                    <tr>
+                        <td class="fw-bold">Total</td>
+                        <td class="text-end fw-bold" id="tabTotal">$0</td>
+                        <td></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>
+
+    <!-- Transcribed message (editable before sending) -->
+    <div class="mb-3">
+        <textarea class="form-control" id="messageBox" rows="3" placeholder="Tu mensaje aparecera aqui..."></textarea>
+    </div>
+
+    <div class="d-flex gap-2 mb-4">
+        <button class="btn btn-success flex-fill btn-lg" id="sendBtn" disabled>
+            <i class="bi bi-send-fill me-1"></i> Enviar
+        </button>
+        <button class="btn btn-outline-secondary" id="clearBtn">Limpiar</button>
+    </div>
+
+    <div id="toast" class="alert d-none"></div>
+
+    <!-- Messages feed -->
+    <h5 class="mt-4 mb-3">Mensajes recientes</h5>
+    <div id="feed" class="d-flex flex-column gap-2"></div>
+</div>
+
+<style>
+#micBtn.recording { background: #28a745 !important; animation: pulse 1s infinite; }
+@keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+}
+.msg-card { border-left: 4px solid #0d6efd; }
+.tab-remove { background:none; border:none; color:#dc3545; cursor:pointer; font-size:1.1rem; }
+.tab-remove:hover { color:#a71d2a; }
+.tab-flash { animation: flashGreen 0.5s; }
+@keyframes flashGreen { 0%{background:#d4edda;} 100%{background:transparent;} }
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const micBtn = document.getElementById('micBtn');
+    const micStatus = document.getElementById('micStatus');
+    const messageBox = document.getElementById('messageBox');
+    const sendBtn = document.getElementById('sendBtn');
+    const userName = document.getElementById('userName');
+    const feed = document.getElementById('feed');
+    const toast = document.getElementById('toast');
+
+    // Restore saved name
+    userName.value = localStorage.getItem('ac_user') || '';
+
+    // ===== TAB / CUENTA =====
+    const MENU_KEYWORDS = {
+        'licor':    { nombre: 'Licor',    precio: 5 },
+        'liquor':   { nombre: 'Licor',    precio: 5 },
+        'alcohol':  { nombre: 'Alcohol',  precio: 5 },
+        'cerveza':  { nombre: 'Cerveza',  precio: 5 },
+        'beer':     { nombre: 'Beer',     precio: 5 },
+        'cafe':     { nombre: 'Cafe',     precio: 10 },
+        'coffee':   { nombre: 'Coffee',   precio: 10 },
+        'te':       { nombre: 'Te',       precio: 10 },
+        'tea':      { nombre: 'Tea',      precio: 10 },
+    };
+
+    let tabItems = [];
+    const tabCard = document.getElementById('tabCard');
+    const tabBody = document.getElementById('tabBody');
+    const tabTotal = document.getElementById('tabTotal');
+
+    function addTabItem(nombre, precio) {
+        tabItems.push({ nombre, precio });
+        renderTab();
+    }
+
+    function removeTabItem(idx) {
+        tabItems.splice(idx, 1);
+        renderTab();
+    }
+
+    function renderTab() {
+        tabCard.style.display = tabItems.length ? '' : 'none';
+        tabBody.innerHTML = tabItems.map((item, i) =>
+            `<tr class="tab-flash">
+                <td>${item.nombre}</td>
+                <td class="text-end">$${item.precio}</td>
+                <td><button class="tab-remove" onclick="window._removeTab(${i})">&times;</button></td>
+            </tr>`
+        ).join('');
+        const total = tabItems.reduce((s, it) => s + it.precio, 0);
+        tabTotal.textContent = '$' + total;
+    }
+
+    window._removeTab = removeTabItem;
+
+    document.getElementById('clearTabBtn').addEventListener('click', function() {
+        tabItems = [];
+        renderTab();
+    });
+
+    // Track which keywords we already detected to avoid duplicates from interim results
+    let detectedKeywords = new Set();
+
+    function scanForKeywords(text) {
+        const lower = text.toLowerCase().normalize('NFD').replace(/[\u0301]/g, '');
+        for (const [keyword, item] of Object.entries(MENU_KEYWORDS)) {
+            const kw = keyword.normalize('NFD').replace(/[\u0301]/g, '');
+            // Count occurrences in text
+            const regex = new RegExp('\\b' + kw + '\\b', 'gi');
+            const matches = lower.match(regex) || [];
+            const key = keyword;
+            const alreadyCount = [...detectedKeywords].filter(k => k === key).length;
+            for (let m = alreadyCount; m < matches.length; m++) {
+                detectedKeywords.add(key);
+                addTabItem(item.nombre, item.precio);
+            }
+        }
+    }
+
+    // Enable send when both fields have content
+    function checkSend() {
+        sendBtn.disabled = !userName.value.trim() || !messageBox.value.trim();
+    }
+    userName.addEventListener('input', checkSend);
+    messageBox.addEventListener('input', checkSend);
+
+    // ===== Speech Recognition =====
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let recognition = null;
+    let isRecording = false;
+
+    if (SpeechRecognition) {
+        recognition = new SpeechRecognition();
+        recognition.lang = 'es-MX';
+        recognition.interimResults = true;
+        recognition.continuous = true;
+
+        recognition.onresult = function(e) {
+            let transcript = '';
+            let finalTranscript = '';
+            for (let i = 0; i < e.results.length; i++) {
+                transcript += e.results[i][0].transcript;
+                if (e.results[i].isFinal) {
+                    finalTranscript += e.results[i][0].transcript;
+                }
+            }
+            messageBox.value = transcript;
+            checkSend();
+            // Only scan final results for keywords to avoid double-counting
+            if (finalTranscript) scanForKeywords(finalTranscript);
+        };
+
+        recognition.onerror = function(e) {
+            console.error('Speech error:', e.error);
+            stopRecording();
+            if (e.error === 'not-allowed') {
+                micStatus.textContent = 'Permiso de microfono denegado';
+            } else {
+                micStatus.textContent = 'Error: ' + e.error;
+            }
+        };
+
+        recognition.onend = function() {
+            if (isRecording) {
+                // Auto-restart if still in recording mode
+                try { recognition.start(); } catch(e) { stopRecording(); }
+            }
+        };
+    }
+
+    function startRecording() {
+        if (!recognition) { micStatus.textContent = 'Tu navegador no soporta voz'; return; }
+        isRecording = true;
+        micBtn.classList.add('recording');
+        micBtn.innerHTML = '<i class="bi bi-stop-fill"></i>';
+        micStatus.textContent = 'Escuchando... toca para detener';
+        messageBox.value = '';
+        detectedKeywords = new Set();
+        try { recognition.start(); } catch(e) {}
+    }
+
+    function stopRecording() {
+        isRecording = false;
+        micBtn.classList.remove('recording');
+        micBtn.innerHTML = '<i class="bi bi-mic-fill"></i>';
+        micStatus.textContent = 'Toca para hablar';
+        if (recognition) try { recognition.stop(); } catch(e) {}
+        checkSend();
+    }
+
+    micBtn.addEventListener('click', function() {
+        if (isRecording) stopRecording();
+        else startRecording();
+    });
+
+    // ===== Send message =====
+    sendBtn.addEventListener('click', async function() {
+        const user = userName.value.trim();
+        const message = messageBox.value.trim();
+        if (!user || !message) return;
+
+        localStorage.setItem('ac_user', user);
+        sendBtn.disabled = true;
+        sendBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+        try {
+            const resp = await fetch('/amsterdamcafe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user, message })
+            });
+            if (!resp.ok) throw new Error('Failed');
+
+            messageBox.value = '';
+            showToast('Mensaje enviado', 'success');
+            loadMessages();
+        } catch (e) {
+            showToast('Error al enviar', 'danger');
+        }
+
+        sendBtn.disabled = false;
+        sendBtn.innerHTML = '<i class="bi bi-send-fill me-1"></i> Enviar';
+        checkSend();
+    });
+
+    document.getElementById('clearBtn').addEventListener('click', function() {
+        messageBox.value = '';
+        checkSend();
+    });
+
+    function showToast(msg, type) {
+        toast.className = `alert alert-${type}`;
+        toast.textContent = msg;
+        toast.classList.remove('d-none');
+        setTimeout(() => toast.classList.add('d-none'), 2500);
+    }
+
+    // ===== Load messages =====
+    async function loadMessages() {
+        try {
+            const resp = await fetch('/amsterdamcafe/messages');
+            const data = await resp.json();
+            const msgs = data.messages || [];
+            feed.innerHTML = msgs.map(m => {
+                const date = m.created_at ? new Date(m.created_at).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' }) : '';
+                return `<div class="card msg-card">
+                    <div class="card-body py-2 px-3">
+                        <div class="d-flex justify-content-between">
+                            <strong>${esc(m.user)}</strong>
+                            <small class="text-muted">${date}</small>
+                        </div>
+                        <div>${esc(m.message)}</div>
+                    </div>
+                </div>`;
+            }).join('');
+        } catch (e) {
+            feed.innerHTML = '<p class="text-muted">Error cargando mensajes</p>';
+        }
+    }
+
+    function esc(s) {
+        const d = document.createElement('div');
+        d.textContent = s || '';
+        return d.innerHTML;
+    }
+
+    loadMessages();
+});
+</script>
+{% endblock %}

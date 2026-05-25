@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Entradas Tracker{% endblock %}
+{% block content %}
+<style>
+  body { background: #0d1117; color: #e6edf3; }
+  .date-bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:18px; }
+  .date-bar input[type=date] { background:#161b22; color:#e6edf3; border:1px solid #30363d; border-radius:6px; padding:6px 12px; }
+  .date-bar button { border:none; border-radius:6px; padding:6px 16px; font-weight:600; cursor:pointer; }
+  .btn-go { background:#238636; color:#fff; }
+  .btn-quick { background:#21262d; color:#8b949e; font-size:13px; }
+  .btn-quick.active, .btn-quick:hover { background:#30363d; color:#e6edf3; }
+  .grand-bar { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:12px 18px; margin-bottom:18px; display:flex; gap:30px; flex-wrap:wrap; font-size:15px; }
+  .grand-bar .num { font-weight:700; font-size:20px; }
+  .grand-bar .t1c { color:#58a6ff; } .grand-bar .t2c { color:#f78166; } .grand-bar .totc { color:#7ee787; }
+
+  .estilo-card { background:#161b22; border:1px solid #30363d; border-radius:10px; margin-bottom:12px; overflow:hidden; }
+  .estilo-header { display:flex; align-items:center; padding:12px 16px; cursor:pointer; gap:14px; }
+  .estilo-header:hover { background:#1c2128; }
+  .estilo-img { width:56px; height:56px; border-radius:8px; object-fit:cover; background:#21262d; flex-shrink:0; }
+  .estilo-img-placeholder { width:56px; height:56px; border-radius:8px; background:#21262d; display:flex; align-items:center; justify-content:center; color:#484f58; font-size:22px; flex-shrink:0; }
+  .estilo-info { flex:1; min-width:0; }
+  .estilo-name { font-weight:700; font-size:16px; color:#e6edf3; }
+  .estilo-dates { font-size:12px; color:#8b949e; margin-top:2px; }
+  .estilo-nums { display:flex; gap:20px; font-size:14px; white-space:nowrap; }
+  .estilo-nums .t1 { color:#58a6ff; } .estilo-nums .t2 { color:#f78166; } .estilo-nums .tot { color:#7ee787; font-weight:700; }
+  .estilo-arrow { color:#484f58; font-size:18px; transition:transform .2s; }
+  .estilo-arrow.open { transform:rotate(90deg); }
+
+  .estilo-detail { display:none; padding:0 16px 12px 86px; }
+  .estilo-detail.show { display:block; }
+  .detail-table { width:100%; border-collapse:collapse; font-size:13px; }
+  .detail-table th { color:#8b949e; font-weight:600; text-align:left; padding:4px 8px; border-bottom:1px solid #21262d; }
+  .detail-table td { padding:4px 8px; border-bottom:1px solid #161b22; }
+  .detail-table .r { text-align:right; }
+  .detail-table tr:hover { background:#1c2128; }
+
+  .loading { text-align:center; padding:40px; color:#8b949e; }
+  @media(max-width:600px) {
+    .estilo-header { padding:10px; gap:10px; }
+    .estilo-img, .estilo-img-placeholder { width:44px; height:44px; }
+    .estilo-name { font-size:14px; }
+    .estilo-nums { gap:12px; font-size:13px; }
+    .estilo-detail { padding:0 10px 10px 10px; }
+  }
+</style>
+
+<a href="/secretmenu" class="btn btn-outline-secondary btn-sm mb-3">&larr; Menu</a>
+<h4 style="margin-bottom:14px;">Entradas Tracker</h4>
+
+<div class="date-bar">
+  <input type="date" id="dateFrom">
+  <span style="color:#8b949e;">a</span>
+  <input type="date" id="dateTo">
+  <button class="btn-go" onclick="loadData()">Buscar</button>
+  <button class="btn-quick" data-days="7">7d</button>
+  <button class="btn-quick" data-days="14">14d</button>
+  <button class="btn-quick active" data-days="30">30d</button>
+  <button class="btn-quick" data-days="60">60d</button>
+</div>
+
+<div class="grand-bar" id="grandBar" style="display:none;">
+  <div>T1: <span class="num t1c" id="gT1">0</span></div>
+  <div>T2: <span class="num t2c" id="gT2">0</span></div>
+  <div>Total: <span class="num totc" id="gTot">0</span></div>
+  <div style="color:#8b949e;" id="gEstilos"></div>
+</div>
+
+<div id="content"><div class="loading">Cargando...</div></div>
+
+<script>
+const fmt = n => n.toLocaleString();
+const today = new Date();
+const toISO = d => d.toISOString().slice(0,10);
+
+function setDates(days) {
+  const from = new Date(today); from.setDate(from.getDate() - days);
+  document.getElementById('dateFrom').value = toISO(from);
+  document.getElementById('dateTo').value = toISO(today);
+}
+
+document.querySelectorAll('.btn-quick').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.btn-quick').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    setDates(+btn.dataset.days);
+    loadData();
+  });
+});
+
+// Default 30 days
+setDates(30);
+
+async function loadData() {
+  const from = document.getElementById('dateFrom').value;
+  const to = document.getElementById('dateTo').value;
+  document.getElementById('content').innerHTML = '<div class="loading">Cargando...</div>';
+  document.getElementById('grandBar').style.display = 'none';
+
+  try {
+    const resp = await fetch(`/api/entradas-tracker?date_from=${from}&date_to=${to}`);
+    const data = await resp.json();
+    if (data.error) { document.getElementById('content').innerHTML = `<p style="color:#f85149">${data.error}</p>`; return; }
+
+    document.getElementById('gT1').textContent = fmt(data.grand_t1);
+    document.getElementById('gT2').textContent = fmt(data.grand_t2);
+    document.getElementById('gTot').textContent = fmt(data.grand_total);
+    document.getElementById('gEstilos').textContent = `${data.groups.length} estilos`;
+    document.getElementById('grandBar').style.display = 'flex';
+
+    let html = '';
+    data.groups.forEach((g, idx) => {
+      const imgHtml = g.image_url
+        ? `<img class="estilo-img" src="${g.image_url}" alt="${g.group}" loading="lazy">`
+        : `<div class="estilo-img-placeholder">&#x1f4e6;</div>`;
+      const dates = g.dates.slice(0, 3).join(', ') + (g.dates.length > 3 ? ` +${g.dates.length-3}` : '');
+
+      let rows = '';
+      g.items.forEach(item => {
+        rows += `<tr>
+          <td>${item.name}</td>
+          <td class="r" style="color:#58a6ff">${item.t1 || '-'}</td>
+          <td class="r" style="color:#f78166">${item.t2 || '-'}</td>
+          <td class="r" style="color:#7ee787;font-weight:600">${fmt(item.total)}</td>
+        </tr>`;
+      });
+
+      html += `
+      <div class="estilo-card">
+        <div class="estilo-header" onclick="toggle(${idx})">
+          ${imgHtml}
+          <div class="estilo-info">
+            <div class="estilo-name">${g.group}</div>
+            <div class="estilo-dates">${dates}</div>
+          </div>
+          <div class="estilo-nums">
+            <span class="t1">T1: ${fmt(g.t1)}</span>
+            <span class="t2">T2: ${fmt(g.t2)}</span>
+            <span class="tot">${fmt(g.total)}</span>
+          </div>
+          <span class="estilo-arrow" id="arrow${idx}">&#9654;</span>
+        </div>
+        <div class="estilo-detail" id="detail${idx}">
+          <table class="detail-table">
+            <tr><th>Nombre</th><th class="r">T1</th><th class="r">T2</th><th class="r">Total</th></tr>
+            ${rows}
+          </table>
+        </div>
+      </div>`;
+    });
+
+    document.getElementById('content').innerHTML = html || '<p style="color:#8b949e">No hay entradas en este rango.</p>';
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:#f85149">Error: ${e.message}</p>`;
+  }
+}
+
+function toggle(idx) {
+  const d = document.getElementById('detail' + idx);
+  const a = document.getElementById('arrow' + idx);
+  d.classList.toggle('show');
+  a.classList.toggle('open');
+}
+
+loadData();
+</script>
+{% endblock %}
