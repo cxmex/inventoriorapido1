@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS conteo_previo (
     created_at  TIMESTAMPTZ DEFAULT now(),
     caja_numero INT  NOT NULL,
     fecha       DATE NOT NULL DEFAULT CURRENT_DATE,
+    estilo      TEXT,
     modelo      TEXT NOT NULL,
     color       TEXT NOT NULL,
     qty         INT  NOT NULL,
@@ -11,6 +12,9 @@ CREATE TABLE IF NOT EXISTS conteo_previo (
     reconciled  BOOLEAN DEFAULT false,
     reconciled_at TIMESTAMPTZ
 );
+
+-- If table already exists, add estilo column
+ALTER TABLE conteo_previo ADD COLUMN IF NOT EXISTS estilo TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_conteo_previo_caja      ON conteo_previo(caja_numero);
 CREATE INDEX IF NOT EXISTS idx_conteo_previo_fecha     ON conteo_previo(fecha);

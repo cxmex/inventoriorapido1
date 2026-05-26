@@ -11539,6 +11539,7 @@ async def save_conteo_previo(payload: dict):
             {
                 "caja_numero": caja_numero,
                 "fecha":       fecha,
+                "estilo":      it.get("estilo", "").strip().upper(),
                 "modelo":      it["modelo"].strip().upper(),
                 "color":       it["color"].strip().upper(),
                 "qty":         int(it["qty"]),
@@ -11563,21 +11564,26 @@ async def save_conteo_previo(payload: dict):
 
         total = sum(r["qty"] for r in rows)
 
-        # Build WhatsApp receipt grouped by modelo
-        from collections import defaultdict
-        by_modelo = defaultdict(list)
+        # Build WhatsApp receipt grouped by estilo → modelo
+        from collections import defaultdict, OrderedDict
+        by_estilo = OrderedDict()
         for r in rows:
-            by_modelo[r["modelo"]].append(r)
+            est = r["estilo"] or "(sin estilo)"
+            if est not in by_estilo:
+                by_estilo[est] = defaultdict(list)
+            by_estilo[est][r["modelo"]].append(r)
 
         lines = [f"📦 *CAJA {caja_numero}* — {fecha}\n"]
-        for modelo, items_m in by_modelo.items():
-            lines.append(f"*{modelo}*")
-            for it in items_m:
-                lines.append(f"  {it['color']}: {it['qty']}")
+        for estilo, by_modelo in by_estilo.items():
+            lines.append(f"▸ *{estilo}*")
+            for modelo, its in by_modelo.items():
+                lines.append(f"  {modelo}")
+                for it in its:
+                    lines.append(f"    {it['color']}: {it['qty']}")
             lines.append("")
         lines.append(f"TOTAL DE PZS .... {total} ✅")
         if notas:
-            lines.append(f"📝 {notas}")
+            lines.append(f"📦 Guía: {notas}")
 
         receipt = "\n".join(lines)
         return {"success": True, "total": total, "receipt": receipt, "saved": len(rows)}

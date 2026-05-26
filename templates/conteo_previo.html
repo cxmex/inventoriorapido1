@@ -6,15 +6,16 @@
   <title>Conteo Previo de Mercancía</title>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
   <style>
-    :root {
-      --bg:#0d0f14; --surface:#13161e; --surface2:#1a1e2a; --border:#232836;
-      --accent:#f59e0b; --green:#22c55e; --red:#ef4444; --blue:#4f8ef7;
-      --text:#e2e8f0; --muted:#64748b;
-      --mono:'IBM Plex Mono',monospace; --sans:'IBM Plex Sans',sans-serif;
+    :root{
+      --bg:#0d0f14;--surface:#13161e;--surface2:#1a1e2a;--border:#232836;
+      --accent:#f59e0b;--green:#22c55e;--red:#ef4444;--blue:#4f8ef7;
+      --text:#e2e8f0;--muted:#64748b;
+      --mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans',sans-serif;
     }
     *{box-sizing:border-box;margin:0;padding:0;}
     body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:100vh;}
 
+    /* HEADER */
     .header{background:var(--surface);border-bottom:1px solid var(--border);
       padding:0 16px;display:flex;align-items:center;justify-content:space-between;
       height:56px;position:sticky;top:0;z-index:100;}
@@ -35,10 +36,10 @@
       text-transform:uppercase;letter-spacing:.8px;transition:all .2s;}
     .tab.active{color:var(--accent);border-bottom-color:var(--accent);}
 
-    .panel{display:none;max-width:600px;margin:0 auto;padding:14px 14px 80px;}
+    .panel{display:none;max-width:620px;margin:0 auto;padding:14px 14px 100px;}
     .panel.active{display:block;}
 
-    /* CARDS */
+    /* BASE CARD */
     .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;
       padding:16px;margin-bottom:14px;}
     .card-title{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;
@@ -48,34 +49,72 @@
     .field{margin-bottom:10px;}
     .field label{display:block;font-size:10px;font-weight:600;color:var(--muted);
       text-transform:uppercase;letter-spacing:1.2px;font-family:var(--mono);margin-bottom:5px;}
-    .field input,.field textarea,.field select{width:100%;background:var(--surface2);
-      border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:8px;
-      font-size:15px;font-family:var(--sans);outline:none;transition:border-color .2s;}
-    .field input:focus,.field textarea:focus,.field select:focus{
-      border-color:var(--accent);box-shadow:0 0 0 3px rgba(245,158,11,.15);}
+    .field input{width:100%;background:var(--surface2);border:1px solid var(--border);
+      color:var(--text);padding:10px 14px;border-radius:8px;font-size:15px;
+      font-family:var(--sans);outline:none;transition:border-color .2s;}
+    .field input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(245,158,11,.15);}
     .field input::placeholder{color:var(--muted);}
     .field-row{display:flex;gap:8px;}
     .field-row .field{flex:1;}
 
-    /* ITEMS TABLE */
+    /* ══ ESTILO BLOCK ══ */
+    .estilo-block{background:var(--surface);border:2px solid var(--border);
+      border-radius:14px;margin-bottom:14px;overflow:hidden;
+      animation:fadeIn .25s ease;}
+    .estilo-block-header{padding:12px 14px;background:var(--surface2);
+      border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:flex-start;}
+    .estilo-name-wrap{flex:1;}
+    .estilo-name-input{width:100%;background:var(--surface);border:1px solid var(--border);
+      color:var(--text);padding:10px 12px;border-radius:8px;font-size:15px;font-weight:700;
+      font-family:var(--sans);outline:none;text-transform:uppercase;margin-bottom:8px;}
+    .estilo-name-input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(79,142,247,.15);}
+    .estilo-name-input::placeholder{font-weight:400;color:var(--muted);}
+
+    /* photo row within header */
+    .foto-row{display:flex;align-items:center;gap:8px;}
+    .btn-foto{background:rgba(79,142,247,.12);border:1px solid rgba(79,142,247,.3);
+      color:var(--blue);border-radius:8px;padding:7px 13px;font-size:12px;font-weight:700;
+      cursor:pointer;white-space:nowrap;flex-shrink:0;}
+    .btn-foto.taken{background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.3);color:var(--green);}
+    .estilo-thumb{width:52px;height:52px;object-fit:cover;border-radius:8px;
+      border:2px solid var(--green);display:none;flex-shrink:0;}
+
+    /* delete estilo */
+    .btn-del-estilo{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);
+      color:var(--red);border-radius:8px;width:36px;height:36px;cursor:pointer;
+      font-size:16px;display:flex;align-items:center;justify-content:center;flex-shrink:0;align-self:flex-start;}
+
+    /* subtotal inside block */
+    .estilo-subtotal{padding:6px 14px;font-family:var(--mono);font-size:11px;
+      color:var(--muted);text-align:right;border-top:1px solid var(--border);}
+    .estilo-subtotal span{color:var(--accent);font-weight:700;font-size:14px;}
+
+    /* ── item rows inside estilo block ── */
+    .estilo-body{padding:12px 14px 0;}
     .items-header{display:grid;grid-template-columns:1fr 1fr 72px 36px;gap:6px;
-      padding:0 4px 6px;font-size:10px;color:var(--muted);font-family:var(--mono);
+      padding:0 2px 6px;font-size:10px;color:var(--muted);font-family:var(--mono);
       text-transform:uppercase;letter-spacing:.8px;}
-    .item-row{display:grid;grid-template-columns:1fr 1fr 72px 36px;gap:6px;margin-bottom:6px;align-items:center;}
+    .item-row{display:grid;grid-template-columns:1fr 1fr 72px 36px;gap:6px;
+      margin-bottom:6px;align-items:center;}
     .item-row input{background:var(--surface2);border:1px solid var(--border);color:var(--text);
       padding:9px 10px;border-radius:8px;font-size:14px;font-family:var(--sans);
-      outline:none;width:100%;transition:border-color .2s;}
+      outline:none;width:100%;transition:border-color .2s;text-transform:uppercase;}
     .item-row input:focus{border-color:var(--accent);}
-    .item-row input.qty-in{font-family:var(--mono);font-weight:700;font-size:16px;text-align:center;}
-    .btn-del{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);
+    .item-row input.qty-in{font-family:var(--mono);font-weight:700;font-size:16px;
+      text-align:center;text-transform:none;}
+    .btn-del-row{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);
       color:var(--red);border-radius:8px;width:36px;height:38px;cursor:pointer;
-      font-size:16px;display:flex;align-items:center;justify-content:center;}
-    .btn-del:hover{background:rgba(239,68,68,.25);}
+      font-size:14px;display:flex;align-items:center;justify-content:center;}
+    .btn-add-row-sm{width:100%;background:transparent;border:1px dashed var(--border);
+      color:var(--muted);border-radius:8px;padding:8px;cursor:pointer;font-size:12px;
+      margin:6px 0 2px;transition:all .2s;}
+    .btn-add-row-sm:hover{border-color:var(--accent);color:var(--accent);}
 
-    .btn-add-row{width:100%;background:transparent;border:2px dashed var(--border);
-      color:var(--muted);border-radius:10px;padding:10px;cursor:pointer;font-size:13px;
-      margin-top:4px;transition:all .2s;}
-    .btn-add-row:hover{border-color:var(--accent);color:var(--accent);}
+    /* ADD ESTILO BUTTON */
+    .btn-add-estilo{width:100%;background:transparent;border:2px dashed var(--blue);
+      color:var(--blue);border-radius:12px;padding:14px;cursor:pointer;font-size:14px;
+      font-weight:700;margin-bottom:14px;transition:all .2s;}
+    .btn-add-estilo:hover{background:rgba(79,142,247,.08);}
 
     /* TOTAL BAR */
     .total-bar{background:var(--surface2);border:1px solid var(--border);border-radius:10px;
@@ -93,7 +132,7 @@
     .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;
       display:flex;align-items:center;justify-content:center;padding:20px;}
     .modal-box{background:var(--surface);border:1px solid var(--border);border-radius:16px;
-      max-width:480px;width:100%;max-height:80vh;overflow-y:auto;}
+      max-width:480px;width:100%;max-height:82vh;overflow-y:auto;}
     .modal-header{padding:16px 20px;border-bottom:1px solid var(--border);
       display:flex;justify-content:space-between;align-items:center;}
     .modal-title{font-weight:700;font-size:16px;}
@@ -107,100 +146,61 @@
       color:var(--muted);padding:10px;border-radius:10px;font-size:14px;cursor:pointer;}
     .hidden{display:none;}
 
-    /* CAJA CARDS (history tab) */
-    .caja-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;
-      margin-bottom:10px;overflow:hidden;}
+    /* HISTORY TAB */
+    .caja-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;margin-bottom:10px;overflow:hidden;}
     .caja-header{padding:14px 16px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;}
     .caja-num{font-weight:700;font-size:17px;font-family:var(--mono);}
     .caja-meta{font-size:11px;color:var(--muted);font-family:var(--mono);margin-top:2px;}
     .caja-right{text-align:right;}
     .caja-total{font-size:22px;font-weight:700;font-family:var(--mono);color:var(--accent);}
-    .badge-ok{background:rgba(34,197,94,.15);color:var(--green);border:1px solid rgba(34,197,94,.3);
-      font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;font-family:var(--mono);}
-    .badge-pending{background:rgba(245,158,11,.15);color:var(--accent);border:1px solid rgba(245,158,11,.3);
-      font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;font-family:var(--mono);}
+    .badge-ok{background:rgba(34,197,94,.15);color:var(--green);border:1px solid rgba(34,197,94,.3);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;font-family:var(--mono);}
+    .badge-pending{background:rgba(245,158,11,.15);color:var(--accent);border:1px solid rgba(245,158,11,.3);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;font-family:var(--mono);}
     .caja-detail{display:none;border-top:1px solid var(--border);padding:12px 16px;}
     .caja-detail.open{display:block;}
-    .detail-row{display:flex;justify-content:space-between;font-size:12px;
-      padding:4px 0;border-bottom:1px solid rgba(35,40,54,.5);}
+    .detail-estilo-title{font-size:11px;font-weight:700;font-family:var(--mono);color:var(--blue);
+      text-transform:uppercase;margin:8px 0 4px;}
+    .detail-row{display:flex;justify-content:space-between;font-size:12px;padding:4px 0;
+      border-bottom:1px solid rgba(35,40,54,.5);}
     .detail-row:last-child{border-bottom:none;}
-    .detail-modelo{color:var(--muted);font-family:var(--mono);font-size:11px;}
     .detail-qty{font-weight:700;font-family:var(--mono);}
 
-    /* RECONCILE */
-    .reconcile-card{background:var(--surface2);border:1px solid var(--border);
-      border-radius:10px;padding:14px;margin-top:10px;}
+    .reconcile-card{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px;margin-top:10px;}
     .reconcile-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;}
-    .rec-box{background:var(--surface);border:1px solid var(--border);border-radius:8px;
-      padding:10px;text-align:center;}
+    .rec-box{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center;}
     .rec-label{font-size:9px;color:var(--muted);text-transform:uppercase;font-family:var(--mono);margin-bottom:4px;}
     .rec-val{font-size:22px;font-weight:700;font-family:var(--mono);}
-    .rec-val.ok{color:var(--green);}
-    .rec-val.warn{color:var(--accent);}
-    .rec-val.bad{color:var(--red);}
+    .rec-val.ok{color:var(--green);}.rec-val.warn{color:var(--accent);}.rec-val.bad{color:var(--red);}
     .rec-field{margin-bottom:8px;}
-    .rec-field label{font-size:10px;color:var(--muted);font-family:var(--mono);
-      text-transform:uppercase;display:block;margin-bottom:4px;}
-    .rec-field input{background:var(--surface);border:1px solid var(--border);color:var(--text);
-      padding:8px 12px;border-radius:8px;font-size:13px;width:100%;outline:none;}
-    .btn-reconcile{background:var(--blue);color:#fff;border:none;padding:10px 18px;
-      border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;margin-top:6px;width:100%;}
-    .btn-mark-done{background:var(--green);color:#000;border:none;padding:8px 14px;
-      border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;margin-top:8px;width:100%;}
+    .rec-field label{font-size:10px;color:var(--muted);font-family:var(--mono);text-transform:uppercase;display:block;margin-bottom:4px;}
+    .rec-field input{background:var(--surface);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:8px;font-size:13px;width:100%;outline:none;}
+    .btn-reconcile{background:var(--blue);color:#fff;border:none;padding:10px 18px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;margin-top:6px;width:100%;}
+    .btn-mark-done{background:var(--green);color:#000;border:none;padding:8px 14px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;margin-top:8px;width:100%;}
 
     @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
     .fade{animation:fadeIn .3s ease;}
-
-    /* ESTILO FOTO ROWS */
-    .estilo-foto-row{background:var(--surface2);border:1px solid var(--border);
-      border-radius:10px;padding:12px;margin-bottom:8px;display:flex;gap:10px;align-items:flex-start;}
-    .estilo-foto-left{flex:1;}
-    .estilo-foto-left input{width:100%;background:var(--surface);border:1px solid var(--border);
-      color:var(--text);padding:9px 12px;border-radius:8px;font-size:14px;outline:none;
-      font-family:var(--sans);text-transform:uppercase;margin-bottom:6px;}
-    .estilo-foto-left input:focus{border-color:var(--blue);}
-    .btn-foto-capture{background:rgba(79,142,247,.12);border:1px solid rgba(79,142,247,.3);
-      color:var(--blue);border-radius:8px;padding:7px 12px;font-size:12px;font-weight:700;
-      cursor:pointer;white-space:nowrap;}
-    .btn-foto-capture.taken{background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.3);color:var(--green);}
-    .estilo-thumb{width:60px;height:60px;object-fit:cover;border-radius:8px;display:none;
-      border:2px solid var(--green);}
-    .estilo-foto-del{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);
-      color:var(--red);border-radius:8px;width:34px;height:34px;cursor:pointer;
-      font-size:15px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
   </style>
 
-  <!-- Common phone models datalist -->
   <datalist id="modelos">
-    <option value="IP 17 PM"></option><option value="IP 17 PLUS"></option>
-    <option value="IP 17"></option><option value="IP 16 PM"></option>
-    <option value="IP 16 PLUS"></option><option value="IP 16"></option>
-    <option value="IP 15 PM"></option><option value="IP 15 PLUS"></option>
-    <option value="IP 15"></option><option value="IP 14 PM"></option>
-    <option value="IP 14 PLUS"></option><option value="IP 14"></option>
-    <option value="IP 13 PM"></option><option value="IP 13 MINI"></option>
-    <option value="IP 13"></option><option value="IP 13/14"></option>
-    <option value="IP 12 PM"></option><option value="IP 12 MINI"></option>
-    <option value="IP 12"></option><option value="IP 11"></option>
-    <option value="SAM S25 ULTRA"></option><option value="SAM S25 PLUS"></option>
-    <option value="SAM S25"></option><option value="SAM S24 ULTRA"></option>
-    <option value="SAM S24 PLUS"></option><option value="SAM S24"></option>
-    <option value="SAM S23 ULTRA"></option><option value="SAM A56"></option>
-    <option value="SAM A55"></option><option value="SAM A54"></option>
-    <option value="SAM A35"></option><option value="SAM A25"></option>
-    <option value="SAM A16"></option><option value="SAM A15"></option>
-    <option value="SAM A06"></option><option value="SAM A05S"></option>
+    <option value="IP 17 PM"/><option value="IP 17 PLUS"/><option value="IP 17"/>
+    <option value="IP 16 PM"/><option value="IP 16 PLUS"/><option value="IP 16"/>
+    <option value="IP 15 PM"/><option value="IP 15 PLUS"/><option value="IP 15"/>
+    <option value="IP 14 PM"/><option value="IP 14 PLUS"/><option value="IP 14"/>
+    <option value="IP 13 PM"/><option value="IP 13 MINI"/><option value="IP 13"/>
+    <option value="IP 13/14"/><option value="IP 12 PM"/><option value="IP 12 MINI"/>
+    <option value="IP 12"/><option value="IP 11"/>
+    <option value="SAM S25 ULTRA"/><option value="SAM S25 PLUS"/><option value="SAM S25"/>
+    <option value="SAM S24 ULTRA"/><option value="SAM S24 PLUS"/><option value="SAM S24"/>
+    <option value="SAM A56"/><option value="SAM A55"/><option value="SAM A54"/>
+    <option value="SAM A35"/><option value="SAM A25"/><option value="SAM A16"/>
+    <option value="SAM A15"/><option value="SAM A06"/><option value="SAM A05S"/>
   </datalist>
-
   <datalist id="colores">
-    <option value="NEGRO"></option><option value="ROSA"></option>
-    <option value="PISTACHE"></option><option value="AZUL"></option>
-    <option value="BLANCO"></option><option value="MORADO"></option>
-    <option value="TRANSPARENTE"></option><option value="HUMO"></option>
-    <option value="VERDE"></option><option value="ROJO"></option>
-    <option value="NARANJA"></option><option value="AMARILLO"></option>
-    <option value="GRIS"></option><option value="BEIGE"></option>
-    <option value="LILA"></option><option value="TURQUESA"></option>
+    <option value="NEGRO"/><option value="ROSA"/><option value="PISTACHE"/>
+    <option value="AZUL"/><option value="BLANCO"/><option value="MORADO"/>
+    <option value="TRANSPARENTE"/><option value="HUMO"/><option value="VERDE"/>
+    <option value="ROJO"/><option value="NARANJA"/><option value="AMARILLO"/>
+    <option value="GRIS"/><option value="BEIGE"/><option value="LILA"/>
+    <option value="TURQUESA"/>
   </datalist>
 </head>
 <body>
@@ -224,6 +224,7 @@
 <!-- ══════════════ TAB: NUEVA CUENTA ══════════════ -->
 <div class="panel active" id="tab-nueva">
 
+  <!-- CAJA INFO -->
   <div class="card" style="margin-top:14px;">
     <div class="card-title">Info de Caja</div>
     <div class="field-row">
@@ -242,28 +243,14 @@
     </div>
   </div>
 
-  <!-- FOTOS DE ESTILOS -->
-  <div class="card">
-    <div class="card-title">Fotos de Estilos</div>
-    <div id="estilos-container"></div>
-    <button class="btn-add-row" onclick="addEstiloFoto()" style="border-color:var(--blue);color:var(--blue);">
-      📷 Agregar Estilo + Foto
-    </button>
-  </div>
+  <!-- ESTILOS (dynamic) -->
+  <div id="estilos-container"></div>
 
-  <div class="card">
-    <div class="card-title">Items por Modelo / Color</div>
-    <div class="items-header">
-      <span>Modelo</span><span>Color</span><span style="text-align:center">Cant.</span><span></span>
-    </div>
-    <div id="items-container"></div>
-    <button class="btn-add-row" onclick="addRow()">+ Agregar línea</button>
-  </div>
+  <button class="btn-add-estilo" onclick="addEstilo()">📷 Agregar Estilo</button>
 
+  <!-- TOTAL -->
   <div class="total-bar">
-    <div>
-      <div class="total-label">Total piezas</div>
-    </div>
+    <div class="total-label">Total piezas</div>
     <div class="total-value" id="total-display">0</div>
   </div>
 
@@ -273,9 +260,7 @@
 <!-- ══════════════ TAB: CAJAS PENDIENTES ══════════════ -->
 <div class="panel" id="tab-cajas">
   <div style="margin-top:14px;" id="cajas-list">
-    <div style="text-align:center;color:var(--muted);padding:40px;font-family:var(--mono);font-size:13px;">
-      Cargando...
-    </div>
+    <div style="text-align:center;color:var(--muted);padding:40px;font-family:var(--mono);font-size:13px;">Cargando...</div>
   </div>
 </div>
 
@@ -303,7 +288,7 @@
   }
   tick(); setInterval(tick,1000);
 
-  // ── DEFAULT DATE ──
+  // Auto-set today's date
   document.getElementById('caja-fecha').value = new Date().toISOString().slice(0,10);
 
   // ── TABS ──
@@ -314,52 +299,118 @@
     if(tab==='cajas') loadCajas();
   }
 
-  // ── ROWS ──
-  let rowCount = 0;
+  // ── COUNTERS ──
+  let estiloCount = 0;
+  let rowCounters  = {};   // estiloId → next row id
 
-  function addRow(modelo='',color='',qty=''){
-    rowCount++;
-    const id = rowCount;
+  // ── ADD ESTILO BLOCK ──
+  function addEstilo(){
+    estiloCount++;
+    const eid = estiloCount;
+    rowCounters[eid] = 0;
+
+    const div = document.createElement('div');
+    div.className = 'estilo-block';
+    div.id = 'estilo-'+eid;
+    div.innerHTML = `
+      <div class="estilo-block-header">
+        <div class="estilo-name-wrap">
+          <input class="estilo-name-input" type="text" placeholder="Nombre del estilo..."
+                 oninput="this.value=this.value.toUpperCase()"/>
+          <div class="foto-row">
+            <button class="btn-foto" onclick="triggerFoto(${eid})">📷 Tomar foto</button>
+            <input type="file" accept="image/*" capture="environment"
+                   id="foto-file-${eid}" style="display:none"
+                   onchange="previewFoto(${eid},this)"/>
+            <img id="foto-thumb-${eid}" class="estilo-thumb"/>
+          </div>
+        </div>
+        <button class="btn-del-estilo" onclick="delEstilo(${eid})">✕</button>
+      </div>
+      <div class="estilo-body" id="estilo-body-${eid}">
+        <div class="items-header">
+          <span>Modelo</span><span>Color</span><span style="text-align:center">Cant.</span><span></span>
+        </div>
+        <div id="rows-${eid}"></div>
+        <button class="btn-add-row-sm" onclick="addRow(${eid})">+ Agregar línea</button>
+      </div>
+      <div class="estilo-subtotal">Subtotal: <span id="subtotal-${eid}">0</span> pzs</div>`;
+
+    document.getElementById('estilos-container').appendChild(div);
+    // Start with 2 empty rows
+    addRow(eid); addRow(eid);
+    div.querySelector('.estilo-name-input').focus();
+    recalc();
+  }
+
+  function delEstilo(eid){
+    document.getElementById('estilo-'+eid)?.remove();
+    recalc();
+  }
+
+  // ── PHOTO ──
+  function triggerFoto(eid){
+    document.getElementById('foto-file-'+eid).click();
+  }
+  function previewFoto(eid, input){
+    const file = input.files[0];
+    if(!file) return;
+    const thumb = document.getElementById('foto-thumb-'+eid);
+    thumb.src = URL.createObjectURL(file);
+    thumb.style.display = 'block';
+    const btn = input.parentElement.querySelector('.btn-foto');
+    btn.textContent = '✅ Foto lista';
+    btn.classList.add('taken');
+  }
+
+  // ── ADD ROW inside an estilo ──
+  function addRow(eid, modelo='', color='', qty=''){
+    rowCounters[eid] = (rowCounters[eid]||0) + 1;
+    const rid = eid + '_' + rowCounters[eid];
+    const container = document.getElementById('rows-'+eid);
+    if(!container) return;
+
     const div = document.createElement('div');
     div.className = 'item-row';
-    div.id = 'row-'+id;
+    div.id = 'row-'+rid;
     div.innerHTML = `
       <input type="text" list="modelos" placeholder="IP 17 PM" value="${modelo}"
-             oninput="recalc()" onchange="this.value=this.value.toUpperCase()"
-             style="text-transform:uppercase"/>
+             oninput="recalc()" onchange="this.value=this.value.toUpperCase()"/>
       <input type="text" list="colores" placeholder="ROSA" value="${color}"
-             oninput="recalc()" onchange="this.value=this.value.toUpperCase()"
-             style="text-transform:uppercase"/>
+             oninput="recalc()" onchange="this.value=this.value.toUpperCase()"/>
       <input type="number" class="qty-in" placeholder="0" value="${qty}" min="0" oninput="recalc()"/>
-      <button class="btn-del" onclick="delRow(${id})">✕</button>
-    `;
-    document.getElementById('items-container').appendChild(div);
-    div.querySelector('input').focus();
+      <button class="btn-del-row" onclick="document.getElementById('row-${rid}').remove();recalc()">✕</button>`;
+    container.appendChild(div);
     recalc();
   }
 
-  function delRow(id){
-    document.getElementById('row-'+id)?.remove();
-    recalc();
-  }
-
+  // ── RECALC totals ──
   function recalc(){
-    let total = 0;
-    document.querySelectorAll('#items-container .item-row').forEach(row=>{
-      const qty = parseInt(row.querySelector('.qty-in').value)||0;
-      total += qty;
+    let grand = 0;
+    document.querySelectorAll('.estilo-block').forEach(block=>{
+      const eid = block.id.replace('estilo-','');
+      let sub = 0;
+      block.querySelectorAll('.qty-in').forEach(inp=>sub += parseInt(inp.value)||0);
+      const el = document.getElementById('subtotal-'+eid);
+      if(el) el.textContent = sub;
+      grand += sub;
     });
-    document.getElementById('total-display').textContent = total;
+    document.getElementById('total-display').textContent = grand;
   }
 
+  // ── COLLECT ALL ITEMS ──
   function getItems(){
     const items = [];
-    document.querySelectorAll('#items-container .item-row').forEach(row=>{
-      const inputs = row.querySelectorAll('input');
-      const modelo = inputs[0].value.trim().toUpperCase();
-      const color  = inputs[1].value.trim().toUpperCase();
-      const qty    = parseInt(inputs[2].value)||0;
-      if(modelo && color && qty>0) items.push({modelo,color,qty});
+    document.querySelectorAll('.estilo-block').forEach(block=>{
+      const eid = block.id.replace('estilo-','');
+      const estilo = block.querySelector('.estilo-name-input').value.trim().toUpperCase();
+      block.querySelectorAll('.item-row').forEach(row=>{
+        const inputs = row.querySelectorAll('input');
+        const modelo = inputs[0].value.trim().toUpperCase();
+        const color  = inputs[1].value.trim().toUpperCase();
+        const qty    = parseInt(inputs[2].value)||0;
+        if(modelo && color && qty>0) items.push({estilo, modelo, color, qty});
+      });
     });
     return items;
   }
@@ -372,11 +423,10 @@
     const items  = getItems();
 
     if(!caja_numero){ alert('Ingresa el número de caja'); document.getElementById('caja-num').focus(); return; }
-    if(!fecha){ alert('Selecciona una fecha'); return; }
-    if(!items.length){ alert('Agrega al menos un item'); return; }
+    if(!items.length){ alert('Agrega al menos un item con modelo, color y cantidad'); return; }
 
     const btn = document.getElementById('btn-submit');
-    btn.disabled = true; btn.textContent = 'Guardando...';
+    btn.disabled=true; btn.textContent='Guardando...';
 
     try{
       const resp = await fetch('/api/conteo-previo',{
@@ -385,26 +435,24 @@
         body: JSON.stringify({caja_numero,fecha,notas,items})
       });
       const data = await resp.json();
-      if(!resp.ok || data.error) throw new Error(data.error||'Error al guardar');
+      if(!resp.ok||data.error) throw new Error(data.error||'Error al guardar');
 
       // Upload estilo photos
-      const fotoRows = document.querySelectorAll('#estilos-container .estilo-foto-row');
+      const blocks = document.querySelectorAll('.estilo-block');
       let fotosOk = 0;
-      for(const row of fotoRows){
-        const estiloName = row.querySelector('input[type="text"]').value.trim();
-        const fileInput  = row.querySelector('input[type="file"]');
+      for(const block of blocks){
+        const eid = block.id.replace('estilo-','');
+        const estiloName = block.querySelector('.estilo-name-input').value.trim();
+        const fileInput  = document.getElementById('foto-file-'+eid);
         const file = fileInput?.files?.[0];
-        if(!file || !estiloName) continue;
+        if(!file||!estiloName) continue;
         btn.textContent = `Subiendo fotos... (${fotosOk+1})`;
         const fd = new FormData();
         fd.append('caja_numero', caja_numero);
         fd.append('estilo', estiloName.toUpperCase());
         fd.append('fecha', fecha);
         fd.append('photo', file);
-        try{
-          await fetch('/api/conteo-previo/foto', {method:'POST', body:fd});
-          fotosOk++;
-        }catch(e){}
+        try{ await fetch('/api/conteo-previo/foto',{method:'POST',body:fd}); fotosOk++; }catch(e){}
       }
 
       // Show receipt
@@ -412,12 +460,12 @@
       document.getElementById('receipt-total').textContent = data.total+' pzs';
       document.getElementById('receipt-modal').classList.remove('hidden');
 
-      // Clear form
+      // Reset form
       document.getElementById('caja-num').value='';
       document.getElementById('caja-notas').value='';
-      document.getElementById('items-container').innerHTML='';
       document.getElementById('estilos-container').innerHTML='';
-      estiloCount=0; rowCount=0; recalc();
+      estiloCount=0; rowCounters={};
+      recalc();
 
     }catch(e){
       alert('Error: '+e.message);
@@ -426,28 +474,22 @@
     }
   }
 
-  // ── RECEIPT MODAL ──
+  // ── RECEIPT ──
   function copyReceipt(){
     const text = document.getElementById('receipt-text').textContent;
     navigator.clipboard.writeText(text).then(()=>{
-      const btn = document.querySelector('.btn-copy');
-      btn.textContent='✅ Copiado!';
-      setTimeout(()=>btn.textContent='📋 Copiar para WhatsApp',2000);
+      const b = document.querySelector('.btn-copy');
+      b.textContent='✅ Copiado!';
+      setTimeout(()=>b.textContent='📋 Copiar para WhatsApp',2000);
     }).catch(()=>{
-      // fallback
-      const ta = document.createElement('textarea');
-      ta.value = text; document.body.appendChild(ta);
-      ta.select(); document.execCommand('copy');
-      document.body.removeChild(ta);
-      alert('Copiado!');
+      const ta=document.createElement('textarea');
+      ta.value=text; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta);
     });
   }
+  function closeModal(){ document.getElementById('receipt-modal').classList.add('hidden'); }
 
-  function closeModal(){
-    document.getElementById('receipt-modal').classList.add('hidden');
-  }
-
-  // ── LOAD CAJAS ──
+  // ── LOAD CAJAS (history) ──
   async function loadCajas(){
     const el = document.getElementById('cajas-list');
     el.innerHTML='<div style="text-align:center;color:var(--muted);padding:40px;font-family:var(--mono);font-size:13px;">Cargando...</div>';
@@ -465,17 +507,21 @@
   }
 
   function buildCajaCard(c){
-    // Group items by modelo
-    const byModelo = {};
+    // Group items by estilo → then modelo/color
+    const byEstilo = {};
     c.items.forEach(it=>{
-      if(!byModelo[it.modelo]) byModelo[it.modelo]=[];
-      byModelo[it.modelo].push(it);
+      const est = it.estilo||'(sin estilo)';
+      if(!byEstilo[est]) byEstilo[est]=[];
+      byEstilo[est].push(it);
     });
-    const details = Object.entries(byModelo).map(([m,rows])=>`
-      <div style="margin-bottom:8px;">
-        <div style="font-size:11px;font-family:var(--mono);color:var(--blue);font-weight:700;margin-bottom:4px;">${m}</div>
-        ${rows.map(r=>`<div class="detail-row"><span>${r.color}</span><span class="detail-qty">${r.qty}</span></div>`).join('')}
-      </div>`).join('');
+
+    const details = Object.entries(byEstilo).map(([est,rows])=>`
+      <div class="detail-estilo-title">${est}</div>
+      ${rows.map(r=>`
+        <div class="detail-row">
+          <span>${r.modelo||''} · ${r.color||''}</span>
+          <span class="detail-qty">${r.qty}</span>
+        </div>`).join('')}`).join('');
 
     const badge = c.reconciled
       ? '<span class="badge-ok">VERIFICADO</span>'
@@ -485,14 +531,10 @@
       <div class="reconcile-card">
         <div style="font-size:11px;font-family:var(--mono);color:var(--muted);margin-bottom:10px;text-transform:uppercase;">Verificar contra Entradas</div>
         <div class="field-row">
-          <div class="rec-field" style="flex:1">
-            <label>Fecha desde</label>
-            <input type="date" id="rfrom-${c.caja_numero}" value="${c.fecha}"/>
-          </div>
-          <div class="rec-field" style="flex:1">
-            <label>Fecha hasta</label>
-            <input type="date" id="rto-${c.caja_numero}" value="${c.fecha}"/>
-          </div>
+          <div class="rec-field" style="flex:1"><label>Fecha desde</label>
+            <input type="date" id="rfrom-${c.caja_numero}" value="${c.fecha}"/></div>
+          <div class="rec-field" style="flex:1"><label>Fecha hasta</label>
+            <input type="date" id="rto-${c.caja_numero}" value="${c.fecha}"/></div>
         </div>
         <button class="btn-reconcile" onclick="reconcile(${c.caja_numero})">COMPARAR CON ENTRADAS</button>
         <div id="rec-result-${c.caja_numero}"></div>
@@ -519,26 +561,21 @@
   }
 
   function toggleDetail(num){
-    const el = document.getElementById('detail-'+num);
-    el.classList.toggle('open');
+    document.getElementById('detail-'+num)?.classList.toggle('open');
   }
 
   // ── RECONCILE ──
   async function reconcile(num){
     const from = document.getElementById('rfrom-'+num).value;
     const to   = document.getElementById('rto-'+num).value;
-    if(!from||!to){ alert('Selecciona las fechas'); return; }
-
+    if(!from||!to){alert('Selecciona las fechas');return;}
     const el = document.getElementById('rec-result-'+num);
     el.innerHTML='<div style="color:var(--muted);font-size:12px;font-family:var(--mono);padding:8px 0;">Comparando...</div>';
-
     try{
       const resp = await fetch(`/api/conteo-previo/reconcile?caja_numero=${num}&fecha_from=${from}&fecha_to=${to}`);
       const d = await resp.json();
-
       const diffClass = d.diff===0?'ok':(Math.abs(d.diff)<=10?'warn':'bad');
       const diffSign  = d.diff>0?'+':'';
-
       el.innerHTML=`
         <div class="reconcile-row" style="margin-top:12px;">
           <div class="rec-box"><div class="rec-label">Contado</div><div class="rec-val warn">${d.total_counted}</div></div>
@@ -546,8 +583,10 @@
           <div class="rec-box"><div class="rec-label">Entrado T2</div><div class="rec-val">${d.total_entered2}</div></div>
         </div>
         <div class="reconcile-row">
-          <div class="rec-box" style="grid-column:span 2"><div class="rec-label">Total Entrado (T1+T2)</div><div class="rec-val">${d.total_entered}</div></div>
-          <div class="rec-box"><div class="rec-label">Diferencia</div><div class="rec-val ${diffClass}">${diffSign}${d.diff}</div></div>
+          <div class="rec-box" style="grid-column:span 2"><div class="rec-label">Total Entrado (T1+T2)</div>
+            <div class="rec-val">${d.total_entered}</div></div>
+          <div class="rec-box"><div class="rec-label">Diferencia</div>
+            <div class="rec-val ${diffClass}">${diffSign}${d.diff}</div></div>
         </div>
         <div style="font-size:11px;color:var(--muted);font-family:var(--mono);padding-top:4px;">
           ${d.diff===0?'✅ Todo cuadra perfectamente':
@@ -564,47 +603,6 @@
     await fetch(`/api/conteo-previo/${num}/mark-reconciled`,{method:'PATCH'});
     loadCajas();
   }
-
-  // ── ESTILO FOTOS ──
-  let estiloCount = 0;
-
-  function addEstiloFoto(){
-    estiloCount++;
-    const id = estiloCount;
-    const div = document.createElement('div');
-    div.className = 'estilo-foto-row';
-    div.id = 'estilo-'+id;
-    div.innerHTML = `
-      <div class="estilo-foto-left">
-        <input type="text" list="estilos-list" placeholder="Nombre del estilo..." oninput="this.value=this.value.toUpperCase()"/>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <button class="btn-foto-capture" onclick="triggerFoto(${id})">📷 Tomar foto</button>
-          <input type="file" accept="image/*" capture="environment" id="foto-file-${id}"
-                 style="display:none" onchange="previewFoto(${id},this)"/>
-          <img id="foto-thumb-${id}" class="estilo-thumb"/>
-        </div>
-      </div>
-      <button class="estilo-foto-del" onclick="document.getElementById('estilo-${id}').remove()">✕</button>`;
-    document.getElementById('estilos-container').appendChild(div);
-  }
-
-  function triggerFoto(id){
-    document.getElementById('foto-file-'+id).click();
-  }
-
-  function previewFoto(id, input){
-    const file = input.files[0];
-    if(!file) return;
-    const thumb = document.getElementById('foto-thumb-'+id);
-    thumb.src = URL.createObjectURL(file);
-    thumb.style.display = 'block';
-    const btn = input.parentElement.querySelector('.btn-foto-capture');
-    btn.textContent = '✅ Foto lista';
-    btn.classList.add('taken');
-  }
-
-  // ── INIT: add 3 starter rows ──
-  addRow(); addRow(); addRow();
 </script>
 </body>
 </html>
