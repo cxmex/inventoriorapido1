@@ -11684,6 +11684,34 @@ async def reconcile_caja(caja_numero: int, fecha_from: str, fecha_to: str):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.post("/api/conteo-previo/foto")
+async def upload_conteo_foto(
+    caja_numero: int = Form(...),
+    estilo: str = Form(""),
+    fecha: str = Form(""),
+    photo: UploadFile = File(...),
+):
+    try:
+        contents = await photo.read()
+        ext = photo.filename.rsplit(".", 1)[-1] if "." in photo.filename else "jpg"
+        now_str = datetime.now(_TZ).strftime("%Y%m%d_%H%M%S")
+        uid = str(uuid.uuid4())[:8]
+        safe_estilo = estilo.replace(" ", "_").replace("/", "-")[:40]
+        storage_path = f"conteo_previo/caja{caja_numero}/{safe_estilo}_{now_str}_{uid}.{ext}"
+
+        upload_url = f"{SUPABASE_URL}/storage/v1/object/barcode-photos/{storage_path}"
+        async with httpx.AsyncClient(timeout=30) as client:
+            await client.post(
+                upload_url,
+                headers={**HEADERS, "Content-Type": photo.content_type or "image/jpeg"},
+                content=contents,
+            )
+        public_url = f"{SUPABASE_URL}/storage/v1/object/public/barcode-photos/{storage_path}"
+        return {"success": True, "url": public_url}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.patch("/api/conteo-previo/{caja_numero}/mark-reconciled")
 async def mark_reconciled(caja_numero: int):
     try:

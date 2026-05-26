@@ -150,6 +150,24 @@
 
     @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
     .fade{animation:fadeIn .3s ease;}
+
+    /* ESTILO FOTO ROWS */
+    .estilo-foto-row{background:var(--surface2);border:1px solid var(--border);
+      border-radius:10px;padding:12px;margin-bottom:8px;display:flex;gap:10px;align-items:flex-start;}
+    .estilo-foto-left{flex:1;}
+    .estilo-foto-left input{width:100%;background:var(--surface);border:1px solid var(--border);
+      color:var(--text);padding:9px 12px;border-radius:8px;font-size:14px;outline:none;
+      font-family:var(--sans);text-transform:uppercase;margin-bottom:6px;}
+    .estilo-foto-left input:focus{border-color:var(--blue);}
+    .btn-foto-capture{background:rgba(79,142,247,.12);border:1px solid rgba(79,142,247,.3);
+      color:var(--blue);border-radius:8px;padding:7px 12px;font-size:12px;font-weight:700;
+      cursor:pointer;white-space:nowrap;}
+    .btn-foto-capture.taken{background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.3);color:var(--green);}
+    .estilo-thumb{width:60px;height:60px;object-fit:cover;border-radius:8px;display:none;
+      border:2px solid var(--green);}
+    .estilo-foto-del{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);
+      color:var(--red);border-radius:8px;width:34px;height:34px;cursor:pointer;
+      font-size:15px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
   </style>
 
   <!-- Common phone models datalist -->
@@ -215,17 +233,26 @@
       </div>
       <div class="field">
         <label>Fecha</label>
-        <input id="caja-fecha" type="date"/>
+        <input id="caja-fecha" type="date" readonly style="opacity:.55;cursor:not-allowed;"/>
       </div>
     </div>
     <div class="field">
-      <label>Notas (opcional)</label>
-      <input id="caja-notas" type="text" placeholder="ej. llegó con ESTAFETA..."/>
+      <label>Estafeta / Guía</label>
+      <input id="caja-notas" type="text" placeholder="No. de guía o paquetería..."/>
     </div>
   </div>
 
+  <!-- FOTOS DE ESTILOS -->
   <div class="card">
-    <div class="card-title">Items</div>
+    <div class="card-title">Fotos de Estilos</div>
+    <div id="estilos-container"></div>
+    <button class="btn-add-row" onclick="addEstiloFoto()" style="border-color:var(--blue);color:var(--blue);">
+      📷 Agregar Estilo + Foto
+    </button>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Items por Modelo / Color</div>
     <div class="items-header">
       <span>Modelo</span><span>Color</span><span style="text-align:center">Cant.</span><span></span>
     </div>
@@ -360,6 +387,26 @@
       const data = await resp.json();
       if(!resp.ok || data.error) throw new Error(data.error||'Error al guardar');
 
+      // Upload estilo photos
+      const fotoRows = document.querySelectorAll('#estilos-container .estilo-foto-row');
+      let fotosOk = 0;
+      for(const row of fotoRows){
+        const estiloName = row.querySelector('input[type="text"]').value.trim();
+        const fileInput  = row.querySelector('input[type="file"]');
+        const file = fileInput?.files?.[0];
+        if(!file || !estiloName) continue;
+        btn.textContent = `Subiendo fotos... (${fotosOk+1})`;
+        const fd = new FormData();
+        fd.append('caja_numero', caja_numero);
+        fd.append('estilo', estiloName.toUpperCase());
+        fd.append('fecha', fecha);
+        fd.append('photo', file);
+        try{
+          await fetch('/api/conteo-previo/foto', {method:'POST', body:fd});
+          fotosOk++;
+        }catch(e){}
+      }
+
       // Show receipt
       document.getElementById('receipt-text').textContent = data.receipt;
       document.getElementById('receipt-total').textContent = data.total+' pzs';
@@ -369,7 +416,8 @@
       document.getElementById('caja-num').value='';
       document.getElementById('caja-notas').value='';
       document.getElementById('items-container').innerHTML='';
-      rowCount=0; recalc();
+      document.getElementById('estilos-container').innerHTML='';
+      estiloCount=0; rowCount=0; recalc();
 
     }catch(e){
       alert('Error: '+e.message);
@@ -517,7 +565,45 @@
     loadCajas();
   }
 
-  // ── INIT: add 3 starter rows and pre-fill if URL has datos ──
+  // ── ESTILO FOTOS ──
+  let estiloCount = 0;
+
+  function addEstiloFoto(){
+    estiloCount++;
+    const id = estiloCount;
+    const div = document.createElement('div');
+    div.className = 'estilo-foto-row';
+    div.id = 'estilo-'+id;
+    div.innerHTML = `
+      <div class="estilo-foto-left">
+        <input type="text" list="estilos-list" placeholder="Nombre del estilo..." oninput="this.value=this.value.toUpperCase()"/>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <button class="btn-foto-capture" onclick="triggerFoto(${id})">📷 Tomar foto</button>
+          <input type="file" accept="image/*" capture="environment" id="foto-file-${id}"
+                 style="display:none" onchange="previewFoto(${id},this)"/>
+          <img id="foto-thumb-${id}" class="estilo-thumb"/>
+        </div>
+      </div>
+      <button class="estilo-foto-del" onclick="document.getElementById('estilo-${id}').remove()">✕</button>`;
+    document.getElementById('estilos-container').appendChild(div);
+  }
+
+  function triggerFoto(id){
+    document.getElementById('foto-file-'+id).click();
+  }
+
+  function previewFoto(id, input){
+    const file = input.files[0];
+    if(!file) return;
+    const thumb = document.getElementById('foto-thumb-'+id);
+    thumb.src = URL.createObjectURL(file);
+    thumb.style.display = 'block';
+    const btn = input.parentElement.querySelector('.btn-foto-capture');
+    btn.textContent = '✅ Foto lista';
+    btn.classList.add('taken');
+  }
+
+  // ── INIT: add 3 starter rows ──
   addRow(); addRow(); addRow();
 </script>
 </body>
