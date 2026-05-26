@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
   <title>Check Barcode Mobile</title>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2/dist/quagga.min.js"></script>
+  <script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
   <style>
     :root {
       --bg: #0d0f14; --surface: #13161e; --surface2: #1a1e2a; --border: #232836;
@@ -53,8 +53,8 @@
     #scanner-viewport {
       width: 100%; height: 240px; background: #000; position: relative; display: none;
     }
-    #scanner-viewport video { width: 100%; height: 100%; object-fit: cover; }
-    #scanner-viewport canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+    #scanner-video { width: 100%; height: 100%; object-fit: cover; display: block; }
+    #scanner-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
     .scan-line {
       position: absolute; top: 50%; left: 10%; right: 10%; height: 2px;
       background: var(--green); box-shadow: 0 0 12px var(--green);
@@ -192,6 +192,8 @@
         <button class="scanner-toggle" id="scanBtn" onclick="toggleScanner()">SCAN</button>
       </div>
       <div id="scanner-viewport">
+        <video id="scanner-video" autoplay playsinline muted></video>
+        <canvas id="scanner-canvas" style="display:none"></canvas>
         <div class="scan-line"></div>
       </div>
       <div class="scan-status" id="scanStatus"></div>
@@ -246,6 +248,10 @@
     let scanning = false;
     let sessionLog = [];
     let currentPhoto = null;
+    let videoStream = null;
+    let scanInterval = null;
+    let nativeDetector = null;
+    let zxingReader = null;
 
     /* Clock */
     function tick() {
@@ -261,61 +267,107 @@
 
     /* ── BARCODE SCANNER ── */
     function toggleScanner() {
-      if (scanning) {
-        stopScanner();
-      } else {
-        startScanner();
-      }
+      if (scanning) { stopScanner(); } else { startScanner(); }
     }
 
-    function startScanner() {
+    async function startScanner() {
       viewport.style.display = 'block';
       scanBtn.textContent = 'STOP';
       scanBtn.classList.add('stop');
-      scanStatus.textContent = 'Buscando codigo...';
+      scanStatus.textContent = 'Iniciando camara...';
       scanning = true;
 
-      Quagga.init({
-        inputStream: {
-          name: "Live",
-          type: "LiveStream",
-          target: viewport,
-          constraints: {
-            facingMode: "environment",
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-          },
-        },
-        decoder: {
-          readers: ["ean_reader", "ean_8_reader", "code_128_reader", "upc_reader"],
-          multiple: false,
-        },
-        locate: true,
-        frequency: 5,
-      }, function(err) {
-        if (err) {
-          scanStatus.textContent = 'Error: ' + err.message;
-          stopScanner();
-          return;
-        }
-        Quagga.start();
-      });
+      const videoEl = document.getElementById('scanner-video');
 
-      Quagga.onDetected(function(result) {
-        const code = result.codeResult.code;
-        if (code && code.length >= 8) {
-          barcodeInput.value = code;
-          barcodeInput.classList.add('barcode-detected');
-          setTimeout(() => barcodeInput.classList.remove('barcode-detected'), 1500);
-          scanStatus.textContent = 'Detectado: ' + code;
-          stopScanner();
-          qtyInput.focus();
+      try {
+        videoStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
+        });
+        videoEl.srcObject = videoStream;
+        await videoEl.play();
+      } catch(err) {
+        scanStatus.textContent = 'Error camara: ' + err.message;
+        stopScanner();
+        return;
+      }
+
+      // Try native BarcodeDetector first (Chrome Android 83+)
+      if ('BarcodeDetector' in window) {
+        scanStatus.textContent = 'Listo — apunta al codigo de barras';
+        try {
+          nativeDetector = new BarcodeDetector({
+            formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93']
+          });
+        } catch(e) {
+          nativeDetector = new BarcodeDetector();
         }
-      });
+        scanInterval = setInterval(async () => {
+          if (!scanning || videoEl.readyState < 2) return;
+          try {
+            const barcodes = await nativeDetector.detect(videoEl);
+            if (barcodes.length > 0) {
+              const code = barcodes[0].rawValue;
+              if (code && code.length >= 6) onBarcodeDetected(code);
+            }
+          } catch(e) {}
+        }, 150);
+
+      // Fallback: ZXing-js
+      } else if (typeof ZXing !== 'undefined') {
+        scanStatus.textContent = 'Listo (ZXing) — apunta al codigo de barras';
+        const hints = new Map();
+        const formats = [
+          ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
+          ZXing.BarcodeFormat.UPC_A,  ZXing.BarcodeFormat.UPC_E,
+          ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.CODE_39
+        ];
+        hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+        hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+        zxingReader = new ZXing.MultiFormatReader();
+        zxingReader.setHints(hints);
+
+        const canvas = document.getElementById('scanner-canvas');
+        const ctx = canvas.getContext('2d');
+
+        scanInterval = setInterval(() => {
+          if (!scanning || videoEl.readyState < 2) return;
+          canvas.width  = videoEl.videoWidth  || 640;
+          canvas.height = videoEl.videoHeight || 480;
+          ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+          try {
+            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const lum = new ZXing.RGBLuminanceSource(imgData.data, canvas.width, canvas.height);
+            const bmp = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(lum));
+            const result = zxingReader.decode(bmp);
+            if (result && result.getText()) onBarcodeDetected(result.getText());
+          } catch(e) { /* NotFoundException is normal */ }
+        }, 200);
+
+      } else {
+        scanStatus.textContent = 'Scanner no disponible — escribe el codigo manualmente';
+      }
+    }
+
+    function onBarcodeDetected(code) {
+      barcodeInput.value = code;
+      barcodeInput.classList.add('barcode-detected');
+      setTimeout(() => barcodeInput.classList.remove('barcode-detected'), 1500);
+      scanStatus.textContent = 'Detectado: ' + code;
+      stopScanner();
+      qtyInput.focus();
     }
 
     function stopScanner() {
-      try { Quagga.stop(); } catch(e) {}
+      clearInterval(scanInterval);
+      scanInterval = null;
+      nativeDetector = null;
+      zxingReader = null;
+      if (videoStream) {
+        videoStream.getTracks().forEach(t => t.stop());
+        videoStream = null;
+      }
+      const videoEl = document.getElementById('scanner-video');
+      if (videoEl) videoEl.srcObject = null;
       viewport.style.display = 'none';
       scanBtn.textContent = 'SCAN';
       scanBtn.classList.remove('stop');
