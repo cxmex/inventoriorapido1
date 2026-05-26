@@ -1,0 +1,524 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"/>
+  <title>Conteo Previo de Mercancía</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:#0d0f14; --surface:#13161e; --surface2:#1a1e2a; --border:#232836;
+      --accent:#f59e0b; --green:#22c55e; --red:#ef4444; --blue:#4f8ef7;
+      --text:#e2e8f0; --muted:#64748b;
+      --mono:'IBM Plex Mono',monospace; --sans:'IBM Plex Sans',sans-serif;
+    }
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:100vh;}
+
+    .header{background:var(--surface);border-bottom:1px solid var(--border);
+      padding:0 16px;display:flex;align-items:center;justify-content:space-between;
+      height:56px;position:sticky;top:0;z-index:100;}
+    .header-left{display:flex;align-items:center;gap:10px;}
+    .logo-mark{width:32px;height:32px;background:linear-gradient(135deg,#f59e0b,#ef4444);
+      border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;}
+    .header-title{font-weight:700;font-size:14px;}
+    .header-sub{font-size:11px;color:var(--muted);font-family:var(--mono);}
+    .live-clock{font-family:var(--mono);font-size:12px;color:var(--accent);
+      background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);
+      padding:4px 10px;border-radius:6px;}
+
+    /* TABS */
+    .tabs{display:flex;background:var(--surface);border-bottom:1px solid var(--border);
+      position:sticky;top:56px;z-index:99;}
+    .tab{flex:1;padding:11px;text-align:center;font-size:12px;font-weight:700;
+      color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;
+      text-transform:uppercase;letter-spacing:.8px;transition:all .2s;}
+    .tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+
+    .panel{display:none;max-width:600px;margin:0 auto;padding:14px 14px 80px;}
+    .panel.active{display:block;}
+
+    /* CARDS */
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;
+      padding:16px;margin-bottom:14px;}
+    .card-title{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;
+      letter-spacing:1.2px;font-family:var(--mono);margin-bottom:12px;}
+
+    /* FORM FIELDS */
+    .field{margin-bottom:10px;}
+    .field label{display:block;font-size:10px;font-weight:600;color:var(--muted);
+      text-transform:uppercase;letter-spacing:1.2px;font-family:var(--mono);margin-bottom:5px;}
+    .field input,.field textarea,.field select{width:100%;background:var(--surface2);
+      border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:8px;
+      font-size:15px;font-family:var(--sans);outline:none;transition:border-color .2s;}
+    .field input:focus,.field textarea:focus,.field select:focus{
+      border-color:var(--accent);box-shadow:0 0 0 3px rgba(245,158,11,.15);}
+    .field input::placeholder{color:var(--muted);}
+    .field-row{display:flex;gap:8px;}
+    .field-row .field{flex:1;}
+
+    /* ITEMS TABLE */
+    .items-header{display:grid;grid-template-columns:1fr 1fr 72px 36px;gap:6px;
+      padding:0 4px 6px;font-size:10px;color:var(--muted);font-family:var(--mono);
+      text-transform:uppercase;letter-spacing:.8px;}
+    .item-row{display:grid;grid-template-columns:1fr 1fr 72px 36px;gap:6px;margin-bottom:6px;align-items:center;}
+    .item-row input{background:var(--surface2);border:1px solid var(--border);color:var(--text);
+      padding:9px 10px;border-radius:8px;font-size:14px;font-family:var(--sans);
+      outline:none;width:100%;transition:border-color .2s;}
+    .item-row input:focus{border-color:var(--accent);}
+    .item-row input.qty-in{font-family:var(--mono);font-weight:700;font-size:16px;text-align:center;}
+    .btn-del{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);
+      color:var(--red);border-radius:8px;width:36px;height:38px;cursor:pointer;
+      font-size:16px;display:flex;align-items:center;justify-content:center;}
+    .btn-del:hover{background:rgba(239,68,68,.25);}
+
+    .btn-add-row{width:100%;background:transparent;border:2px dashed var(--border);
+      color:var(--muted);border-radius:10px;padding:10px;cursor:pointer;font-size:13px;
+      margin-top:4px;transition:all .2s;}
+    .btn-add-row:hover{border-color:var(--accent);color:var(--accent);}
+
+    /* TOTAL BAR */
+    .total-bar{background:var(--surface2);border:1px solid var(--border);border-radius:10px;
+      padding:12px 16px;display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;}
+    .total-label{font-size:11px;color:var(--muted);font-family:var(--mono);text-transform:uppercase;}
+    .total-value{font-size:28px;font-weight:700;font-family:var(--mono);color:var(--accent);}
+
+    .btn-submit{width:100%;background:var(--accent);color:#000;border:none;
+      padding:14px;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;
+      letter-spacing:.5px;transition:opacity .2s;}
+    .btn-submit:hover:not(:disabled){opacity:.88;}
+    .btn-submit:disabled{opacity:.4;cursor:not-allowed;}
+
+    /* RECEIPT MODAL */
+    .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;
+      display:flex;align-items:center;justify-content:center;padding:20px;}
+    .modal-box{background:var(--surface);border:1px solid var(--border);border-radius:16px;
+      max-width:480px;width:100%;max-height:80vh;overflow-y:auto;}
+    .modal-header{padding:16px 20px;border-bottom:1px solid var(--border);
+      display:flex;justify-content:space-between;align-items:center;}
+    .modal-title{font-weight:700;font-size:16px;}
+    .modal-body{padding:20px;}
+    .receipt-text{background:var(--surface2);border:1px solid var(--border);border-radius:10px;
+      padding:16px;font-family:var(--mono);font-size:13px;white-space:pre-wrap;
+      line-height:1.7;color:var(--text);margin-bottom:16px;}
+    .btn-copy{width:100%;background:var(--green);color:#000;border:none;
+      padding:12px;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:8px;}
+    .btn-close-modal{width:100%;background:transparent;border:1px solid var(--border);
+      color:var(--muted);padding:10px;border-radius:10px;font-size:14px;cursor:pointer;}
+    .hidden{display:none;}
+
+    /* CAJA CARDS (history tab) */
+    .caja-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;
+      margin-bottom:10px;overflow:hidden;}
+    .caja-header{padding:14px 16px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;}
+    .caja-num{font-weight:700;font-size:17px;font-family:var(--mono);}
+    .caja-meta{font-size:11px;color:var(--muted);font-family:var(--mono);margin-top:2px;}
+    .caja-right{text-align:right;}
+    .caja-total{font-size:22px;font-weight:700;font-family:var(--mono);color:var(--accent);}
+    .badge-ok{background:rgba(34,197,94,.15);color:var(--green);border:1px solid rgba(34,197,94,.3);
+      font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;font-family:var(--mono);}
+    .badge-pending{background:rgba(245,158,11,.15);color:var(--accent);border:1px solid rgba(245,158,11,.3);
+      font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;font-family:var(--mono);}
+    .caja-detail{display:none;border-top:1px solid var(--border);padding:12px 16px;}
+    .caja-detail.open{display:block;}
+    .detail-row{display:flex;justify-content:space-between;font-size:12px;
+      padding:4px 0;border-bottom:1px solid rgba(35,40,54,.5);}
+    .detail-row:last-child{border-bottom:none;}
+    .detail-modelo{color:var(--muted);font-family:var(--mono);font-size:11px;}
+    .detail-qty{font-weight:700;font-family:var(--mono);}
+
+    /* RECONCILE */
+    .reconcile-card{background:var(--surface2);border:1px solid var(--border);
+      border-radius:10px;padding:14px;margin-top:10px;}
+    .reconcile-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;}
+    .rec-box{background:var(--surface);border:1px solid var(--border);border-radius:8px;
+      padding:10px;text-align:center;}
+    .rec-label{font-size:9px;color:var(--muted);text-transform:uppercase;font-family:var(--mono);margin-bottom:4px;}
+    .rec-val{font-size:22px;font-weight:700;font-family:var(--mono);}
+    .rec-val.ok{color:var(--green);}
+    .rec-val.warn{color:var(--accent);}
+    .rec-val.bad{color:var(--red);}
+    .rec-field{margin-bottom:8px;}
+    .rec-field label{font-size:10px;color:var(--muted);font-family:var(--mono);
+      text-transform:uppercase;display:block;margin-bottom:4px;}
+    .rec-field input{background:var(--surface);border:1px solid var(--border);color:var(--text);
+      padding:8px 12px;border-radius:8px;font-size:13px;width:100%;outline:none;}
+    .btn-reconcile{background:var(--blue);color:#fff;border:none;padding:10px 18px;
+      border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;margin-top:6px;width:100%;}
+    .btn-mark-done{background:var(--green);color:#000;border:none;padding:8px 14px;
+      border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;margin-top:8px;width:100%;}
+
+    @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+    .fade{animation:fadeIn .3s ease;}
+  </style>
+
+  <!-- Common phone models datalist -->
+  <datalist id="modelos">
+    <option value="IP 17 PM"></option><option value="IP 17 PLUS"></option>
+    <option value="IP 17"></option><option value="IP 16 PM"></option>
+    <option value="IP 16 PLUS"></option><option value="IP 16"></option>
+    <option value="IP 15 PM"></option><option value="IP 15 PLUS"></option>
+    <option value="IP 15"></option><option value="IP 14 PM"></option>
+    <option value="IP 14 PLUS"></option><option value="IP 14"></option>
+    <option value="IP 13 PM"></option><option value="IP 13 MINI"></option>
+    <option value="IP 13"></option><option value="IP 13/14"></option>
+    <option value="IP 12 PM"></option><option value="IP 12 MINI"></option>
+    <option value="IP 12"></option><option value="IP 11"></option>
+    <option value="SAM S25 ULTRA"></option><option value="SAM S25 PLUS"></option>
+    <option value="SAM S25"></option><option value="SAM S24 ULTRA"></option>
+    <option value="SAM S24 PLUS"></option><option value="SAM S24"></option>
+    <option value="SAM S23 ULTRA"></option><option value="SAM A56"></option>
+    <option value="SAM A55"></option><option value="SAM A54"></option>
+    <option value="SAM A35"></option><option value="SAM A25"></option>
+    <option value="SAM A16"></option><option value="SAM A15"></option>
+    <option value="SAM A06"></option><option value="SAM A05S"></option>
+  </datalist>
+
+  <datalist id="colores">
+    <option value="NEGRO"></option><option value="ROSA"></option>
+    <option value="PISTACHE"></option><option value="AZUL"></option>
+    <option value="BLANCO"></option><option value="MORADO"></option>
+    <option value="TRANSPARENTE"></option><option value="HUMO"></option>
+    <option value="VERDE"></option><option value="ROJO"></option>
+    <option value="NARANJA"></option><option value="AMARILLO"></option>
+    <option value="GRIS"></option><option value="BEIGE"></option>
+    <option value="LILA"></option><option value="TURQUESA"></option>
+  </datalist>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-left">
+    <div class="logo-mark">📦</div>
+    <div>
+      <div class="header-title">Conteo Previo de Mercancía</div>
+      <div class="header-sub">conteo · recibo · verificación</div>
+    </div>
+  </div>
+  <div class="live-clock" id="clock">--:--</div>
+</header>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('nueva')">Nueva Cuenta</div>
+  <div class="tab" onclick="switchTab('cajas')">Cajas Pendientes</div>
+</div>
+
+<!-- ══════════════ TAB: NUEVA CUENTA ══════════════ -->
+<div class="panel active" id="tab-nueva">
+
+  <div class="card" style="margin-top:14px;">
+    <div class="card-title">Info de Caja</div>
+    <div class="field-row">
+      <div class="field">
+        <label>No. Caja</label>
+        <input id="caja-num" type="number" placeholder="8" min="1"/>
+      </div>
+      <div class="field">
+        <label>Fecha</label>
+        <input id="caja-fecha" type="date"/>
+      </div>
+    </div>
+    <div class="field">
+      <label>Notas (opcional)</label>
+      <input id="caja-notas" type="text" placeholder="ej. llegó con ESTAFETA..."/>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Items</div>
+    <div class="items-header">
+      <span>Modelo</span><span>Color</span><span style="text-align:center">Cant.</span><span></span>
+    </div>
+    <div id="items-container"></div>
+    <button class="btn-add-row" onclick="addRow()">+ Agregar línea</button>
+  </div>
+
+  <div class="total-bar">
+    <div>
+      <div class="total-label">Total piezas</div>
+    </div>
+    <div class="total-value" id="total-display">0</div>
+  </div>
+
+  <button class="btn-submit" id="btn-submit" onclick="submitConteo()">GUARDAR Y GENERAR RECIBO</button>
+</div>
+
+<!-- ══════════════ TAB: CAJAS PENDIENTES ══════════════ -->
+<div class="panel" id="tab-cajas">
+  <div style="margin-top:14px;" id="cajas-list">
+    <div style="text-align:center;color:var(--muted);padding:40px;font-family:var(--mono);font-size:13px;">
+      Cargando...
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ RECEIPT MODAL ══════════════ -->
+<div class="modal-overlay hidden" id="receipt-modal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-title">📋 Recibo Generado</div>
+      <div id="receipt-total" style="font-family:var(--mono);color:var(--accent);font-weight:700;"></div>
+    </div>
+    <div class="modal-body">
+      <div class="receipt-text" id="receipt-text"></div>
+      <button class="btn-copy" onclick="copyReceipt()">📋 Copiar para WhatsApp</button>
+      <button class="btn-close-modal" onclick="closeModal()">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── CLOCK ──
+  function tick(){
+    document.getElementById('clock').textContent = new Date().toLocaleTimeString('es-MX',{
+      timeZone:'America/Mexico_City',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false
+    });
+  }
+  tick(); setInterval(tick,1000);
+
+  // ── DEFAULT DATE ──
+  document.getElementById('caja-fecha').value = new Date().toISOString().slice(0,10);
+
+  // ── TABS ──
+  function switchTab(tab){
+    document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',['nueva','cajas'][i]===tab));
+    document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+    document.getElementById('tab-'+tab).classList.add('active');
+    if(tab==='cajas') loadCajas();
+  }
+
+  // ── ROWS ──
+  let rowCount = 0;
+
+  function addRow(modelo='',color='',qty=''){
+    rowCount++;
+    const id = rowCount;
+    const div = document.createElement('div');
+    div.className = 'item-row';
+    div.id = 'row-'+id;
+    div.innerHTML = `
+      <input type="text" list="modelos" placeholder="IP 17 PM" value="${modelo}"
+             oninput="recalc()" onchange="this.value=this.value.toUpperCase()"
+             style="text-transform:uppercase"/>
+      <input type="text" list="colores" placeholder="ROSA" value="${color}"
+             oninput="recalc()" onchange="this.value=this.value.toUpperCase()"
+             style="text-transform:uppercase"/>
+      <input type="number" class="qty-in" placeholder="0" value="${qty}" min="0" oninput="recalc()"/>
+      <button class="btn-del" onclick="delRow(${id})">✕</button>
+    `;
+    document.getElementById('items-container').appendChild(div);
+    div.querySelector('input').focus();
+    recalc();
+  }
+
+  function delRow(id){
+    document.getElementById('row-'+id)?.remove();
+    recalc();
+  }
+
+  function recalc(){
+    let total = 0;
+    document.querySelectorAll('#items-container .item-row').forEach(row=>{
+      const qty = parseInt(row.querySelector('.qty-in').value)||0;
+      total += qty;
+    });
+    document.getElementById('total-display').textContent = total;
+  }
+
+  function getItems(){
+    const items = [];
+    document.querySelectorAll('#items-container .item-row').forEach(row=>{
+      const inputs = row.querySelectorAll('input');
+      const modelo = inputs[0].value.trim().toUpperCase();
+      const color  = inputs[1].value.trim().toUpperCase();
+      const qty    = parseInt(inputs[2].value)||0;
+      if(modelo && color && qty>0) items.push({modelo,color,qty});
+    });
+    return items;
+  }
+
+  // ── SUBMIT ──
+  async function submitConteo(){
+    const caja_numero = parseInt(document.getElementById('caja-num').value||0);
+    const fecha  = document.getElementById('caja-fecha').value;
+    const notas  = document.getElementById('caja-notas').value.trim();
+    const items  = getItems();
+
+    if(!caja_numero){ alert('Ingresa el número de caja'); document.getElementById('caja-num').focus(); return; }
+    if(!fecha){ alert('Selecciona una fecha'); return; }
+    if(!items.length){ alert('Agrega al menos un item'); return; }
+
+    const btn = document.getElementById('btn-submit');
+    btn.disabled = true; btn.textContent = 'Guardando...';
+
+    try{
+      const resp = await fetch('/api/conteo-previo',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({caja_numero,fecha,notas,items})
+      });
+      const data = await resp.json();
+      if(!resp.ok || data.error) throw new Error(data.error||'Error al guardar');
+
+      // Show receipt
+      document.getElementById('receipt-text').textContent = data.receipt;
+      document.getElementById('receipt-total').textContent = data.total+' pzs';
+      document.getElementById('receipt-modal').classList.remove('hidden');
+
+      // Clear form
+      document.getElementById('caja-num').value='';
+      document.getElementById('caja-notas').value='';
+      document.getElementById('items-container').innerHTML='';
+      rowCount=0; recalc();
+
+    }catch(e){
+      alert('Error: '+e.message);
+    }finally{
+      btn.disabled=false; btn.textContent='GUARDAR Y GENERAR RECIBO';
+    }
+  }
+
+  // ── RECEIPT MODAL ──
+  function copyReceipt(){
+    const text = document.getElementById('receipt-text').textContent;
+    navigator.clipboard.writeText(text).then(()=>{
+      const btn = document.querySelector('.btn-copy');
+      btn.textContent='✅ Copiado!';
+      setTimeout(()=>btn.textContent='📋 Copiar para WhatsApp',2000);
+    }).catch(()=>{
+      // fallback
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta);
+      ta.select(); document.execCommand('copy');
+      document.body.removeChild(ta);
+      alert('Copiado!');
+    });
+  }
+
+  function closeModal(){
+    document.getElementById('receipt-modal').classList.add('hidden');
+  }
+
+  // ── LOAD CAJAS ──
+  async function loadCajas(){
+    const el = document.getElementById('cajas-list');
+    el.innerHTML='<div style="text-align:center;color:var(--muted);padding:40px;font-family:var(--mono);font-size:13px;">Cargando...</div>';
+    try{
+      const resp = await fetch('/api/conteo-previo/cajas');
+      const cajas = await resp.json();
+      if(!cajas.length){
+        el.innerHTML='<div style="text-align:center;color:var(--muted);padding:40px;font-family:var(--mono);font-size:13px;">No hay cajas registradas</div>';
+        return;
+      }
+      el.innerHTML = cajas.map(c=>buildCajaCard(c)).join('');
+    }catch(e){
+      el.innerHTML=`<div style="color:var(--red);padding:20px;">Error: ${e.message}</div>`;
+    }
+  }
+
+  function buildCajaCard(c){
+    // Group items by modelo
+    const byModelo = {};
+    c.items.forEach(it=>{
+      if(!byModelo[it.modelo]) byModelo[it.modelo]=[];
+      byModelo[it.modelo].push(it);
+    });
+    const details = Object.entries(byModelo).map(([m,rows])=>`
+      <div style="margin-bottom:8px;">
+        <div style="font-size:11px;font-family:var(--mono);color:var(--blue);font-weight:700;margin-bottom:4px;">${m}</div>
+        ${rows.map(r=>`<div class="detail-row"><span>${r.color}</span><span class="detail-qty">${r.qty}</span></div>`).join('')}
+      </div>`).join('');
+
+    const badge = c.reconciled
+      ? '<span class="badge-ok">VERIFICADO</span>'
+      : '<span class="badge-pending">PENDIENTE</span>';
+
+    const recForm = c.reconciled ? '' : `
+      <div class="reconcile-card">
+        <div style="font-size:11px;font-family:var(--mono);color:var(--muted);margin-bottom:10px;text-transform:uppercase;">Verificar contra Entradas</div>
+        <div class="field-row">
+          <div class="rec-field" style="flex:1">
+            <label>Fecha desde</label>
+            <input type="date" id="rfrom-${c.caja_numero}" value="${c.fecha}"/>
+          </div>
+          <div class="rec-field" style="flex:1">
+            <label>Fecha hasta</label>
+            <input type="date" id="rto-${c.caja_numero}" value="${c.fecha}"/>
+          </div>
+        </div>
+        <button class="btn-reconcile" onclick="reconcile(${c.caja_numero})">COMPARAR CON ENTRADAS</button>
+        <div id="rec-result-${c.caja_numero}"></div>
+        <button class="btn-mark-done" onclick="markDone(${c.caja_numero})">✅ Marcar como Verificado</button>
+      </div>`;
+
+    return `
+      <div class="caja-card fade">
+        <div class="caja-header" onclick="toggleDetail(${c.caja_numero})">
+          <div>
+            <div class="caja-num">CAJA ${c.caja_numero}</div>
+            <div class="caja-meta">${c.fecha} · ${c.items.length} líneas</div>
+          </div>
+          <div class="caja-right">
+            <div class="caja-total">${c.total}</div>
+            <div style="margin-top:4px;">${badge}</div>
+          </div>
+        </div>
+        <div class="caja-detail" id="detail-${c.caja_numero}">
+          ${details}
+          ${recForm}
+        </div>
+      </div>`;
+  }
+
+  function toggleDetail(num){
+    const el = document.getElementById('detail-'+num);
+    el.classList.toggle('open');
+  }
+
+  // ── RECONCILE ──
+  async function reconcile(num){
+    const from = document.getElementById('rfrom-'+num).value;
+    const to   = document.getElementById('rto-'+num).value;
+    if(!from||!to){ alert('Selecciona las fechas'); return; }
+
+    const el = document.getElementById('rec-result-'+num);
+    el.innerHTML='<div style="color:var(--muted);font-size:12px;font-family:var(--mono);padding:8px 0;">Comparando...</div>';
+
+    try{
+      const resp = await fetch(`/api/conteo-previo/reconcile?caja_numero=${num}&fecha_from=${from}&fecha_to=${to}`);
+      const d = await resp.json();
+
+      const diffClass = d.diff===0?'ok':(Math.abs(d.diff)<=10?'warn':'bad');
+      const diffSign  = d.diff>0?'+':'';
+
+      el.innerHTML=`
+        <div class="reconcile-row" style="margin-top:12px;">
+          <div class="rec-box"><div class="rec-label">Contado</div><div class="rec-val warn">${d.total_counted}</div></div>
+          <div class="rec-box"><div class="rec-label">Entrado T1</div><div class="rec-val">${d.total_entered1}</div></div>
+          <div class="rec-box"><div class="rec-label">Entrado T2</div><div class="rec-val">${d.total_entered2}</div></div>
+        </div>
+        <div class="reconcile-row">
+          <div class="rec-box" style="grid-column:span 2"><div class="rec-label">Total Entrado (T1+T2)</div><div class="rec-val">${d.total_entered}</div></div>
+          <div class="rec-box"><div class="rec-label">Diferencia</div><div class="rec-val ${diffClass}">${diffSign}${d.diff}</div></div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);font-family:var(--mono);padding-top:4px;">
+          ${d.diff===0?'✅ Todo cuadra perfectamente':
+            Math.abs(d.diff)<=10?`⚠️ Diferencia pequeña de ${Math.abs(d.diff)} pzs`:
+            `❌ Diferencia de ${Math.abs(d.diff)} pzs — revisar`}
+        </div>`;
+    }catch(e){
+      el.innerHTML=`<div style="color:var(--red);font-size:12px;padding:8px 0;">${e.message}</div>`;
+    }
+  }
+
+  async function markDone(num){
+    if(!confirm(`¿Marcar CAJA ${num} como verificada?`)) return;
+    await fetch(`/api/conteo-previo/${num}/mark-reconciled`,{method:'PATCH'});
+    loadCajas();
+  }
+
+  // ── INIT: add 3 starter rows and pre-fill if URL has datos ──
+  addRow(); addRow(); addRow();
+</script>
+</body>
+</html>

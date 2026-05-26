@@ -11517,6 +11517,187 @@ async def upload_barcode_photo(
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+# ── CONTEO PREVIO DE MERCANCÍA ─────────────────────────────────────
+@app.get("/conteo-previo", response_class=HTMLResponse)
+async def conteo_previo_page(request: Request):
+    return templates.TemplateResponse(request=request, name="conteo_previo.html", context={})
+
+
+@app.post("/api/conteo-previo")
+async def save_conteo_previo(payload: dict):
+    """Save a batch of counted items for a box."""
+    try:
+        caja_numero = int(payload.get("caja_numero", 0))
+        fecha       = payload.get("fecha", datetime.now(_TZ).strftime("%Y-%m-%d"))
+        notas       = payload.get("notas", "")
+        items       = payload.get("items", [])  # [{modelo, color, qty}]
+
+        if not caja_numero or not items:
+            return JSONResponse({"error": "caja_numero e items requeridos"}, status_code=400)
+
+        rows = [
+            {
+                "caja_numero": caja_numero,
+                "fecha":       fecha,
+                "modelo":      it["modelo"].strip().upper(),
+                "color":       it["color"].strip().upper(),
+                "qty":         int(it["qty"]),
+                "notas":       notas,
+            }
+            for it in items
+            if it.get("modelo") and it.get("color") and int(it.get("qty", 0)) > 0
+        ]
+
+        if not rows:
+            return JSONResponse({"error": "No hay filas validas"}, status_code=400)
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"{SUPABASE_URL}/rest/v1/conteo_previo",
+                headers={**HEADERS, "Prefer": "return=representation"},
+                json=rows,
+            )
+
+        if resp.status_code not in (200, 201):
+            return JSONResponse({"error": resp.text}, status_code=500)
+
+        total = sum(r["qty"] for r in rows)
+
+        # Build WhatsApp receipt grouped by modelo
+        from collections import defaultdict
+        by_modelo = defaultdict(list)
+        for r in rows:
+            by_modelo[r["modelo"]].append(r)
+
+        lines = [f"📦 *CAJA {caja_numero}* — {fecha}\n"]
+        for modelo, items_m in by_modelo.items():
+            lines.append(f"*{modelo}*")
+            for it in items_m:
+                lines.append(f"  {it['color']}: {it['qty']}")
+            lines.append("")
+        lines.append(f"TOTAL DE PZS .... {total} ✅")
+        if notas:
+            lines.append(f"📝 {notas}")
+
+        receipt = "\n".join(lines)
+        return {"success": True, "total": total, "receipt": receipt, "saved": len(rows)}
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/conteo-previo/cajas")
+async def list_conteo_cajas():
+    """List all counted boxes with totals and reconciliation status."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/conteo_previo"
+                "?select=caja_numero,fecha,modelo,color,qty,reconciled,created_at"
+                "&order=created_at.desc"
+                "&limit=1000",
+                headers=HEADERS,
+            )
+        rows = resp.json()
+
+        from collections import defaultdict
+        cajas = defaultdict(lambda: {"items": [], "total": 0, "fecha": "", "reconciled": True})
+        for r in rows:
+            c = cajas[r["caja_numero"]]
+            c["items"].append(r)
+            c["total"] += r["qty"]
+            c["fecha"] = r["fecha"]
+            if not r["reconciled"]:
+                c["reconciled"] = False
+
+        result = [
+            {
+                "caja_numero": k,
+                "fecha":       v["fecha"],
+                "total":       v["total"],
+                "reconciled":  v["reconciled"],
+                "items":       v["items"],
+            }
+            for k, v in sorted(cajas.items(), key=lambda x: x[0], reverse=True)
+        ]
+        return result
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/conteo-previo/reconcile")
+async def reconcile_caja(caja_numero: int, fecha_from: str, fecha_to: str):
+    """Compare counted items for a box vs what was actually entered in entrada_mercancia."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            # 1 — counted items for this box
+            r_conteo, r_e1, r_e2 = await asyncio.gather(
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/conteo_previo"
+                    f"?caja_numero=eq.{caja_numero}"
+                    "&select=modelo,color,qty&order=modelo.asc",
+                    headers=HEADERS,
+                ),
+                # 2 — entradas branch 1
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/entrada_mercancia"
+                    f"?created_at=gte.{fecha_from}T00:00:00"
+                    f"&created_at=lte.{fecha_to}T23:59:59"
+                    "&select=estilo,qty,barcode,created_at"
+                    "&order=created_at.asc&limit=2000",
+                    headers=HEADERS,
+                ),
+                # 3 — entradas branch 2
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/entrada_mercancia_2"
+                    f"?created_at=gte.{fecha_from}T00:00:00"
+                    f"&created_at=lte.{fecha_to}T23:59:59"
+                    "&select=estilo,qty,barcode,created_at"
+                    "&order=created_at.asc&limit=2000",
+                    headers=HEADERS,
+                ),
+            )
+
+        counted = r_conteo.json()
+        entradas1 = r_e1.json() if r_e1.status_code == 200 else []
+        entradas2 = r_e2.json() if r_e2.status_code == 200 else []
+
+        total_counted  = sum(r["qty"] for r in counted)
+        total_entered1 = sum(r["qty"] for r in entradas1)
+        total_entered2 = sum(r["qty"] for r in entradas2)
+        total_entered  = total_entered1 + total_entered2
+
+        return {
+            "caja_numero":    caja_numero,
+            "fecha_from":     fecha_from,
+            "fecha_to":       fecha_to,
+            "total_counted":  total_counted,
+            "total_entered":  total_entered,
+            "total_entered1": total_entered1,
+            "total_entered2": total_entered2,
+            "diff":           total_entered - total_counted,
+            "counted":        counted,
+            "entradas1":      entradas1,
+            "entradas2":      entradas2,
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.patch("/api/conteo-previo/{caja_numero}/mark-reconciled")
+async def mark_reconciled(caja_numero: int):
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.patch(
+                f"{SUPABASE_URL}/rest/v1/conteo_previo?caja_numero=eq.{caja_numero}",
+                headers=HEADERS,
+                json={"reconciled": True, "reconciled_at": datetime.now(_TZ).isoformat()},
+            )
+        return {"success": True}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
