@@ -11454,6 +11454,69 @@ async def api_entradas_tracker(date_from: str = "", date_to: str = ""):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+###############################################################################
+# CHECK BARCODE MOBILE – camera scan + photo capture for ML training
+###############################################################################
+@app.get("/check_barcode_mobile", response_class=HTMLResponse)
+async def check_barcode_mobile(request: Request):
+    return templates.TemplateResponse(request=request, name="check_barcode_mobile.html", context={})
+
+
+@app.post("/api/check_barcode_mobile/photo")
+async def upload_barcode_photo(
+    barcode: str = Form(...),
+    product_name: str = Form(""),
+    estilo: str = Form(""),
+    estilo_id: str = Form(""),
+    color: str = Form(""),
+    photo: UploadFile = File(...),
+):
+    """Save product photo to Supabase storage for ML training data."""
+    try:
+        contents = await photo.read()
+        ext = photo.filename.rsplit(".", 1)[-1] if "." in photo.filename else "jpg"
+        now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        uid = str(uuid.uuid4())[:8]
+        storage_path = f"training/{barcode}/{now_str}_{uid}.{ext}"
+
+        storage_headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": photo.content_type or "image/jpeg",
+        }
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{SUPABASE_URL}/storage/v1/object/barcode-photos/{storage_path}",
+                headers=storage_headers,
+                content=contents,
+            )
+
+        public_url = f"{SUPABASE_URL}/storage/v1/object/public/barcode-photos/{storage_path}"
+
+        # Log to barcode_photos table (create if exists, ignore if not)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                await client.post(
+                    f"{SUPABASE_URL}/rest/v1/barcode_photos",
+                    headers=HEADERS,
+                    json={
+                        "barcode": barcode,
+                        "product_name": product_name,
+                        "estilo": estilo,
+                        "estilo_id": int(estilo_id) if estilo_id else None,
+                        "color": color,
+                        "file_path": storage_path,
+                        "public_url": public_url,
+                    },
+                )
+        except Exception:
+            pass  # table may not exist yet, photo is still saved in storage
+
+        return {"success": True, "url": public_url}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
