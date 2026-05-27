@@ -329,7 +329,7 @@
         }
 
         function createImageCard(image) {
-            const createdDate = new Date(image.created_at).toLocaleDateString('es-MX', {day:'2-digit', month:'short', year:'numeric'});
+            const createdDate = new Date(image.created_at).toLocaleDateString('es-MX', {timeZone:'America/Mexico_City', day:'2-digit', month:'short', year:'numeric'});
             const urlEscaped = image.public_url.replace(/"/g, '&quot;');
             const isPrimary = (image.display_order ?? 100) === 0;
             const primaryBadge = isPrimary
