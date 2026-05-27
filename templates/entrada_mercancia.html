@@ -400,33 +400,6 @@
                     </div>
                 </div>
 
-                <!-- ── Row 2: Número de Caja ───────────────── -->
-                <div class="mb-4">
-                    <div class="section-label"><i class="fas fa-cube me-1"></i>Número de Caja</div>
-                    <div class="row align-items-start g-2">
-                        <div class="col-auto">
-                            <div class="box-stepper">
-                                <button type="button" class="box-btn" id="boxDown" title="Caja anterior">
-                                    <i class="fas fa-chevron-left"></i>
-                                </button>
-                                <input type="number" class="box-num-input"
-                                       id="numeroCajaInput" name="numero_caja"
-                                       min="1" value="1">
-                                <button type="button" class="box-btn" id="boxUp" title="Siguiente caja">
-                                    <i class="fas fa-chevron-right"></i>
-                                </button>
-                            </div>
-                            <div class="box-badge" id="cajaHint">Cargando última caja…</div>
-                        </div>
-                        <div class="col">
-                            <p class="text-muted mb-0" style="font-size:.82rem; padding-top:6px;">
-                                Usa las flechas para cambiar de caja.<br>
-                                El número se mantiene entre escaneos.
-                            </p>
-                        </div>
-                    </div>
-                </div>
-
                 <!-- ── Notas ───────────────────────────────── -->
                 <div class="mb-4">
                     <div class="section-label"><i class="fas fa-sticky-note me-1"></i>Notas</div>
@@ -527,48 +500,6 @@ function showAlert(msg, type = 'success') {
     setTimeout(() => el.remove(), 6000);
 }
 
-// ── Box stepper ───────────────────────────────────────────────
-const boxInput = document.getElementById('numeroCajaInput');
-const cajaHint = document.getElementById('cajaHint');
-
-document.getElementById('boxDown').addEventListener('click', () => {
-    const v = parseInt(boxInput.value) || 1;
-    if (v > 1) { boxInput.value = v - 1; saveCaja(v - 1); }
-});
-document.getElementById('boxUp').addEventListener('click', () => {
-    const v = parseInt(boxInput.value) || 1;
-    boxInput.value = v + 1;
-    saveCaja(v + 1);
-});
-boxInput.addEventListener('change', () => saveCaja(parseInt(boxInput.value) || 1));
-
-function saveCaja(n) {
-    localStorage.setItem('lastNumeroCaja', n);
-}
-
-async function loadLastCaja() {
-    // First check localStorage for session preference
-    const local = localStorage.getItem('lastNumeroCaja');
-
-    try {
-        const res = await fetch('/entradamercancia/ultima_caja');
-        const data = await res.json();
-        if (data.success && data.numero_caja) {
-            const dbVal = data.numero_caja;
-            // Use whichever is higher: db or local session
-            const val = local ? Math.max(parseInt(local), dbVal) : dbVal;
-            boxInput.value = val;
-            localStorage.setItem('lastNumeroCaja', val);
-            cajaHint.textContent = `Última caja guardada: #${dbVal}`;
-        } else {
-            boxInput.value = local || 1;
-            cajaHint.textContent = local ? `Sesión activa: caja #${local}` : 'Primera caja';
-        }
-    } catch {
-        boxInput.value = local || 1;
-        cajaHint.textContent = local ? `Sesión activa: caja #${local}` : 'Sin conexión';
-    }
-}
 
 // ── Image upload ──────────────────────────────────────────────
 const imageFile      = document.getElementById('imageFile');
@@ -653,7 +584,6 @@ document.getElementById('entradaForm').addEventListener('submit', async function
     const payload = {
         qty:                parseInt(document.getElementById('qtyInput').value),
         barcode:            document.getElementById('barcodeInput').value.trim(),
-        numero_caja:        parseInt(boxInput.value) || null,
         notas:              document.getElementById('notasInput').value.trim() || null,
         imagen_url:         imagenUrl,
         conteo_previo_caja: cpCajaVal ? parseInt(cpCajaVal) : null
@@ -670,12 +600,10 @@ document.getElementById('entradaForm').addEventListener('submit', async function
         if (data.success) {
             showAlert(
                 `<i class="fas fa-check-circle me-2"></i>` +
-                `<strong>Registrado:</strong> ${data.qty}× ${data.product_name}` +
-                (data.numero_caja ? ` · Caja #${data.numero_caja}` : ''),
+                `<strong>Registrado:</strong> ${data.qty}× ${data.product_name}`,
                 'success'
             );
-            saveCaja(parseInt(boxInput.value) || 1);
-            clearForm(false); // keep box number
+            clearForm();
             loadRecentEntries();
         } else {
             showAlert(`<i class="fas fa-exclamation-triangle me-2"></i>${data.message}`, 'danger');
@@ -690,7 +618,7 @@ document.getElementById('entradaForm').addEventListener('submit', async function
 });
 
 // ── Clear form ────────────────────────────────────────────────
-function clearForm(resetCaja = true) {
+function clearForm() {
     document.getElementById('qtyInput').value  = '1';
     document.getElementById('barcodeInput').value = '';
     document.getElementById('notasInput').value   = '';
@@ -698,7 +626,6 @@ function clearForm(resetCaja = true) {
     previewWrap.style.display = 'none';
     uploadZone.style.display  = 'block';
     imagePreview.src = '';
-    if (resetCaja) { boxInput.value = 1; localStorage.removeItem('lastNumeroCaja'); }
     document.getElementById('barcodeInput').focus();
 }
 
@@ -874,7 +801,6 @@ document.getElementById('conteoPrevioSelect').addEventListener('change', functio
 
 // ── Init ──────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-    loadLastCaja();
     loadRecentEntries();
     loadConteoCajas();
 });
