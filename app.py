@@ -81,6 +81,112 @@ ml_scheduler.add_job(
     replace_existing=True,
 )
 
+async def _counting_progress_data():
+    """Fetch weekly counting progress for both branches."""
+    from datetime import timedelta
+    tz = _TZ
+    now = datetime.now(tz)
+    monday = now - timedelta(days=now.weekday())
+    monday_iso = monday.strftime("%Y-%m-%dT00:00:00")
+    yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    days_es = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"]
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        r_pos1, r_pos2, r_h1, r_h2 = await asyncio.gather(
+            client.get(f"{SUPABASE_URL}/rest/v1/inventario1?terex1=gt.0&select=barcode",
+                       headers={**HEADERS, "Prefer": "count=exact", "Range": "0-0"}),
+            client.get(f"{SUPABASE_URL}/rest/v1/inventario1?terex2=gt.0&select=barcode",
+                       headers={**HEADERS, "Prefer": "count=exact", "Range": "0-0"}),
+            client.get(f"{SUPABASE_URL}/rest/v1/terex1_history"
+                       f"?created_at=gte.{monday_iso}&select=barcode,created_at&limit=5000",
+                       headers=HEADERS),
+            client.get(f"{SUPABASE_URL}/rest/v1/terex2_history"
+                       f"?created_at=gte.{monday_iso}&select=barcode,created_at&limit=5000",
+                       headers=HEADERS),
+        )
+
+    def parse_count(resp):
+        cr = resp.headers.get("Content-Range", "0-0/0")
+        try: return int(cr.split("/")[-1])
+        except: return 0
+
+    total1 = parse_count(r_pos1)
+    total2 = parse_count(r_pos2)
+    h1 = r_h1.json() if r_h1.status_code == 200 else []
+    h2 = r_h2.json() if r_h2.status_code == 200 else []
+
+    def summarise(history, total):
+        seen_week = set()
+        seen_yesterday = set()
+        daily = {d: set() for d in days_es}
+        for row in history:
+            bc = str(row["barcode"])
+            dt = row["created_at"][:10]
+            seen_week.add(bc)
+            if dt == yesterday:
+                seen_yesterday.add(bc)
+            try:
+                d = datetime.fromisoformat(row["created_at"].replace("Z","")).weekday()
+                daily[days_es[d]].add(bc)
+            except: pass
+        counted = len(seen_week)
+        pct = round(counted / total * 100, 1) if total else 0
+        return {
+            "total": total,
+            "counted": counted,
+            "yesterday": len(seen_yesterday),
+            "remaining": max(total - counted, 0),
+            "pct": pct,
+            "daily": {d: len(s) for d, s in daily.items()},
+        }
+
+    return {
+        "week_start": monday.strftime("%d/%m/%Y"),
+        "today": now.strftime("%d/%m/%Y"),
+        "today_name": days_es[now.weekday()],
+        "terex1": summarise(h1, total1),
+        "terex2": summarise(h2, total2),
+    }
+
+async def _send_counting_telegram():
+    """Send counting progress update to Telegram every 20 min during work hours."""
+    tz = _TZ
+    now = datetime.now(tz)
+    if now.hour < 8 or now.hour >= 20:
+        return  # only during 8am-8pm
+    try:
+        d = await _counting_progress_data()
+        t1 = d["terex1"]
+        t2 = d["terex2"]
+        days_es = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"]
+        day_lines1 = "\n".join(f"  • {day}: {t1['daily'][day]} SKUs" for day in days_es if t1['daily'][day] > 0)
+        day_lines2 = "\n".join(f"  • {day}: {t2['daily'][day]} SKUs" for day in days_es if t2['daily'][day] > 0)
+        msg = (
+            f"📦 CONTEO SEMANAL — {d['today_name']} {d['today']}\n\n"
+            f"🏪 SUCURSAL 1:\n"
+            f"  ✅ {t1['counted']} / {t1['total']} SKUs ({t1['pct']}%)\n"
+            f"  ❌ Faltan {t1['remaining']} códigos\n"
+            f"  📅 Ayer: {t1['yesterday']} SKUs contados\n"
+            f"{day_lines1 or '  (sin conteos esta semana)'}\n\n"
+            f"🏪 SUCURSAL 2:\n"
+            f"  ✅ {t2['counted']} / {t2['total']} SKUs ({t2['pct']}%)\n"
+            f"  ❌ Faltan {t2['remaining']} códigos\n"
+            f"  📅 Ayer: {t2['yesterday']} SKUs contados\n"
+            f"{day_lines2 or '  (sin conteos esta semana)'}\n\n"
+            f"⏰ El día de ayer S1 contó {t1['yesterday']} y S2 contó {t2['yesterday']} códigos. "
+            f"Nos faltan {t1['remaining']} en S1 y {t2['remaining']} en S2 para terminar el conteo de esta semana."
+        )
+        send_telegram_message(msg)
+    except Exception as e:
+        logger.error("Counting telegram error: %s", e)
+
+ml_scheduler.add_job(
+    _send_counting_telegram,
+    "interval", minutes=20,
+    id="counting_progress_telegram",
+    replace_existing=True,
+)
+
 @app.on_event("startup")
 async def start_scheduler():
     ml_scheduler.start()
@@ -11728,6 +11834,23 @@ async def mark_reconciled(caja_numero: int):
                 json={"reconciled": True, "reconciled_at": datetime.now(_TZ).isoformat()},
             )
         return {"success": True}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/counting-progress")
+async def counting_progress_api(branch: str = "terex1"):
+    """Return weekly counting progress for a specific branch."""
+    try:
+        data = await _counting_progress_data()
+        b = data["terex1"] if branch == "terex1" else data["terex2"]
+        return {
+            "branch": branch,
+            "week_start": data["week_start"],
+            "today": data["today"],
+            "today_name": data["today_name"],
+            **b,
+        }
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
