@@ -245,11 +245,12 @@ class ConteoEfectivoCreate(BaseModel):
     amount: float
 
 class EntradaPayload(BaseModel):
-    qty:         int
-    barcode:     str
-    numero_caja: Optional[int]  = None
-    notas:       Optional[str]  = None
-    imagen_url:  Optional[str]  = None
+    qty:                int
+    barcode:            str
+    numero_caja:        Optional[int] = None
+    notas:              Optional[str] = None
+    imagen_url:         Optional[str] = None
+    conteo_previo_caja: Optional[int] = None
 
 class ConteoEfectivoResponse(BaseModel):
     id: int
@@ -5020,11 +5021,12 @@ async def process_entrada_mercancia(payload: EntradaPayload):
     Expects JSON: { qty, barcode, numero_caja?, notas?, imagen_url? }
     """
     try:
-        qty         = payload.qty
-        barcode     = payload.barcode.strip()
-        numero_caja = payload.numero_caja
-        notas       = payload.notas
-        imagen_url  = payload.imagen_url
+        qty                = payload.qty
+        barcode            = payload.barcode.strip()
+        numero_caja        = payload.numero_caja
+        notas              = payload.notas
+        imagen_url         = payload.imagen_url
+        conteo_previo_caja = payload.conteo_previo_caja
  
         logger.info(f"Entrada: qty={qty} barcode={barcode} caja={numero_caja}")
  
@@ -5074,6 +5076,8 @@ async def process_entrada_mercancia(payload: EntradaPayload):
             entrada_data["notas"] = notas
         if imagen_url:
             entrada_data["imagen_url"] = imagen_url
+        if conteo_previo_caja is not None:
+            entrada_data["conteo_previo_caja"] = conteo_previo_caja
  
         # ── Insert into entrada_mercancia ──────────────────
         try:
