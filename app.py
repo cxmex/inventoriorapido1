@@ -10,6 +10,7 @@ from datetime import datetime
 import time
 import hashlib
 from fastapi.responses import FileResponse
+import math
 import uuid
 
 
@@ -82,14 +83,17 @@ ml_scheduler.add_job(
 )
 
 async def _counting_progress_data():
-    """Fetch weekly counting progress for both branches."""
+    """Fetch weekly counting progress for both branches. Target: 100% every week."""
     from datetime import timedelta
     tz = _TZ
     now = datetime.now(tz)
-    monday = now - timedelta(days=now.weekday())
+    weekday = now.weekday()  # 0=Mon … 6=Sun
+    monday = now - timedelta(days=weekday)
     monday_iso = monday.strftime("%Y-%m-%dT00:00:00")
     yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
     days_es = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"]
+    # Working days left this week (Mon–Sat counted; Sun = end of cycle)
+    days_left = max(6 - weekday, 1)  # at least 1 so we don't divide by zero
 
     async with httpx.AsyncClient(timeout=15) as client:
         r_pos1, r_pos2, r_h1, r_h2 = await asyncio.gather(
@@ -126,54 +130,70 @@ async def _counting_progress_data():
             if dt == yesterday:
                 seen_yesterday.add(bc)
             try:
-                d = datetime.fromisoformat(row["created_at"].replace("Z","")).weekday()
-                daily[days_es[d]].add(bc)
+                idx = datetime.fromisoformat(row["created_at"].replace("Z","")).weekday()
+                daily[days_es[idx]].add(bc)
             except: pass
-        counted = len(seen_week)
-        pct = round(counted / total * 100, 1) if total else 0
+        counted   = len(seen_week)
+        remaining = max(total - counted, 0)
+        pct       = round(counted / total * 100, 1) if total else 0
+        daily_target = math.ceil(remaining / days_left) if remaining else 0
+        # Urgency: escalates as week progresses and % is low
+        if weekday >= 5:          urgency = "🚨 CRÍTICO"
+        elif weekday == 4 and pct < 90: urgency = "🔴 URGENTE"
+        elif weekday == 3 and pct < 70: urgency = "🟠 ATENCIÓN"
+        elif weekday == 2 and pct < 50: urgency = "🟡 AVISO"
+        else:                     urgency = "🟢 EN TIEMPO"
         return {
-            "total": total,
-            "counted": counted,
-            "yesterday": len(seen_yesterday),
-            "remaining": max(total - counted, 0),
-            "pct": pct,
+            "total": total, "counted": counted, "yesterday": len(seen_yesterday),
+            "remaining": remaining, "pct": pct,
+            "daily_target": daily_target, "days_left": days_left,
+            "urgency": urgency,
             "daily": {d: len(s) for d, s in daily.items()},
         }
 
     return {
         "week_start": monday.strftime("%d/%m/%Y"),
         "today": now.strftime("%d/%m/%Y"),
-        "today_name": days_es[now.weekday()],
+        "today_name": days_es[weekday],
+        "days_left": days_left,
         "terex1": summarise(h1, total1),
         "terex2": summarise(h2, total2),
     }
 
 async def _send_counting_telegram():
-    """Send counting progress update to Telegram every 20 min during work hours."""
+    """Send counting progress to Telegram every 20 min during work hours."""
     tz = _TZ
     now = datetime.now(tz)
     if now.hour < 8 or now.hour >= 20:
-        return  # only during 8am-8pm
+        return
     try:
         d = await _counting_progress_data()
         t1 = d["terex1"]
         t2 = d["terex2"]
         days_es = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"]
-        day_lines1 = "\n".join(f"  • {day}: {t1['daily'][day]} SKUs" for day in days_es if t1['daily'][day] > 0)
-        day_lines2 = "\n".join(f"  • {day}: {t2['daily'][day]} SKUs" for day in days_es if t2['daily'][day] > 0)
+
+        def branch_block(label, t):
+            day_lines = "\n".join(
+                f"    {day}: {t['daily'][day]}" for day in days_es if t['daily'][day] > 0
+            ) or "    (ninguno aún)"
+            bar_done = int(t['pct'] / 10)
+            bar = "█" * bar_done + "░" * (10 - bar_done)
+            return (
+                f"{t['urgency']} {label}\n"
+                f"  [{bar}] {t['pct']}%\n"
+                f"  ✅ Contados: {t['counted']:,} / {t['total']:,} SKUs\n"
+                f"  ❌ Faltan: {t['remaining']:,} códigos\n"
+                f"  📅 Ayer: {t['yesterday']} SKUs contados\n"
+                f"  🎯 Meta diaria: {t['daily_target']} SKUs/día ({d['days_left']} días restantes)\n"
+                f"  Esta semana:\n{day_lines}"
+            )
+
         msg = (
-            f"📦 CONTEO SEMANAL — {d['today_name']} {d['today']}\n\n"
-            f"🏪 SUCURSAL 1:\n"
-            f"  ✅ {t1['counted']} / {t1['total']} SKUs ({t1['pct']}%)\n"
-            f"  ❌ Faltan {t1['remaining']} códigos\n"
-            f"  📅 Ayer: {t1['yesterday']} SKUs contados\n"
-            f"{day_lines1 or '  (sin conteos esta semana)'}\n\n"
-            f"🏪 SUCURSAL 2:\n"
-            f"  ✅ {t2['counted']} / {t2['total']} SKUs ({t2['pct']}%)\n"
-            f"  ❌ Faltan {t2['remaining']} códigos\n"
-            f"  📅 Ayer: {t2['yesterday']} SKUs contados\n"
-            f"{day_lines2 or '  (sin conteos esta semana)'}\n\n"
-            f"⏰ El día de ayer S1 contó {t1['yesterday']} y S2 contó {t2['yesterday']} códigos. "
+            f"📦 CONTEO SEMANAL — {d['today_name']} {d['today']}\n"
+            f"Semana del {d['week_start']} · Meta: 100% de inventario contado\n\n"
+            f"{branch_block('SUCURSAL 1', t1)}\n\n"
+            f"{branch_block('SUCURSAL 2', t2)}\n\n"
+            f"💬 El día de ayer S1 contó {t1['yesterday']} y S2 contó {t2['yesterday']} códigos de barra. "
             f"Nos faltan {t1['remaining']} en S1 y {t2['remaining']} en S2 para terminar el conteo de esta semana."
         )
         send_telegram_message(msg)
