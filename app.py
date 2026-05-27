@@ -11729,7 +11729,7 @@ async def list_conteo_cajas():
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(
                 f"{SUPABASE_URL}/rest/v1/conteo_previo"
-                "?select=caja_numero,fecha,modelo,color,qty,reconciled,created_at"
+                "?select=caja_numero,fecha,estilo,modelo,color,qty,reconciled,created_at"
                 "&order=created_at.desc"
                 "&limit=1000",
                 headers=HEADERS,
