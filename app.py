@@ -1,6 +1,10 @@
 # app.py - FastAPI with templates for inventory management
-import ml_engine
-import market_intel
+try:
+    import ml_engine
+    import market_intel
+except ImportError:
+    ml_engine = None
+    market_intel = None
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 import jwt
@@ -72,6 +76,8 @@ ml_scheduler = AsyncIOScheduler()
 
 async def _scheduled_ml_pipeline():
     """Run full ML pipeline — called by scheduler at 11pm."""
+    if not ml_engine:
+        return
     logger.info("Running scheduled ML pipeline...")
     try:
         result = await ml_engine.run_full_pipeline()
