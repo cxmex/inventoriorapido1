@@ -60,6 +60,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# ── Backup / failover mode ──
+# Set IS_BACKUP=true on the backup server so scheduled jobs don't fire twice
+IS_BACKUP = os.environ.get("IS_BACKUP", "").lower() in ("true", "1", "yes")
+
 # ── APScheduler: ML pipeline at 11pm daily ──
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -1108,8 +1112,18 @@ async def test_whatsapp():
 
 @app.on_event("startup")
 async def start_scheduler():
-    ml_scheduler.start()
-    logger.info("ML scheduler started — runs daily at 11pm Mexico City time")
+    if IS_BACKUP:
+        logger.info("🔵 BACKUP MODE — scheduler disabled, serving requests only")
+    else:
+        ml_scheduler.start()
+        logger.info("🟢 PRIMARY — scheduler started (ML, ARGOS, HERMES, OJO, HERMES-WA)")
+
+
+@app.get("/health")
+async def health_check():
+    """Health endpoint for failover proxy. Returns 200 if app is alive."""
+    return {"status": "ok", "mode": "backup" if IS_BACKUP else "primary"}
+
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
