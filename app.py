@@ -56,7 +56,26 @@ import re
 import json
 
 print(f"Templates directory exists: {os.path.exists('templates')}", flush=True)
-print(f"Templates directory contents: {os.listdir('templates')}", flush=True)
+if os.path.exists('templates'):
+    print(f"Templates directory contents: {os.listdir('templates')}", flush=True)
+
+logger = logging.getLogger(__name__)
+
+# ── Timezone ──
+_TZ = pytz.timezone("America/Mexico_City")
+
+# ── Supabase configuration (needed early by agents) ──
+SUPABASE_URL = "https://gbkhkbfbarsnpbdkxzii.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdia2hrYmZiYXJzbnBiZGt4emlpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQzODAzNzMsImV4cCI6MjA0OTk1NjM3M30.mcOcC2GVEu_wD3xNBzSCC3MwDck3CIdmz4D8adU-bpI"
+HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json",
+    "Prefer": "return=representation",
+}
+LOCAL_CAMERA_SERVICE = "https://fred-nonchalky-fatally.ngrok-free.dev"
+TELEGRAM_TOKEN    = "8487551934:AAGOw4FLIgXKolbeiFmAsRuyBS8mJ-3kSQk"
+TELEGRAM_CHAT_IDS = ["7204722077", "7145539843", "8133878707"]
 
 app = FastAPI(
     title="Inventory Management System",
@@ -1137,22 +1156,8 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # Set up templates
 templates = Jinja2Templates(directory="templates")
 
-# Supabase configuration
-SUPABASE_URL = "https://gbkhkbfbarsnpbdkxzii.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdia2hrYmZiYXJzbnBiZGt4emlpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQzODAzNzMsImV4cCI6MjA0OTk1NjM3M30.mcOcC2GVEu_wD3xNBzSCC3MwDck3CIdmz4D8adU-bpI"
-
-LOCAL_CAMERA_SERVICE = "https://fred-nonchalky-fatally.ngrok-free.dev"
-
-logger = logging.getLogger(__name__)
-
-
-# Supabase client headershello world
-HEADERS = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json",
-    "Prefer": "return=representation"
-}
+# (SUPABASE_URL, SUPABASE_KEY, HEADERS, LOCAL_CAMERA_SERVICE, _TZ, logger
+#  are all defined near the top of the file before the FastAPI app)
 
 router = APIRouter()
 
@@ -1360,8 +1365,7 @@ def _build_receipt_pdf(items: List[dict], total: float, order_id: int) -> io.Byt
 user_sessions = {}
 
 
-TELEGRAM_TOKEN = "8487551934:AAGOw4FLIgXKolbeiFmAsRuyBS8mJ-3kSQk"
-TELEGRAM_CHAT_IDS = ["7204722077", "7145539843","8133878707"]
+# (TELEGRAM_TOKEN, TELEGRAM_CHAT_IDS defined at top of file)
 
 STORAGE_BUCKET   = "entrada-mercancia"          # bucket name (create in Supabase Dashboard)
 STORAGE_BASE_URL = "https://gbkhkbfbarsnpbdkxzii.supabase.co/storage/v1"
