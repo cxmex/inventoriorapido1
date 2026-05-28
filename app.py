@@ -601,52 +601,127 @@ ml_scheduler.add_job(
 
 
 # ── Agent 3: Camera Activity Monitor ──────────────────────────────────────────
-# Every minute during shop hours (9am–9pm) it calls the local camera_service.py
-# via ngrok, receives face-detection results, classifies activity, and stores
-# frames in shop_activity_frames for ML training.
+# Uses the SAME /capture_telegram endpoint that already works (Telegram is
+# already receiving pictures). Every minute it fires a capture, records which
+# cameras responded, and uses recent sales data to infer activity type.
+# Face-detection analysis can be added later via /activity-snapshot when
+# camera_service.py is deployed locally.
 async def _camera_activity_monitor():
-    """Capture one frame per camera every minute and classify shop activity."""
+    """Capture frames via existing Telegram endpoint every minute during shop hours."""
     _tz = pytz.timezone("America/Mexico_City")
     now = datetime.now(_tz)
     if now.hour < 9 or now.hour >= 21:
         return  # outside shop hours
 
+    # ── 1. Trigger capture (reuse existing working endpoint) ──────────────────
+    cameras_active = []
     try:
         async with httpx.AsyncClient(timeout=25) as client:
-            resp = await client.post(f"{LOCAL_CAMERA_SERVICE}/activity-snapshot")
+            # Try /activity-snapshot first (richer data); fall back to /capture_telegram
+            try:
+                resp = await client.post(
+                    f"{LOCAL_CAMERA_SERVICE}/activity-snapshot",
+                    json={"send_telegram": False},  # silent capture — don't spam Telegram
+                )
+                if resp.status_code < 400:
+                    data = resp.json()
+                    results = data.get("results", [])
+                    # Persist rich face-detection rows
+                    for r in results:
+                        if r.get("error"):
+                            continue
+                        cameras_active.append(r.get("camera", "?"))
+                        try:
+                            await supabase_request(
+                                method="POST",
+                                endpoint="/rest/v1/shop_activity_frames",
+                                json_data={
+                                    "branch":        r["branch"],
+                                    "camera_name":   r["camera"],
+                                    "face_count":    r.get("face_count", 0),
+                                    "known_faces":   r.get("known_faces", 0),
+                                    "unknown_faces": r.get("unknown_faces", 0),
+                                    "activity_type": r.get("activity_type"),
+                                    "confidence":    r.get("confidence"),
+                                    "face_features": r.get("face_features"),
+                                    "image_url":     r.get("image_url"),
+                                },
+                            )
+                        except Exception as db_err:
+                            logger.warning("shop_activity_frames insert: %s", db_err)
+                    return  # done — rich path succeeded
+            except Exception:
+                pass  # fall through to capture_telegram
+
+            # Fall back: use existing /capture_telegram (no face data, but works now)
+            resp = await client.post(
+                f"{LOCAL_CAMERA_SERVICE}/capture_telegram",
+                json={"barcode": f"monitor-{now.strftime('%H%M')}"},
+            )
+            if resp.status_code >= 400:
+                logger.warning("capture_telegram returned %d", resp.status_code)
+                return
+            data = resp.json()
+            cameras_active = data.get("telegram_sent", [])
+
     except Exception as e:
         logger.warning("Camera service unreachable: %s", e)
         return
 
-    if resp.status_code >= 400:
-        logger.warning("Camera service returned %d", resp.status_code)
+    if not cameras_active:
         return
 
-    data = resp.json()
-    results = data.get("results", [])
+    # ── 2. Infer activity from recent sales (last 3 min) in both branches ─────
+    three_min_ago = (now - timedelta(minutes=3)).isoformat()
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r_s1, r_s2 = await asyncio.gather(
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex1"
+                    f"?created_at=gte.{three_min_ago}&select=qty&limit=20",
+                    headers=HEADERS,
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex2"
+                    f"?created_at=gte.{three_min_ago}&select=qty&limit=20",
+                    headers=HEADERS,
+                ),
+            )
+        recent_sales = (
+            sum(int(r.get("qty") or 1) for r in (r_s1.json() if r_s1.status_code < 400 else []))
+            + sum(int(r.get("qty") or 1) for r in (r_s2.json() if r_s2.status_code < 400 else []))
+        )
+    except Exception:
+        recent_sales = 0
 
-    # Persist each camera's result as one row in shop_activity_frames
-    for r in results:
-        if r.get("error"):
-            continue
+    # Simple heuristic: if recent sales → selling; morning/evening → likely counting
+    if recent_sales > 0:
+        activity_type = "selling"
+        confidence = 0.75
+    elif now.hour < 11 or now.hour >= 19:
+        activity_type = "counting"
+        confidence = 0.55
+    else:
+        activity_type = "idle"
+        confidence = 0.5
+
+    # ── 3. Store one row per active camera ───────────────────────────────────
+    for cam_name in cameras_active:
+        branch = "terex2" if "3" in cam_name else "terex1"
         try:
             await supabase_request(
                 method="POST",
                 endpoint="/rest/v1/shop_activity_frames",
                 json_data={
-                    "branch":        r["branch"],
-                    "camera_name":   r["camera"],
-                    "face_count":    r["face_count"],
-                    "known_faces":   r["known_faces"],
-                    "unknown_faces": r["unknown_faces"],
-                    "activity_type": r["activity_type"],
-                    "confidence":    r["confidence"],
-                    "face_features": r.get("face_features"),
-                    "image_url":     r.get("image_url"),
+                    "branch":        branch,
+                    "camera_name":   cam_name,
+                    "activity_type": activity_type,
+                    "confidence":    confidence,
+                    "notes":         f"recent_sales={recent_sales}",
                 },
             )
         except Exception as db_err:
-            logger.warning("shop_activity_frames insert error: %s", db_err)
+            logger.warning("shop_activity_frames insert: %s", db_err)
 
 
 ml_scheduler.add_job(
