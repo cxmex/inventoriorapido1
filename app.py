@@ -207,6 +207,545 @@ ml_scheduler.add_job(
     replace_existing=True,
 )
 
+# ── Agent 1: Hourly Intelligence Reporter ─────────────────────────────────────
+async def _hourly_intelligence_report():
+    """Query key data every 2 hours (8am–8pm) and send a Telegram summary of anomalies."""
+    _tz = pytz.timezone("America/Mexico_City")
+    now = datetime.now(_tz)
+    if now.hour < 8 or now.hour >= 20:
+        return
+
+    time_label = now.strftime("%I:%M%p").lstrip("0").lower()
+    alerts = []
+    raw_data = {}
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            # ── Parallel queries ──────────────────────────────────────────────
+            today_str = now.strftime("%Y-%m-%d")
+            seven_days_ago = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+
+            (
+                r_neg,          # negative stock
+                r_conteo,       # unreconciled conteo_previo cajas
+                r_sales_t1,     # today's sales terex1
+                r_sales_t2,     # today's sales terex2
+                r_week_t1,      # last 7 days sales terex1 (for avg)
+                r_week_t2,      # last 7 days sales terex2 (for avg)
+                r_low_stock,    # about-to-sell-out (terex1 1-2 units)
+            ) = await asyncio.gather(
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/inventario1"
+                    "?or=(terex1.lt.0,terex2.lt.0)"
+                    "&select=barcode,estilo,terex1,terex2"
+                    "&limit=500",
+                    headers=HEADERS,
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/conteo_previo"
+                    "?reconciled=eq.false"
+                    "&select=caja_numero"
+                    "&limit=200",
+                    headers=HEADERS,
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex1"
+                    f"?fecha=eq.{today_str}"
+                    "&select=qty"
+                    "&limit=5000",
+                    headers=HEADERS,
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex2"
+                    f"?fecha=eq.{today_str}"
+                    "&select=qty"
+                    "&limit=5000",
+                    headers=HEADERS,
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex1"
+                    f"?fecha=gte.{seven_days_ago}&fecha=lt.{today_str}"
+                    "&select=qty,fecha"
+                    "&limit=10000",
+                    headers=HEADERS,
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex2"
+                    f"?fecha=gte.{seven_days_ago}&fecha=lt.{today_str}"
+                    "&select=qty,fecha"
+                    "&limit=10000",
+                    headers=HEADERS,
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/inventario1"
+                    "?terex1=lte.2&terex1=gt.0"
+                    "&select=barcode,estilo,terex1"
+                    "&limit=1000",
+                    headers=HEADERS,
+                ),
+            )
+
+        # ── Parse results ─────────────────────────────────────────────────────
+        neg_rows    = r_neg.json()      if r_neg.status_code    < 400 else []
+        conteo_rows = r_conteo.json()   if r_conteo.status_code < 400 else []
+        sales_t1    = r_sales_t1.json() if r_sales_t1.status_code < 400 else []
+        sales_t2    = r_sales_t2.json() if r_sales_t2.status_code < 400 else []
+        week_t1     = r_week_t1.json()  if r_week_t1.status_code < 400 else []
+        week_t2     = r_week_t2.json()  if r_week_t2.status_code < 400 else []
+        low_stock   = r_low_stock.json() if r_low_stock.status_code < 400 else []
+
+        # ── 1. Negative stock ─────────────────────────────────────────────────
+        neg_count = len(neg_rows)
+        raw_data["neg_stock_skus"] = neg_count
+        if neg_count > 0:
+            alerts.append(f"🔴 Stock negativo en {neg_count} SKUs — revisar urgente")
+
+        # ── 2. Pending conteo cajas ───────────────────────────────────────────
+        unreconciled_cajas = len(set(r["caja_numero"] for r in conteo_rows))
+        raw_data["conteo_previo_pendientes"] = unreconciled_cajas
+        if unreconciled_cajas > 3:
+            alerts.append(f"⏳ {unreconciled_cajas} cajas de conteo previo sin verificar")
+
+        # ── 3. Sales velocity today vs 7-day average ─────────────────────────
+        today_units_t1 = sum(int(r.get("qty") or 0) for r in sales_t1)
+        today_units_t2 = sum(int(r.get("qty") or 0) for r in sales_t2)
+
+        def _daily_avg(rows):
+            by_day = defaultdict(int)
+            for r in rows:
+                by_day[r.get("fecha", "")] += int(r.get("qty") or 0)
+            return sum(by_day.values()) / max(len(by_day), 1) if by_day else 0
+
+        avg_t1 = _daily_avg(week_t1)
+        avg_t2 = _daily_avg(week_t2)
+
+        raw_data["today_units_t1"] = today_units_t1
+        raw_data["today_units_t2"] = today_units_t2
+        raw_data["avg_7d_t1"] = round(avg_t1, 1)
+        raw_data["avg_7d_t2"] = round(avg_t2, 1)
+
+        # Only flag after enough of the day has passed (after 10am)
+        if now.hour >= 10:
+            if avg_t1 > 0:
+                pct_t1 = (avg_t1 - today_units_t1) / avg_t1
+                if pct_t1 > 0.30:
+                    alerts.append(
+                        f"📉 Ventas hoy S1: {today_units_t1} pzas vs promedio {round(avg_t1)} "
+                        f"— {round(pct_t1 * 100)}% abajo"
+                    )
+            if avg_t2 > 0:
+                pct_t2 = (avg_t2 - today_units_t2) / avg_t2
+                if pct_t2 > 0.30:
+                    alerts.append(
+                        f"📉 Ventas hoy S2: {today_units_t2} pzas vs promedio {round(avg_t2)} "
+                        f"— {round(pct_t2 * 100)}% abajo"
+                    )
+
+        # ── 4. Counting progress — flag if behind urgency threshold ───────────
+        try:
+            counting = await _counting_progress_data()
+            t1_prog = counting["terex1"]
+            t2_prog = counting["terex2"]
+            raw_data["conteo_pct_t1"] = t1_prog["pct"]
+            raw_data["conteo_pct_t2"] = t2_prog["pct"]
+            # Flag if urgency is not green
+            for label, branch_d in [("S1", t1_prog), ("S2", t2_prog)]:
+                urg = branch_d.get("urgency", "")
+                if "CRÍTICO" in urg or "URGENTE" in urg or "ATENCIÓN" in urg:
+                    alerts.append(
+                        f"{urg} Conteo {label}: {branch_d['pct']}% — "
+                        f"faltan {branch_d['remaining']:,} SKUs"
+                    )
+        except Exception as ce:
+            logger.warning("Conteo check failed in intelligence report: %s", ce)
+
+        # ── 5. Stockout risk ──────────────────────────────────────────────────
+        low_count = len(low_stock)
+        raw_data["stockout_risk_skus"] = low_count
+        if low_count >= 10:
+            alerts.append(f"⚠️ {low_count} SKUs con ≤2 unidades en S1 — riesgo de quiebre")
+
+        # ── Build and send message ────────────────────────────────────────────
+        if alerts:
+            lines = [f"🤖 Reporte Inteligente — {time_label}", ""]
+            lines.extend(alerts)
+            msg = "\n".join(lines)
+        else:
+            msg = f"✅ Todo en orden a las {time_label} — sin alertas."
+
+        send_telegram_message(msg)
+        sent = True
+
+    except Exception as e:
+        logger.error("Hourly intelligence report error: %s", e)
+        msg = f"⚠️ Error en reporte inteligente: {e}"
+        sent = False
+
+    # ── Save to agent_insights ────────────────────────────────────────────────
+    try:
+        await supabase_request(
+            method="POST",
+            endpoint="/rest/v1/agent_insights",
+            json_data={
+                "type": "hourly",
+                "summary": msg,
+                "data": raw_data,
+                "sent_telegram": sent,
+            },
+        )
+    except Exception as db_err:
+        logger.warning("Could not save agent_insights (hourly): %s", db_err)
+
+
+ml_scheduler.add_job(
+    _hourly_intelligence_report,
+    CronTrigger(hour="8,10,12,14,16,18", minute=0, second=0, timezone="America/Mexico_City"),
+    id="hourly_intelligence_report",
+    replace_existing=True,
+)
+
+
+# ── Agent 2: Visual Daily Report (3pm and 7pm) ────────────────────────────────
+async def _daily_visual_report():
+    """Send top estilos/modelos sold today with images to Telegram at 3pm and 7pm."""
+    _tz = pytz.timezone("America/Mexico_City")
+    now = datetime.now(_tz)
+    today_str = now.strftime("%Y-%m-%d")
+    time_label = now.strftime("%I:%M%p").lstrip("0").lower()
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            (
+                r_t1, r_t2,
+                r_conteo_total,
+                r_conteo_pending,
+            ) = await asyncio.gather(
+                # Today's sales — terex1
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex1"
+                    f"?fecha=eq.{today_str}"
+                    "&select=estilo,estilo_id,modelo,qty"
+                    "&limit=5000",
+                    headers=HEADERS,
+                ),
+                # Today's sales — terex2
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex2"
+                    f"?fecha=eq.{today_str}"
+                    "&select=estilo,estilo_id,modelo,qty"
+                    "&limit=5000",
+                    headers=HEADERS,
+                ),
+                # How many SKUs need to be counted this week (remaining)
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/inventario1"
+                    "?terex1=gt.0&select=barcode",
+                    headers={**HEADERS, "Prefer": "count=exact", "Range": "0-0"},
+                ),
+                # Unreconciled conteo_previo cajas
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/conteo_previo"
+                    "?reconciled=eq.false&select=caja_numero&limit=200",
+                    headers=HEADERS,
+                ),
+            )
+
+        sales_t1 = r_t1.json() if r_t1.status_code < 400 else []
+        sales_t2 = r_t2.json() if r_t2.status_code < 400 else []
+        conteo_pending_cajas = len(
+            set(r["caja_numero"] for r in (r_conteo_pending.json() if r_conteo_pending.status_code < 400 else []))
+        )
+
+        # ── Counting progress for remaining SKUs ──────────────────────────────
+        try:
+            counting = await _counting_progress_data()
+            remaining_t1 = counting["terex1"]["remaining"]
+            remaining_t2 = counting["terex2"]["remaining"]
+        except Exception:
+            remaining_t1 = remaining_t2 = "?"
+
+        # ── Group today's sales by estilo ─────────────────────────────────────
+        estilo_qty: dict = defaultdict(int)
+        estilo_id_map: dict = {}
+        for row in sales_t1 + sales_t2:
+            est = row.get("estilo") or "(sin estilo)"
+            qty = int(row.get("qty") or 0)
+            estilo_qty[est] += qty
+            eid = row.get("estilo_id")
+            if eid and est not in estilo_id_map:
+                estilo_id_map[est] = eid
+
+        top_estilos = sorted(estilo_qty.items(), key=lambda x: -x[1])[:5]
+
+        # ── Group today's sales by modelo ─────────────────────────────────────
+        modelo_qty: dict = defaultdict(int)
+        for row in sales_t1 + sales_t2:
+            mod = row.get("modelo") or "(sin modelo)"
+            modelo_qty[mod] += int(row.get("qty") or 0)
+
+        top_modelos = sorted(modelo_qty.items(), key=lambda x: -x[1])[:5]
+
+        total_today = sum(estilo_qty.values())
+
+        # ── Fetch images for top estilos ──────────────────────────────────────
+        storage_headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+        }
+        image_map: dict = {}
+        eids_needed = [estilo_id_map[e] for e, _ in top_estilos if e in estilo_id_map]
+
+        if eids_needed:
+            async with httpx.AsyncClient(timeout=15) as client:
+                img_resps = await asyncio.gather(*[
+                    client.post(
+                        f"{SUPABASE_URL}/storage/v1/object/list/images_estilos",
+                        headers=storage_headers,
+                        json={"prefix": f"{eid}/", "limit": 1},
+                    ) for eid in eids_needed
+                ], return_exceptions=True)
+
+            for eid, resp in zip(eids_needed, img_resps):
+                if isinstance(resp, Exception) or resp.status_code >= 400:
+                    continue
+                files = resp.json()
+                if files and isinstance(files, list) and files[0].get("name") and files[0].get("id"):
+                    image_map[eid] = (
+                        f"{SUPABASE_URL}/storage/v1/object/public/images_estilos/"
+                        f"{eid}/{files[0]['name']}"
+                    )
+
+        # ── Build text summary ────────────────────────────────────────────────
+        lines = [
+            f"📊 Reporte Diario — {time_label}  |  {today_str}",
+            f"Total vendido hoy: {total_today} piezas (ambas sucursales)",
+            "",
+            "🏆 Top 5 Estilos:",
+        ]
+        for i, (est, qty) in enumerate(top_estilos, 1):
+            lines.append(f"  {i}. {est} — {qty} pzas")
+
+        lines += ["", "📱 Top 5 Modelos:"]
+        for i, (mod, qty) in enumerate(top_modelos, 1):
+            lines.append(f"  {i}. {mod} — {qty} pzas")
+
+        lines += [
+            "",
+            "📋 Trabajo pendiente:",
+            f"  • SKUs sin contar esta semana: S1={remaining_t1}, S2={remaining_t2}",
+            f"  • Cajas de conteo previo sin verificar: {conteo_pending_cajas}",
+        ]
+
+        summary_text = "\n".join(lines)
+        send_telegram_message(summary_text)
+
+        # ── Send photos for top estilos that have images ──────────────────────
+        for est, qty in top_estilos:
+            eid = estilo_id_map.get(est)
+            if not eid:
+                continue
+            img_url = image_map.get(eid)
+            if not img_url:
+                continue
+            caption = f"<b>{est}</b>\n{qty} piezas vendidas hoy"
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    for chat_id in TELEGRAM_CHAT_IDS:
+                        await client.post(
+                            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
+                            json={
+                                "chat_id": chat_id,
+                                "photo": img_url,
+                                "caption": caption,
+                                "parse_mode": "HTML",
+                            },
+                        )
+            except Exception as ph_err:
+                logger.warning("sendPhoto error for estilo %s: %s", est, ph_err)
+
+        # ── Save to agent_insights ────────────────────────────────────────────
+        raw_data = {
+            "total_today": total_today,
+            "top_estilos": [{"estilo": e, "qty": q} for e, q in top_estilos],
+            "top_modelos": [{"modelo": m, "qty": q} for m, q in top_modelos],
+            "conteo_pending_cajas": conteo_pending_cajas,
+            "remaining_t1": remaining_t1,
+            "remaining_t2": remaining_t2,
+        }
+        try:
+            await supabase_request(
+                method="POST",
+                endpoint="/rest/v1/agent_insights",
+                json_data={
+                    "type": "daily_visual",
+                    "summary": summary_text,
+                    "data": raw_data,
+                    "sent_telegram": True,
+                },
+            )
+        except Exception as db_err:
+            logger.warning("Could not save agent_insights (daily_visual): %s", db_err)
+
+    except Exception as e:
+        logger.error("Daily visual report error: %s", e)
+        send_telegram_message(f"⚠️ Error en reporte visual diario: {e}")
+
+
+ml_scheduler.add_job(
+    _daily_visual_report,
+    CronTrigger(hour="15,19", minute=0, second=0, timezone="America/Mexico_City"),
+    id="daily_visual_report",
+    replace_existing=True,
+)
+
+
+# ── Agent 3: Camera Activity Monitor ──────────────────────────────────────────
+# Every minute during shop hours (9am–9pm) it calls the local camera_service.py
+# via ngrok, receives face-detection results, classifies activity, and stores
+# frames in shop_activity_frames for ML training.
+async def _camera_activity_monitor():
+    """Capture one frame per camera every minute and classify shop activity."""
+    _tz = pytz.timezone("America/Mexico_City")
+    now = datetime.now(_tz)
+    if now.hour < 9 or now.hour >= 21:
+        return  # outside shop hours
+
+    try:
+        async with httpx.AsyncClient(timeout=25) as client:
+            resp = await client.post(f"{LOCAL_CAMERA_SERVICE}/activity-snapshot")
+    except Exception as e:
+        logger.warning("Camera service unreachable: %s", e)
+        return
+
+    if resp.status_code >= 400:
+        logger.warning("Camera service returned %d", resp.status_code)
+        return
+
+    data = resp.json()
+    results = data.get("results", [])
+
+    # Persist each camera's result as one row in shop_activity_frames
+    for r in results:
+        if r.get("error"):
+            continue
+        try:
+            await supabase_request(
+                method="POST",
+                endpoint="/rest/v1/shop_activity_frames",
+                json_data={
+                    "branch":        r["branch"],
+                    "camera_name":   r["camera"],
+                    "face_count":    r["face_count"],
+                    "known_faces":   r["known_faces"],
+                    "unknown_faces": r["unknown_faces"],
+                    "activity_type": r["activity_type"],
+                    "confidence":    r["confidence"],
+                    "face_features": r.get("face_features"),
+                    "image_url":     r.get("image_url"),
+                },
+            )
+        except Exception as db_err:
+            logger.warning("shop_activity_frames insert error: %s", db_err)
+
+
+ml_scheduler.add_job(
+    _camera_activity_monitor,
+    "interval", minutes=1,
+    id="camera_activity_monitor",
+    replace_existing=True,
+)
+
+
+async def _camera_activity_hourly_summary():
+    """Every hour during shop hours: summarise activity and send to Telegram."""
+    _tz = pytz.timezone("America/Mexico_City")
+    now = datetime.now(_tz)
+    if now.hour < 9 or now.hour >= 21:
+        return
+
+    one_hour_ago = (now - timedelta(hours=1)).isoformat()
+
+    try:
+        rows = await supabase_request(
+            method="GET",
+            endpoint=(
+                f"/rest/v1/shop_activity_frames"
+                f"?captured_at=gte.{one_hour_ago}"
+                f"&select=branch,activity_type,face_count,known_faces,unknown_faces"
+                f"&limit=500"
+            ),
+        )
+    except Exception as e:
+        logger.warning("Camera summary query failed: %s", e)
+        return
+
+    if not rows:
+        return
+
+    # Aggregate per branch
+    summary: dict = {}
+    for r in rows:
+        br = r.get("branch", "?")
+        if br not in summary:
+            summary[br] = {
+                "frames": 0, "selling": 0, "counting": 0, "idle": 0, "busy": 0,
+                "total_faces": 0, "total_customers": 0,
+            }
+        s = summary[br]
+        s["frames"] += 1
+        act = r.get("activity_type", "idle")
+        s[act] = s.get(act, 0) + 1
+        s["total_faces"] += r.get("face_count", 0)
+        s["total_customers"] += r.get("unknown_faces", 0)
+
+    hour_label = now.strftime("%I%p").lstrip("0").lower()
+    lines = [f"📷 Resumen de actividad — {hour_label}", ""]
+
+    branch_labels = {"terex1": "Sucursal 1", "terex2": "Sucursal 2"}
+    for br, s in sorted(summary.items()):
+        label = branch_labels.get(br, br)
+        total = s["frames"] or 1
+        sell_pct  = round(s["selling"]  / total * 100)
+        count_pct = round(s["counting"] / total * 100)
+        idle_pct  = round(s["idle"]     / total * 100)
+        customers = s["total_customers"]
+        dominant  = max(s, key=lambda k: s[k] if k in ("selling", "counting", "idle", "busy") else -1)
+        icon = {"selling": "🛒", "counting": "📦", "idle": "😴", "busy": "👥"}.get(dominant, "❓")
+        lines.append(
+            f"{icon} {label}: {sell_pct}% vendiendo · {count_pct}% contando · {idle_pct}% sin actividad"
+        )
+        if customers > 0:
+            lines.append(f"   👤 ~{customers} visitas de clientes detectadas")
+
+    msg = "\n".join(lines)
+    send_telegram_message(msg)
+
+    # Save to agent_insights
+    try:
+        await supabase_request(
+            method="POST",
+            endpoint="/rest/v1/agent_insights",
+            json_data={
+                "type": "camera_activity",
+                "summary": msg,
+                "data": summary,
+                "sent_telegram": True,
+            },
+        )
+    except Exception as db_err:
+        logger.warning("Could not save camera activity insight: %s", db_err)
+
+
+ml_scheduler.add_job(
+    _camera_activity_hourly_summary,
+    CronTrigger(hour="9,10,11,12,13,14,15,16,17,18,19,20", minute=55,
+                timezone="America/Mexico_City"),
+    id="camera_activity_hourly_summary",
+    replace_existing=True,
+)
+
+
 @app.on_event("startup")
 async def start_scheduler():
     ml_scheduler.start()
@@ -11875,6 +12414,60 @@ async def counting_progress_api(branch: str = "terex1"):
             "today_name": data["today_name"],
             **b,
         }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/inventory/variance-by-estilo")
+async def variance_by_estilo(branch: str = "terex1", limit: int = 10):
+    """Top estilos by absolute variance (|counted - system|) from last week's history."""
+    try:
+        import pytz as _pytz
+        from datetime import timedelta
+        tz = _pytz.timezone("America/Mexico_City")
+        now = datetime.now(tz)
+        last_monday = now - timedelta(days=now.weekday() + 7)
+        last_sunday  = last_monday + timedelta(days=6)
+        from_iso = last_monday.strftime("%Y-%m-%dT00:00:00")
+        to_iso   = last_sunday.strftime("%Y-%m-%dT23:59:59")
+        table = "terex1_history" if branch != "terex2" else "terex2_history"
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            r_hist, r_inv = await asyncio.gather(
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/{table}"
+                    f"?created_at=gte.{from_iso}&created_at=lte.{to_iso}"
+                    "&select=barcode,product_name,difference,qty_before,qty_counted&limit=5000",
+                    headers=HEADERS,
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/inventario1"
+                    "?select=barcode,estilo&limit=5000",
+                    headers=HEADERS,
+                ),
+            )
+
+        rows  = r_hist.json() if r_hist.status_code == 200 else []
+        inv   = r_inv.json()  if r_inv.status_code  == 200 else []
+
+        # Map barcode → estilo
+        bc_to_estilo = {str(r["barcode"]): (r.get("estilo") or r.get("name") or "Sin estilo") for r in inv}
+
+        # Aggregate by estilo
+        from collections import defaultdict
+        estilo_stats = defaultdict(lambda: {"abs_diff": 0, "net_diff": 0, "counts": 0, "pos": 0, "neg": 0})
+        for r in rows:
+            bc = str(r["barcode"])
+            estilo = bc_to_estilo.get(bc) or r.get("product_name") or "Sin estilo"
+            diff = r.get("difference") or 0
+            estilo_stats[estilo]["abs_diff"] += abs(diff)
+            estilo_stats[estilo]["net_diff"] += diff
+            estilo_stats[estilo]["counts"]   += 1
+            if diff > 0: estilo_stats[estilo]["pos"] += 1
+            if diff < 0: estilo_stats[estilo]["neg"] += 1
+
+        top = sorted(estilo_stats.items(), key=lambda x: x[1]["abs_diff"], reverse=True)[:limit]
+        return [{"estilo": k, **v} for k, v in top]
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
