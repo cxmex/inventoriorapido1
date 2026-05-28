@@ -367,11 +367,11 @@ async def _hourly_intelligence_report():
 
         # ── Build and send message ────────────────────────────────────────────
         if alerts:
-            lines = [f"🤖 Reporte Inteligente — {time_label}", ""]
+            lines = [f"🧠 ARGOS · Vigilancia Inteligente · {time_label}", ""]
             lines.extend(alerts)
             msg = "\n".join(lines)
         else:
-            msg = f"✅ Todo en orden a las {time_label} — sin alertas."
+            msg = f"🧠 ARGOS · {time_label} — todo en orden, sin alertas."
 
         send_telegram_message(msg)
         sent = True
@@ -518,7 +518,7 @@ async def _daily_visual_report():
 
         # ── Build text summary ────────────────────────────────────────────────
         lines = [
-            f"📊 Reporte Diario — {time_label}  |  {today_str}",
+            f"📸 HERMES · Reporte Visual · {time_label}  |  {today_str}",
             f"Total vendido hoy: {total_today} piezas (ambas sucursales)",
             "",
             "🏆 Top 5 Estilos:",
@@ -775,7 +775,7 @@ async def _camera_activity_hourly_summary():
         s["total_customers"] += r.get("unknown_faces", 0)
 
     hour_label = now.strftime("%I%p").lstrip("0").lower()
-    lines = [f"📷 Resumen de actividad — {hour_label}", ""]
+    lines = [f"👁️ OJO · Monitor de Cámaras · {hour_label}", ""]
 
     branch_labels = {"terex1": "Sucursal 1", "terex2": "Sucursal 2"}
     for br, s in sorted(summary.items()):
