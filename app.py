@@ -294,17 +294,67 @@ async def _hourly_intelligence_report():
         week_t2     = r_week_t2.json()  if r_week_t2.status_code < 400 else []
         low_stock   = r_low_stock.json() if r_low_stock.status_code < 400 else []
 
+        # ── Load ARGOS own history (last 14 hourly reports) ───────────────────
+        # Used to distinguish new/worsening alerts from ongoing baseline noise
+        past_reports = []
+        try:
+            past_reports = await supabase_request(
+                method="GET",
+                endpoint=(
+                    "/rest/v1/agent_insights"
+                    "?type=eq.hourly"
+                    "&order=created_at.desc"
+                    "&limit=14"
+                    "&select=data,created_at"
+                ),
+            ) or []
+        except Exception:
+            pass
+
+        def _historical_values(key):
+            """Extract a numeric field from past report data JSONs."""
+            vals = []
+            for r in past_reports:
+                d = r.get("data") or {}
+                v = d.get(key)
+                if v is not None:
+                    try:
+                        vals.append(float(v))
+                    except (TypeError, ValueError):
+                        pass
+            return vals
+
+        def _streak(key, threshold_fn):
+            """How many consecutive past reports triggered a condition on `key`."""
+            count = 0
+            for r in past_reports:
+                d = r.get("data") or {}
+                v = d.get(key)
+                if v is not None and threshold_fn(float(v)):
+                    count += 1
+                else:
+                    break
+            return count
+
         # ── 1. Negative stock ─────────────────────────────────────────────────
         neg_count = len(neg_rows)
         raw_data["neg_stock_skus"] = neg_count
         if neg_count > 0:
-            alerts.append(f"🔴 Stock negativo en {neg_count} SKUs — revisar urgente")
+            streak = _streak("neg_stock_skus", lambda v: v > 0)
+            if streak >= 3:
+                alerts.append(
+                    f"🔴 Stock negativo en {neg_count} SKUs — problema persistente ({streak} reportes seguidos)"
+                )
+            else:
+                alerts.append(f"🔴 Stock negativo en {neg_count} SKUs — revisar urgente")
 
         # ── 2. Pending conteo cajas ───────────────────────────────────────────
         unreconciled_cajas = len(set(r["caja_numero"] for r in conteo_rows))
         raw_data["conteo_previo_pendientes"] = unreconciled_cajas
         if unreconciled_cajas > 3:
-            alerts.append(f"⏳ {unreconciled_cajas} cajas de conteo previo sin verificar")
+            streak = _streak("conteo_previo_pendientes", lambda v: v > 3)
+            tag = f" — sin cambio desde hace {streak} reportes" if streak >= 3 else ""
+            alerts.append(f"⏳ {unreconciled_cajas} cajas de conteo previo sin verificar{tag}")
 
         # ── 3. Sales velocity today vs 7-day average ─────────────────────────
         today_units_t1 = sum(int(r.get("qty") or 0) for r in sales_t1)
@@ -324,21 +374,31 @@ async def _hourly_intelligence_report():
         raw_data["avg_7d_t1"] = round(avg_t1, 1)
         raw_data["avg_7d_t2"] = round(avg_t2, 1)
 
-        # Only flag after enough of the day has passed (after 10am)
+        # Compute adaptive threshold: if sales have been consistently low for
+        # multiple reports this feels like a slow day, not an alert — raise bar
+        hist_t1 = _historical_values("today_units_t1")
+        hist_t2 = _historical_values("today_units_t2")
+        slow_reports_t1 = sum(1 for v in hist_t1 if avg_t1 > 0 and (avg_t1 - v) / avg_t1 > 0.20)
+        slow_reports_t2 = sum(1 for v in hist_t2 if avg_t2 > 0 and (avg_t2 - v) / avg_t2 > 0.20)
+
         if now.hour >= 10:
             if avg_t1 > 0:
                 pct_t1 = (avg_t1 - today_units_t1) / avg_t1
-                if pct_t1 > 0.30:
+                threshold_t1 = 0.40 if slow_reports_t1 >= 3 else 0.30  # raise bar on persistently slow days
+                if pct_t1 > threshold_t1:
+                    trend = " — patrón de día lento" if slow_reports_t1 >= 3 else ""
                     alerts.append(
-                        f"📉 Ventas hoy S1: {today_units_t1} pzas vs promedio {round(avg_t1)} "
-                        f"— {round(pct_t1 * 100)}% abajo"
+                        f"📉 Ventas hoy S1: {today_units_t1} pzas vs promedio {round(avg_t1)}"
+                        f" — {round(pct_t1 * 100)}% abajo{trend}"
                     )
             if avg_t2 > 0:
                 pct_t2 = (avg_t2 - today_units_t2) / avg_t2
-                if pct_t2 > 0.30:
+                threshold_t2 = 0.40 if slow_reports_t2 >= 3 else 0.30
+                if pct_t2 > threshold_t2:
+                    trend = " — patrón de día lento" if slow_reports_t2 >= 3 else ""
                     alerts.append(
-                        f"📉 Ventas hoy S2: {today_units_t2} pzas vs promedio {round(avg_t2)} "
-                        f"— {round(pct_t2 * 100)}% abajo"
+                        f"📉 Ventas hoy S2: {today_units_t2} pzas vs promedio {round(avg_t2)}"
+                        f" — {round(pct_t2 * 100)}% abajo{trend}"
                     )
 
         # ── 4. Counting progress — flag if behind urgency threshold ───────────
@@ -348,7 +408,6 @@ async def _hourly_intelligence_report():
             t2_prog = counting["terex2"]
             raw_data["conteo_pct_t1"] = t1_prog["pct"]
             raw_data["conteo_pct_t2"] = t2_prog["pct"]
-            # Flag if urgency is not green
             for label, branch_d in [("S1", t1_prog), ("S2", t2_prog)]:
                 urg = branch_d.get("urgency", "")
                 if "CRÍTICO" in urg or "URGENTE" in urg or "ATENCIÓN" in urg:
@@ -362,13 +421,23 @@ async def _hourly_intelligence_report():
         # ── 5. Stockout risk ──────────────────────────────────────────────────
         low_count = len(low_stock)
         raw_data["stockout_risk_skus"] = low_count
+        hist_low = _historical_values("stockout_risk_skus")
+        hist_low_avg = sum(hist_low) / len(hist_low) if hist_low else low_count
         if low_count >= 10:
-            alerts.append(f"⚠️ {low_count} SKUs con ≤2 unidades en S1 — riesgo de quiebre")
+            direction = (
+                " — empeorando" if low_count > hist_low_avg * 1.1
+                else " — mejorando" if low_count < hist_low_avg * 0.9
+                else " — estable"
+            )
+            alerts.append(f"⚠️ {low_count} SKUs con ≤2 unidades en S1 — riesgo de quiebre{direction}")
 
         # ── Build and send message ────────────────────────────────────────────
+        reports_seen = len(past_reports)
         if alerts:
             lines = [f"🧠 ARGOS · Vigilancia Inteligente · {time_label}", ""]
             lines.extend(alerts)
+            if reports_seen > 0:
+                lines.append(f"\n📚 Aprendiendo de {reports_seen} reportes anteriores")
             msg = "\n".join(lines)
         else:
             msg = f"🧠 ARGOS · {time_label} — todo en orden, sin alertas."
@@ -477,6 +546,43 @@ async def _daily_visual_report():
 
         top_estilos = sorted(estilo_qty.items(), key=lambda x: -x[1])[:5]
 
+        # ── Load HERMES own history (last 14 daily_visual reports) ────────────
+        past_visual = []
+        try:
+            past_visual = await supabase_request(
+                method="GET",
+                endpoint=(
+                    "/rest/v1/agent_insights"
+                    "?type=eq.daily_visual"
+                    "&order=created_at.desc"
+                    "&limit=14"
+                    "&select=data,created_at"
+                ),
+            ) or []
+        except Exception:
+            pass
+
+        # Build historical ranking: estilo → list of past ranks (1=top)
+        hist_ranks: dict = defaultdict(list)
+        for rep in past_visual:
+            d = rep.get("data") or {}
+            for rank_0, entry in enumerate((d.get("top_estilos") or []), 1):
+                est = entry.get("estilo") if isinstance(entry, dict) else None
+                if est:
+                    hist_ranks[est].append(rank_0)
+
+        def _rank_trend(estilo, current_rank):
+            """Return a trend label vs historical average rank."""
+            ranks = hist_ranks.get(estilo, [])
+            if len(ranks) < 2:
+                return "🆕 nuevo en top" if not ranks else ""
+            avg_rank = sum(ranks) / len(ranks)
+            if current_rank < avg_rank - 0.8:
+                return f"↑ subió (antes #{round(avg_rank)})"
+            if current_rank > avg_rank + 0.8:
+                return f"↓ bajó (antes #{round(avg_rank)})"
+            return ""
+
         # ── Group today's sales by modelo ─────────────────────────────────────
         modelo_qty: dict = defaultdict(int)
         for row in sales_t1 + sales_t2:
@@ -486,6 +592,13 @@ async def _daily_visual_report():
         top_modelos = sorted(modelo_qty.items(), key=lambda x: -x[1])[:5]
 
         total_today = sum(estilo_qty.values())
+
+        # Historical total avg for context
+        hist_totals = [
+            (r.get("data") or {}).get("total_today", 0)
+            for r in past_visual if (r.get("data") or {}).get("total_today")
+        ]
+        hist_total_avg = round(sum(hist_totals) / len(hist_totals)) if hist_totals else None
 
         # ── Fetch images for top estilos ──────────────────────────────────────
         storage_headers = {
@@ -517,14 +630,20 @@ async def _daily_visual_report():
                     )
 
         # ── Build text summary ────────────────────────────────────────────────
+        vs_hist = ""
+        if hist_total_avg:
+            diff_pct = round((total_today - hist_total_avg) / hist_total_avg * 100)
+            vs_hist = f" (vs prom. {hist_total_avg} pzas: {'+' if diff_pct >= 0 else ''}{diff_pct}%)"
         lines = [
             f"📸 HERMES · Reporte Visual · {time_label}  |  {today_str}",
-            f"Total vendido hoy: {total_today} piezas (ambas sucursales)",
+            f"Total vendido hoy: {total_today} piezas (ambas sucursales){vs_hist}",
             "",
             "🏆 Top 5 Estilos:",
         ]
         for i, (est, qty) in enumerate(top_estilos, 1):
-            lines.append(f"  {i}. {est} — {qty} pzas")
+            trend = _rank_trend(est, i)
+            trend_str = f"  {trend}" if trend else ""
+            lines.append(f"  {i}. {est} — {qty} pzas{trend_str}")
 
         lines += ["", "📱 Top 5 Modelos:"]
         for i, (mod, qty) in enumerate(top_modelos, 1):
