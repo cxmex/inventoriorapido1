@@ -7306,26 +7306,62 @@ async def api_save(payload: SavePayload):
             method="GET",
             endpoint="/rest/v1/inventario1",
             params={
-                "select": "modelo,modelo_id,estilo,estilo_id,terex1",
+                "select": "modelo,modelo_id,estilo,estilo_id,terex1,precio",
                 "barcode": f"eq.{codigo}",
                 "limit": "1",
             },
         )
-        
+
         if not inv_rows:
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail=f"Producto con barcode {codigo} no existe en inventario1"
             )
-        
+
         inv = inv_rows[0]
+
+        # ── $0 price guard: never sell at $0 ─────────────────────────────────
+        sale_price = p_dict.get('price', 0) or 0
+        if sale_price <= 0:
+            catalog_price = inv.get("precio") or 0
+            if catalog_price > 0:
+                sale_price = catalog_price
+                logger.warning(
+                    "🚨 $0 price corrected → $%s for %s (%s)",
+                    catalog_price, p_dict.get('name', ''), codigo,
+                )
+            else:
+                sale_price = 90  # fallback default
+                # Also fix the catalog so it doesn't happen again
+                try:
+                    await supabase_request(
+                        method="PATCH",
+                        endpoint=f"/rest/v1/inventario1?barcode=eq.{codigo}",
+                        json_data={"precio": 90},
+                    )
+                except Exception:
+                    pass
+                logger.warning(
+                    "🚨 $0 price with no catalog price — defaulted to $90 for %s (%s)",
+                    p_dict.get('name', ''), codigo,
+                )
+            # Alert on Telegram
+            try:
+                send_telegram_message(
+                    f"🚨 ARGOS · Venta a $0 corregida\n"
+                    f"Producto: {p_dict.get('name', '?')}\n"
+                    f"Código: {codigo}\n"
+                    f"Precio aplicado: ${sale_price}"
+                )
+            except Exception:
+                pass
 
         # Insert into ventas_terex1 with payment_method
         record = {
             "qty": p_dict.get('qty', 1),
             "name": p_dict.get('name', ''),
             "name_id": codigo,
-            "price": p_dict.get('price', 0),
+            "price": sale_price,
             "fecha": fecha,
             "hora": hora,
             "order_id": next_order_id,
@@ -7355,12 +7391,12 @@ async def api_save(payload: SavePayload):
             json_data={"terex1": new_qty},
         )
 
-        # Add to ticket items
+        # Add to ticket items (use corrected sale_price)
         items_for_ticket.append({
             "qty": p_dict.get('qty', 1),
             "name": p_dict.get('name', ''),
-            "price": p_dict.get('price', 0),
-            "subtotal": p_dict.get('qty', 1) * p_dict.get('price', 0)
+            "price": sale_price,
+            "subtotal": p_dict.get('qty', 1) * sale_price,
         })
 
     # Calculate total
