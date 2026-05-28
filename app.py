@@ -940,6 +940,172 @@ ml_scheduler.add_job(
 )
 
 
+# ── WhatsApp via local Playwright service ─────────────────────────────────────
+# The local whatsapp_service.py runs Playwright + WhatsApp Web on your machine.
+# Railway calls it via ngrok, same as the camera service.
+WHATSAPP_SERVICE_URL = os.environ.get("WHATSAPP_SERVICE_URL", LOCAL_CAMERA_SERVICE)
+WHATSAPP_TO          = os.environ.get("WHATSAPP_TO", "525642460019")
+
+
+async def send_whatsapp_text(text: str, to: str = None):
+    """Send a text via local Playwright WhatsApp service."""
+    to = to or WHATSAPP_TO
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{WHATSAPP_SERVICE_URL}/whatsapp/send",
+                json={"to": to, "text": text},
+            )
+            if resp.status_code < 300:
+                logger.info("WhatsApp text sent to %s", to)
+                return True
+            logger.warning("WhatsApp error %d: %s", resp.status_code, resp.text)
+    except Exception as e:
+        logger.warning("WhatsApp send failed: %s", e)
+    return False
+
+
+async def send_whatsapp_image(image_url: str, caption: str, to: str = None):
+    """Send an image via local Playwright WhatsApp service."""
+    to = to or WHATSAPP_TO
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{WHATSAPP_SERVICE_URL}/whatsapp/send-image",
+                json={"to": to, "image_url": image_url, "caption": caption},
+            )
+            if resp.status_code < 300:
+                logger.info("WhatsApp image sent to %s", to)
+                return True
+            logger.warning("WhatsApp image error %d: %s", resp.status_code, resp.text)
+    except Exception as e:
+        logger.warning("WhatsApp image send failed: %s", e)
+    return False
+
+
+# ── Agent 4: HERMES-WA — Daily WhatsApp visual report (8pm) ──────────────────
+async def _daily_whatsapp_report():
+    """Same as HERMES daily visual but sent via WhatsApp at 8pm."""
+    _tz = pytz.timezone("America/Mexico_City")
+    now = datetime.now(_tz)
+    today_str = now.strftime("%Y-%m-%d")
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r_t1, r_t2 = await asyncio.gather(
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex1"
+                    f"?fecha=eq.{today_str}"
+                    "&select=estilo,estilo_id,modelo,qty,price"
+                    "&limit=5000",
+                    headers=HEADERS,
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex2"
+                    f"?fecha=eq.{today_str}"
+                    "&select=estilo,estilo_id,modelo,qty,price"
+                    "&limit=5000",
+                    headers=HEADERS,
+                ),
+            )
+
+        sales_t1 = r_t1.json() if r_t1.status_code < 400 else []
+        sales_t2 = r_t2.json() if r_t2.status_code < 400 else []
+
+        # Group by estilo
+        estilo_qty: dict = defaultdict(int)
+        estilo_rev: dict = defaultdict(float)
+        estilo_id_map: dict = {}
+        for row in sales_t1 + sales_t2:
+            est = row.get("estilo") or "(sin estilo)"
+            qty = int(row.get("qty") or 0)
+            estilo_qty[est] += qty
+            estilo_rev[est] += qty * float(row.get("price") or 0)
+            eid = row.get("estilo_id")
+            if eid and est not in estilo_id_map:
+                estilo_id_map[est] = eid
+
+        top_estilos = sorted(estilo_qty.items(), key=lambda x: -x[1])[:8]
+        total_pzas = sum(estilo_qty.values())
+        total_rev = sum(estilo_rev.values())
+
+        # Group by modelo
+        modelo_qty: dict = defaultdict(int)
+        for row in sales_t1 + sales_t2:
+            mod = row.get("modelo") or "(sin modelo)"
+            modelo_qty[mod] += int(row.get("qty") or 0)
+        top_modelos = sorted(modelo_qty.items(), key=lambda x: -x[1])[:5]
+
+        # Build text summary
+        lines = [
+            f"📸 *HERMES · Reporte Diario*",
+            f"📅 {today_str}",
+            "",
+            f"🛒 Total: *{total_pzas} piezas* — ${total_rev:,.0f}",
+            "",
+            "🏆 *Top Estilos:*",
+        ]
+        for i, (est, qty) in enumerate(top_estilos, 1):
+            rev = estilo_rev.get(est, 0)
+            lines.append(f"  {i}. {est} — {qty} pzas (${rev:,.0f})")
+
+        lines += ["", "📱 *Top Modelos:*"]
+        for i, (mod, qty) in enumerate(top_modelos, 1):
+            lines.append(f"  {i}. {mod} — {qty} pzas")
+
+        await send_whatsapp_text("\n".join(lines))
+
+        # Send top estilo images via WhatsApp
+        storage_headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+        }
+        for est, qty in top_estilos[:5]:
+            eid = estilo_id_map.get(est)
+            if not eid:
+                continue
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f"{SUPABASE_URL}/storage/v1/object/list/images_estilos",
+                    headers=storage_headers,
+                    json={"prefix": f"{eid}/", "limit": 1},
+                )
+            if resp.status_code >= 400:
+                continue
+            files = resp.json()
+            if files and isinstance(files, list) and files[0].get("name"):
+                img_url = (
+                    f"{SUPABASE_URL}/storage/v1/object/public/images_estilos/"
+                    f"{eid}/{files[0]['name']}"
+                )
+                await send_whatsapp_image(
+                    img_url,
+                    f"{est} — {qty} pzas vendidas hoy (${estilo_rev.get(est, 0):,.0f})",
+                )
+
+        logger.info("WhatsApp daily report sent")
+
+    except Exception as e:
+        logger.error("WhatsApp daily report error: %s", e)
+
+
+ml_scheduler.add_job(
+    _daily_whatsapp_report,
+    CronTrigger(hour=20, minute=0, second=0, timezone="America/Mexico_City"),
+    id="daily_whatsapp_report",
+    replace_existing=True,
+)
+
+
+# ── Test endpoint — trigger WhatsApp report manually ──────────────────────────
+@app.get("/api/test-whatsapp")
+async def test_whatsapp():
+    """Trigger WhatsApp daily report manually for testing."""
+    await _daily_whatsapp_report()
+    return {"ok": True, "message": "WhatsApp report triggered — check your phone"}
+
+
 @app.on_event("startup")
 async def start_scheduler():
     ml_scheduler.start()
