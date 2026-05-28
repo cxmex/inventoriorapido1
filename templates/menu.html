@@ -163,6 +163,10 @@
 
     <div class="container">
 
+        <!-- ── BANNERS (populated by JS) ── -->
+        <div id="conteo-banner" style="display:none; margin-bottom:16px;"></div>
+        <div id="error-rate-banner" style="display:none; margin-bottom:16px;"></div>
+
         <!-- ── NATURAL LANGUAGE QUERY ── -->
         <div class="nl-box">
             <div class="input-group">
@@ -404,14 +408,8 @@
                 const rateBg    = d.error_rate <= 5 ? '#e8f5e9' : d.error_rate <= 15 ? '#fff3e0' : '#ffebee';
                 const rateBd    = d.error_rate <= 5 ? '#a5d6a7' : d.error_rate <= 15 ? '#ffcc80' : '#ef9a9a';
 
-                let el = document.getElementById('error-rate-banner');
-                if (!el) {
-                    el = document.createElement('div');
-                    el.id = 'error-rate-banner';
-                    const nl = document.querySelector('.nl-box');
-                    nl.parentNode.insertBefore(el, nl);
-                }
-                el.style.cssText = `background:${rateBg};border:1px solid ${rateBd};border-radius:12px;padding:14px 18px;margin-bottom:16px;`;
+                const el = document.getElementById('error-rate-banner');
+                el.style.cssText = `display:block;background:${rateBg};border:1px solid ${rateBd};border-radius:12px;padding:14px 18px;margin-bottom:16px;`;
                 el.innerHTML = `
                     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
                         <div style="display:flex;align-items:center;gap:12px;">
@@ -477,15 +475,8 @@
             const bar      = '█'.repeat(barDone) + '░'.repeat(10 - barDone);
             const dayStr   = Object.entries(d.daily).filter(([,v])=>v>0).map(([k,v])=>`${k}: ${v}`).join(' · ') || 'Sin conteos aún';
 
-            let el = document.getElementById('conteo-banner');
-            if (!el) {
-                el = document.createElement('div');
-                el.id = 'conteo-banner';
-                // Insert right after the action buttons row, before nl-box
-                const nl = document.querySelector('.nl-box');
-                nl.parentNode.insertBefore(el, nl);
-            }
-            el.style.cssText = `background:${bgColor};border:1px solid ${bdColor};border-radius:12px;
+            const el = document.getElementById('conteo-banner');
+            el.style.cssText = `display:block;background:${bgColor};border:1px solid ${bdColor};border-radius:12px;
                 padding:14px 18px;margin-bottom:16px;`;
             el.innerHTML = `
                 <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;">
