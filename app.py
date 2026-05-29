@@ -1556,8 +1556,8 @@ async def supabase_request(
     json_data: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     url = f"{SUPABASE_URL}{endpoint}"
-    
-    async with httpx.AsyncClient() as client:
+
+    async with httpx.AsyncClient(timeout=15) as client:
         if method == "GET":
             response = await client.get(url, headers=HEADERS, params=params)
         elif method == "POST":
@@ -7864,15 +7864,15 @@ async def api_save(payload: SavePayload):
                     p_dict.get('name', ''), codigo,
                 )
             # Alert on Telegram
-            try:
-                send_telegram_message(
-                    f"🚨 ARGOS · Venta a $0 corregida\n"
-                    f"Producto: {p_dict.get('name', '?')}\n"
-                    f"Código: {codigo}\n"
-                    f"Precio aplicado: ${sale_price}"
-                )
-            except Exception:
-                pass
+            # Fire-and-forget: don't block the sale for a Telegram notification
+            asyncio.get_event_loop().run_in_executor(
+                None,
+                send_telegram_message,
+                f"🚨 ARGOS · Venta a $0 corregida\n"
+                f"Producto: {p_dict.get('name', '?')}\n"
+                f"Código: {codigo}\n"
+                f"Precio aplicado: ${sale_price}",
+            )
 
         # Insert into ventas_terex1 with payment_method
         record = {
@@ -7920,52 +7920,50 @@ async def api_save(payload: SavePayload):
     # Calculate total
     total = sum(i["subtotal"] for i in items_for_ticket)
     
+    # ── Non-blocking post-sale tasks (don't slow down the PDF response) ─────
     try:
         payment_emoji = "💵" if payment_method == "efectivo" else "💳"
         total_pieces = sum(i['qty'] for i in items_for_ticket)
-    
+
         message = (
             f"🎉 VENTA #{next_order_id}\n"
             f"📊 {total_pieces} piezas\n"
             f"💰 ${total:.2f}\n"
             f"{payment_emoji} {payment_method.title()}\n"
         )
-    
-        send_telegram_message(message)
 
-        import asyncio
-        asyncio.create_task(send_telegram_picture(
-            barcode=None,  # Skip barcode, just use order_id
-            order_id=next_order_id
-        ))
-        
+        # Fire-and-forget: Telegram notification (sync → run in thread pool)
+        asyncio.get_event_loop().run_in_executor(None, send_telegram_message, message)
+
+        # Camera picture — also fire-and-forget
+        try:
+            asyncio.create_task(send_telegram_picture(barcode=None, order_id=next_order_id))
+        except Exception:
+            pass
+
     except Exception as e:
         print(f"Telegram error: {e}")
 
-    # If payment method is efectivo, add entry to conteo_efectivo
+    # Conteo efectivo — run async, don't block
     if payment_method == "efectivo":
-        print(f"DEBUG: Adding to conteo_efectivo for order {next_order_id}")  # Debug
-        try:
-            current_balance = await get_current_balance()
-            new_balance = current_balance + total
-            
-            url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo"
-            payload_conteo = {
-                "nombre": f"Venta #{next_order_id}",
-                "tipo": "credito",
-                "amount": total,
-                "balance": new_balance,
-                "order_id": next_order_id
-            }
-            
-            response = requests.post(url, headers=HEADERS, json=payload_conteo)
-            response.raise_for_status()
-            print(f"Added cash entry for order {next_order_id}: ${total}")
-        except Exception as e:
-            print(f"Error adding conteo_efectivo entry: {e}")
-    else:
-        print(f"DEBUG: Skipping conteo_efectivo (payment method is {payment_method})")
-            # Don't fail the whole transaction if conteo fails
+        async def _add_conteo():
+            try:
+                current_balance = await get_current_balance()
+                new_balance = current_balance + total
+                await supabase_request(
+                    method="POST",
+                    endpoint="/rest/v1/conteo_efectivo",
+                    json_data={
+                        "nombre": f"Venta #{next_order_id}",
+                        "tipo": "credito",
+                        "amount": total,
+                        "balance": new_balance,
+                        "order_id": next_order_id,
+                    },
+                )
+            except Exception as e:
+                print(f"Error adding conteo_efectivo entry: {e}")
+        asyncio.create_task(_add_conteo())
     # Generate redemption token and PDF
     redemption_token = generate_redemption_token()
     await store_redemption_token(next_order_id, redemption_token, total)
