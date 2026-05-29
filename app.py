@@ -1135,6 +1135,327 @@ async def test_whatsapp():
     return {"ok": True, "message": "WhatsApp report triggered — check your phone"}
 
 
+# ── Social Media Service URL (local Playwright service) ───────────────────────
+SOCIAL_SERVICE_URL = os.environ.get("SOCIAL_SERVICE_URL", LOCAL_CAMERA_SERVICE)
+FACEBOOK_PAGE_NAME = os.environ.get("FACEBOOK_PAGE_NAME", "")  # e.g. "fundastock" or page ID
+
+
+# ── Agent 5: APOLLO — Facebook & Instagram Auto-Poster ───────────────────────
+async def _apollo_social_poster():
+    """Post top selling estilos to Facebook and Instagram daily at 11am."""
+    _tz = pytz.timezone("America/Mexico_City")
+    now = datetime.now(_tz)
+    today_str = now.strftime("%Y-%m-%d")
+    seven_days_ago = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    if not FACEBOOK_PAGE_NAME:
+        logger.warning("APOLLO: FACEBOOK_PAGE_NAME not set — skipping")
+        return
+
+    try:
+        # ── Get top selling estilos from last 7 days ──────────────────────
+        async with httpx.AsyncClient(timeout=20) as client:
+            r_t1, r_t2 = await asyncio.gather(
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex1"
+                    f"?fecha=gte.{seven_days_ago}"
+                    "&select=estilo,estilo_id,qty"
+                    "&limit=5000",
+                    headers=HEADERS,
+                ),
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex2"
+                    f"?fecha=gte.{seven_days_ago}"
+                    "&select=estilo,estilo_id,qty"
+                    "&limit=5000",
+                    headers=HEADERS,
+                ),
+            )
+
+        sales = (r_t1.json() if r_t1.status_code < 400 else []) + \
+                (r_t2.json() if r_t2.status_code < 400 else [])
+
+        estilo_qty: dict = defaultdict(int)
+        estilo_id_map: dict = {}
+        for r in sales:
+            est = r.get("estilo") or "(sin estilo)"
+            estilo_qty[est] += int(r.get("qty") or 0)
+            eid = r.get("estilo_id")
+            if eid:
+                estilo_id_map[est] = eid
+
+        top = sorted(estilo_qty.items(), key=lambda x: -x[1])[:3]
+        if not top:
+            return
+
+        # ── Pick a different estilo each day (rotate) ─────────────────────
+        day_index = now.timetuple().tm_yday % len(top)
+        est_name, est_qty = top[day_index]
+        eid = estilo_id_map.get(est_name)
+
+        # ── Get image URL ────────────────────────────────────────────────
+        image_url = None
+        if eid:
+            storage_headers = {
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json",
+            }
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f"{SUPABASE_URL}/storage/v1/object/list/images_estilos",
+                    headers=storage_headers,
+                    json={"prefix": f"{eid}/", "limit": 1},
+                )
+            if resp.status_code < 400:
+                files = resp.json()
+                if files and isinstance(files, list) and files[0].get("name"):
+                    image_url = (
+                        f"{SUPABASE_URL}/storage/v1/object/public/images_estilos/"
+                        f"{eid}/{files[0]['name']}"
+                    )
+
+        # ── Build caption ────────────────────────────────────────────────
+        captions = [
+            f"🔥 Lo más vendido esta semana: {est_name}\n\n"
+            f"¡{est_qty} clientes ya la eligieron! Disponible en tienda.\n\n"
+            f"📱 Protege tu teléfono con estilo\n"
+            f"#FundasTerex #PhoneCases #FundaStock",
+
+            f"⭐ Top ventas: {est_name}\n\n"
+            f"La funda favorita de la semana con {est_qty} unidades vendidas.\n"
+            f"¡Ven por la tuya antes de que se agoten!\n\n"
+            f"#FundasTerex #Fundas #Accesorios",
+
+            f"📱 Tendencia: {est_name}\n\n"
+            f"Nuestros clientes la aman — {est_qty} vendidas esta semana.\n"
+            f"Visítanos en tienda o escríbenos por WhatsApp.\n\n"
+            f"#FundaStock #CasesParaTelefono",
+        ]
+        caption = captions[day_index % len(captions)]
+
+        # ── Post to Facebook via local Playwright service ────────────────
+        async with httpx.AsyncClient(timeout=45) as client:
+            fb_resp = await client.post(
+                f"{SOCIAL_SERVICE_URL}/facebook/post",
+                json={
+                    "page_name": FACEBOOK_PAGE_NAME,
+                    "text": caption,
+                    "image_url": image_url or "",
+                },
+            )
+            fb_ok = fb_resp.status_code < 300 and fb_resp.json().get("ok", False)
+
+            # Also post to Instagram
+            ig_ok = False
+            if image_url:
+                ig_resp = await client.post(
+                    f"{SOCIAL_SERVICE_URL}/instagram/post",
+                    json={
+                        "caption": caption,
+                        "image_url": image_url,
+                    },
+                )
+                ig_ok = ig_resp.status_code < 300 and ig_resp.json().get("ok", False)
+
+        # ── Log to social_posts table ────────────────────────────────────
+        for platform, success in [("facebook", fb_ok), ("instagram", ig_ok)]:
+            try:
+                await supabase_request(
+                    method="POST",
+                    endpoint="/rest/v1/social_posts",
+                    json_data={
+                        "platform": platform,
+                        "post_type": "top_sellers",
+                        "caption": caption,
+                        "image_url": image_url,
+                        "estilos": [{"estilo": est_name, "qty": est_qty}],
+                        "success": success,
+                    },
+                )
+            except Exception:
+                pass
+
+        # Notify on Telegram
+        status = f"FB={'✅' if fb_ok else '❌'} IG={'✅' if ig_ok else '❌'}"
+        send_telegram_message(
+            f"📣 APOLLO · Post publicado\n{est_name} ({est_qty} ventas)\n{status}"
+        )
+
+    except Exception as e:
+        logger.error("APOLLO social poster error: %s", e)
+
+
+ml_scheduler.add_job(
+    _apollo_social_poster,
+    CronTrigger(hour=11, minute=0, second=0, timezone="America/Mexico_City"),
+    id="apollo_social_poster",
+    replace_existing=True,
+)
+
+
+# ── Agent 6: MERCURIO — Customer WhatsApp Campaigns ──────────────────────────
+async def _mercurio_customer_outreach():
+    """Weekly: message customers about new/trending estilos for their phone model."""
+    _tz = pytz.timezone("America/Mexico_City")
+    now = datetime.now(_tz)
+    today_str = now.strftime("%Y-%m-%d")
+    seven_days_ago = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    try:
+        # ── Get customers with WhatsApp from recent sales ─────────────────
+        async with httpx.AsyncClient(timeout=20) as client:
+            r_customers = await client.get(
+                f"{SUPABASE_URL}/rest/v1/ventas_terex1"
+                "?whatsapp=not.is.null"
+                "&select=cliente,whatsapp,modelo,estilo"
+                "&order=created_at.desc"
+                "&limit=500",
+                headers=HEADERS,
+            )
+
+        customers_raw = r_customers.json() if r_customers.status_code < 400 else []
+
+        # Dedupe by phone number, keep most recent modelo
+        customers: dict = {}
+        for c in customers_raw:
+            phone = (c.get("whatsapp") or "").strip()
+            if not phone or len(phone) < 10:
+                continue
+            if phone not in customers:
+                customers[phone] = {
+                    "name": c.get("cliente") or "Cliente",
+                    "phone": phone,
+                    "modelo": c.get("modelo") or "",
+                    "estilo": c.get("estilo") or "",
+                }
+
+        if not customers:
+            return
+
+        # ── Check who already got a message this week ─────────────────────
+        try:
+            recent_msgs = await supabase_request(
+                method="GET",
+                endpoint=(
+                    f"/rest/v1/customer_messages"
+                    f"?sent_at=gte.{seven_days_ago}"
+                    f"&channel=eq.whatsapp"
+                    f"&select=customer_phone"
+                    f"&limit=1000"
+                ),
+            ) or []
+            already_sent = set(r["customer_phone"] for r in recent_msgs)
+        except Exception:
+            already_sent = set()
+
+        # ── Check opt-outs ───────────────────────────────────────────────
+        try:
+            optouts = await supabase_request(
+                method="GET",
+                endpoint="/rest/v1/customer_optouts?select=phone&limit=1000",
+            ) or []
+            opted_out = set(r["phone"] for r in optouts)
+        except Exception:
+            opted_out = set()
+
+        # ── Get this week's top estilos ──────────────────────────────────
+        async with httpx.AsyncClient(timeout=15) as client:
+            r_top = await client.get(
+                f"{SUPABASE_URL}/rest/v1/ventas_terex1"
+                f"?fecha=gte.{seven_days_ago}"
+                "&select=estilo,estilo_id,qty"
+                "&limit=3000",
+                headers=HEADERS,
+            )
+        top_sales = r_top.json() if r_top.status_code < 400 else []
+        estilo_qty: dict = defaultdict(int)
+        for r in top_sales:
+            estilo_qty[r.get("estilo", "")] += int(r.get("qty") or 0)
+        trending = sorted(estilo_qty.items(), key=lambda x: -x[1])[:3]
+        trending_text = ", ".join(f"{e} ({q} vendidas)" for e, q in trending)
+
+        # ── Send messages ────────────────────────────────────────────────
+        sent_count = 0
+        max_per_run = 20  # don't overwhelm
+
+        for phone, cust in customers.items():
+            if sent_count >= max_per_run:
+                break
+            if phone in already_sent or phone in opted_out:
+                continue
+
+            name = cust["name"].split()[0] if cust["name"] else "Cliente"
+            modelo = cust["modelo"]
+
+            msg = (
+                f"Hola {name}! 👋\n\n"
+                f"🔥 Esta semana lo más vendido en Terex:\n"
+                f"{trending_text}\n\n"
+            )
+            if modelo:
+                msg += f"Para tu {modelo} tenemos nuevos estilos disponibles.\n\n"
+            msg += (
+                f"📍 Ven a visitarnos o responde a este mensaje.\n"
+                f"(Responde ALTO para no recibir más mensajes)"
+            )
+
+            ok = await send_whatsapp_text(msg, phone)
+
+            # Log to customer_messages
+            try:
+                await supabase_request(
+                    method="POST",
+                    endpoint="/rest/v1/customer_messages",
+                    json_data={
+                        "channel": "whatsapp",
+                        "customer_name": cust["name"],
+                        "customer_phone": phone,
+                        "message_text": msg,
+                        "campaign_type": "top_sellers",
+                        "delivered": ok,
+                    },
+                )
+            except Exception:
+                pass
+
+            if ok:
+                sent_count += 1
+
+        send_telegram_message(
+            f"💬 MERCURIO · Campaña semanal\n"
+            f"Mensajes enviados: {sent_count} de {len(customers)} clientes\n"
+            f"Trending: {trending_text}"
+        )
+
+    except Exception as e:
+        logger.error("MERCURIO outreach error: %s", e)
+
+
+# Run MERCURIO every Monday at 10am
+ml_scheduler.add_job(
+    _mercurio_customer_outreach,
+    CronTrigger(day_of_week="mon", hour=10, minute=0, timezone="America/Mexico_City"),
+    id="mercurio_customer_outreach",
+    replace_existing=True,
+)
+
+
+# ── Test endpoints ────────────────────────────────────────────────────────────
+@app.get("/api/test-apollo")
+async def test_apollo():
+    """Trigger Facebook/Instagram post manually."""
+    await _apollo_social_poster()
+    return {"ok": True, "message": "APOLLO post triggered"}
+
+
+@app.get("/api/test-mercurio")
+async def test_mercurio():
+    """Trigger customer outreach manually."""
+    await _mercurio_customer_outreach()
+    return {"ok": True, "message": "MERCURIO outreach triggered"}
+
+
 @app.on_event("startup")
 async def start_scheduler():
     if IS_BACKUP:
