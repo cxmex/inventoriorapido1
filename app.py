@@ -1576,8 +1576,15 @@ async def supabase_request(
             status_code=response.status_code,
             detail=f"Supabase API error: {response.text}"
         )
-    
-    return response.json()
+
+    # Some operations return empty body (204 No Content, etc.)
+    if not response.content or response.status_code == 204:
+        return None
+
+    try:
+        return response.json()
+    except Exception:
+        return None
 
 # Helper function for RPC calls
 async def supabase_rpc(function_name: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
