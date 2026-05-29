@@ -4923,8 +4923,8 @@ async def secret_menu_create_estilo(request: Request):
         new_row = {"nombre": nombre}
         if body.get("prioridad") is not None:
             new_row["prioridad"] = int(body["prioridad"])
-        if body.get("precio") is not None and body["precio"] != "":
-            new_row["precio"] = int(body["precio"])
+        # Default price $90 if not specified
+        new_row["precio"] = int(body["precio"]) if body.get("precio") not in (None, "") else 90
         if body.get("cost") is not None and body["cost"] != "":
             new_row["cost"] = int(body["cost"])
         if body.get("supplier"):
