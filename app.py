@@ -236,9 +236,9 @@ ml_scheduler.add_job(
     replace_existing=True,
 )
 
-# ── Agent 1: Hourly Intelligence Reporter ─────────────────────────────────────
+# ── Agent 1: ARGOS — Full Intelligence Reporter ──────────────────────────────
 async def _hourly_intelligence_report():
-    """Query key data every 2 hours (8am–8pm) and send a Telegram summary of anomalies."""
+    """Deep intelligence report every 2 hours: pulls from all data sources."""
     _tz = pytz.timezone("America/Mexico_City")
     now = datetime.now(_tz)
     if now.hour < 8 or now.hour >= 20:
@@ -246,237 +246,263 @@ async def _hourly_intelligence_report():
 
     time_label = now.strftime("%I:%M%p").lstrip("0").lower()
     alerts = []
+    insights = []
     raw_data = {}
 
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            # ── Parallel queries ──────────────────────────────────────────────
-            today_str = now.strftime("%Y-%m-%d")
-            seven_days_ago = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+        today_str = now.strftime("%Y-%m-%d")
+        seven_days_ago = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+        fourteen_days_ago = (now - timedelta(days=14)).strftime("%Y-%m-%d")
+        monday = (now - timedelta(days=now.weekday())).strftime("%Y-%m-%d")
+        last_monday = (now - timedelta(days=now.weekday() + 7)).strftime("%Y-%m-%d")
 
+        async with httpx.AsyncClient(timeout=25) as client:
             (
-                r_neg,          # negative stock
-                r_conteo,       # unreconciled conteo_previo cajas
-                r_sales_t1,     # today's sales terex1
-                r_sales_t2,     # today's sales terex2
-                r_week_t1,      # last 7 days sales terex1 (for avg)
-                r_week_t2,      # last 7 days sales terex2 (for avg)
-                r_low_stock,    # about-to-sell-out (terex1 1-2 units)
+                r_neg, r_conteo, r_sales_t1, r_sales_t2,
+                r_week_t1, r_week_t2, r_low_stock,
+                r_lastweek_t1, r_lastweek_t2,
+                r_thisweek_t1, r_thisweek_t2,
+                r_entradas,
             ) = await asyncio.gather(
-                client.get(
-                    f"{SUPABASE_URL}/rest/v1/inventario1"
-                    "?or=(terex1.lt.0,terex2.lt.0)"
-                    "&select=barcode,estilo,terex1,terex2"
-                    "&limit=500",
-                    headers=HEADERS,
-                ),
-                client.get(
-                    f"{SUPABASE_URL}/rest/v1/conteo_previo"
-                    "?reconciled=eq.false"
-                    "&select=caja_numero"
-                    "&limit=200",
-                    headers=HEADERS,
-                ),
-                client.get(
-                    f"{SUPABASE_URL}/rest/v1/ventas_terex1"
-                    f"?fecha=eq.{today_str}"
-                    "&select=qty"
-                    "&limit=5000",
-                    headers=HEADERS,
-                ),
-                client.get(
-                    f"{SUPABASE_URL}/rest/v1/ventas_terex2"
-                    f"?fecha=eq.{today_str}"
-                    "&select=qty"
-                    "&limit=5000",
-                    headers=HEADERS,
-                ),
-                client.get(
-                    f"{SUPABASE_URL}/rest/v1/ventas_terex1"
-                    f"?fecha=gte.{seven_days_ago}&fecha=lt.{today_str}"
-                    "&select=qty,fecha"
-                    "&limit=10000",
-                    headers=HEADERS,
-                ),
-                client.get(
-                    f"{SUPABASE_URL}/rest/v1/ventas_terex2"
-                    f"?fecha=gte.{seven_days_ago}&fecha=lt.{today_str}"
-                    "&select=qty,fecha"
-                    "&limit=10000",
-                    headers=HEADERS,
-                ),
-                client.get(
-                    f"{SUPABASE_URL}/rest/v1/inventario1"
-                    "?terex1=lte.2&terex1=gt.0"
-                    "&select=barcode,estilo,terex1"
-                    "&limit=1000",
-                    headers=HEADERS,
-                ),
+                # Original 7 queries
+                client.get(f"{SUPABASE_URL}/rest/v1/inventario1?or=(terex1.lt.0,terex2.lt.0)&select=barcode,estilo,terex1,terex2&limit=500", headers=HEADERS),
+                client.get(f"{SUPABASE_URL}/rest/v1/conteo_previo?reconciled=eq.false&select=caja_numero&limit=200", headers=HEADERS),
+                client.get(f"{SUPABASE_URL}/rest/v1/ventas_terex1?fecha=eq.{today_str}&select=estilo,modelo,qty,price&limit=5000", headers=HEADERS),
+                client.get(f"{SUPABASE_URL}/rest/v1/ventas_terex2?fecha=eq.{today_str}&select=estilo,modelo,qty,price&limit=5000", headers=HEADERS),
+                client.get(f"{SUPABASE_URL}/rest/v1/ventas_terex1?fecha=gte.{seven_days_ago}&fecha=lt.{today_str}&select=qty,fecha&limit=10000", headers=HEADERS),
+                client.get(f"{SUPABASE_URL}/rest/v1/ventas_terex2?fecha=gte.{seven_days_ago}&fecha=lt.{today_str}&select=qty,fecha&limit=10000", headers=HEADERS),
+                client.get(f"{SUPABASE_URL}/rest/v1/inventario1?terex1=lte.2&terex1=gt.0&select=barcode,estilo,terex1&limit=1000", headers=HEADERS),
+                # NEW: last week sales by estilo (for comparison)
+                client.get(f"{SUPABASE_URL}/rest/v1/ventas_terex1?fecha=gte.{last_monday}&fecha=lt.{monday}&select=estilo,modelo,qty,price&limit=5000", headers=HEADERS),
+                client.get(f"{SUPABASE_URL}/rest/v1/ventas_terex2?fecha=gte.{last_monday}&fecha=lt.{monday}&select=estilo,modelo,qty,price&limit=5000", headers=HEADERS),
+                # NEW: this week sales by estilo
+                client.get(f"{SUPABASE_URL}/rest/v1/ventas_terex1?fecha=gte.{monday}&select=estilo,modelo,qty,price&limit=5000", headers=HEADERS),
+                client.get(f"{SUPABASE_URL}/rest/v1/ventas_terex2?fecha=gte.{monday}&select=estilo,modelo,qty,price&limit=5000", headers=HEADERS),
+                # NEW: stock entries this week
+                client.get(f"{SUPABASE_URL}/rest/v1/entrada_mercancia?created_at=gte.{monday}&select=estilo,qty&limit=500", headers=HEADERS),
             )
 
-        # ── Parse results ─────────────────────────────────────────────────────
-        neg_rows    = r_neg.json()      if r_neg.status_code    < 400 else []
-        conteo_rows = r_conteo.json()   if r_conteo.status_code < 400 else []
-        sales_t1    = r_sales_t1.json() if r_sales_t1.status_code < 400 else []
-        sales_t2    = r_sales_t2.json() if r_sales_t2.status_code < 400 else []
-        week_t1     = r_week_t1.json()  if r_week_t1.status_code < 400 else []
-        week_t2     = r_week_t2.json()  if r_week_t2.status_code < 400 else []
-        low_stock   = r_low_stock.json() if r_low_stock.status_code < 400 else []
+        # ── Parse ────────────────────────────────────────────────────────────
+        def _j(r): return r.json() if r.status_code < 400 else []
+        neg_rows = _j(r_neg); conteo_rows = _j(r_conteo)
+        sales_t1 = _j(r_sales_t1); sales_t2 = _j(r_sales_t2)
+        week_t1 = _j(r_week_t1); week_t2 = _j(r_week_t2)
+        low_stock = _j(r_low_stock)
+        lw_sales = _j(r_lastweek_t1) + _j(r_lastweek_t2)
+        tw_sales = _j(r_thisweek_t1) + _j(r_thisweek_t2)
+        entradas = _j(r_entradas)
 
-        # ── Load ARGOS own history (last 14 hourly reports) ───────────────────
-        # Used to distinguish new/worsening alerts from ongoing baseline noise
+        # ── ARGOS history ────────────────────────────────────────────────────
         past_reports = []
         try:
             past_reports = await supabase_request(
                 method="GET",
-                endpoint=(
-                    "/rest/v1/agent_insights"
-                    "?type=eq.hourly"
-                    "&order=created_at.desc"
-                    "&limit=14"
-                    "&select=data,created_at"
-                ),
+                endpoint="/rest/v1/agent_insights?type=eq.hourly&order=created_at.desc&limit=14&select=data,created_at",
             ) or []
         except Exception:
             pass
 
-        def _historical_values(key):
-            """Extract a numeric field from past report data JSONs."""
-            vals = []
+        def _streak(key, fn):
+            c = 0
             for r in past_reports:
-                d = r.get("data") or {}
-                v = d.get(key)
-                if v is not None:
-                    try:
-                        vals.append(float(v))
-                    except (TypeError, ValueError):
-                        pass
-            return vals
+                v = (r.get("data") or {}).get(key)
+                if v is not None and fn(float(v)): c += 1
+                else: break
+            return c
 
-        def _streak(key, threshold_fn):
-            """How many consecutive past reports triggered a condition on `key`."""
-            count = 0
-            for r in past_reports:
-                d = r.get("data") or {}
-                v = d.get(key)
-                if v is not None and threshold_fn(float(v)):
-                    count += 1
-                else:
-                    break
-            return count
-
-        # ── 1. Negative stock ─────────────────────────────────────────────────
+        # ═══════════════════════════════════════════════════════════════════
+        # SECTION 1: OPERATIONAL ALERTS (same as before but condensed)
+        # ═══════════════════════════════════════════════════════════════════
         neg_count = len(neg_rows)
         raw_data["neg_stock_skus"] = neg_count
         if neg_count > 0:
-            streak = _streak("neg_stock_skus", lambda v: v > 0)
-            if streak >= 3:
-                alerts.append(
-                    f"🔴 Stock negativo en {neg_count} SKUs — problema persistente ({streak} reportes seguidos)"
-                )
-            else:
-                alerts.append(f"🔴 Stock negativo en {neg_count} SKUs — revisar urgente")
+            s = _streak("neg_stock_skus", lambda v: v > 0)
+            alerts.append(f"🔴 Stock negativo: {neg_count} SKUs" + (f" ({s}x)" if s >= 3 else ""))
 
-        # ── 2. Pending conteo cajas ───────────────────────────────────────────
-        unreconciled_cajas = len(set(r["caja_numero"] for r in conteo_rows))
-        raw_data["conteo_previo_pendientes"] = unreconciled_cajas
-        if unreconciled_cajas > 3:
-            streak = _streak("conteo_previo_pendientes", lambda v: v > 3)
-            tag = f" — sin cambio desde hace {streak} reportes" if streak >= 3 else ""
-            alerts.append(f"⏳ {unreconciled_cajas} cajas de conteo previo sin verificar{tag}")
+        unreconciled = len(set(r["caja_numero"] for r in conteo_rows))
+        raw_data["conteo_previo_pendientes"] = unreconciled
+        if unreconciled > 3:
+            alerts.append(f"⏳ {unreconciled} cajas sin verificar")
 
-        # ── 3. Sales velocity today vs 7-day average ─────────────────────────
-        today_units_t1 = sum(int(r.get("qty") or 0) for r in sales_t1)
-        today_units_t2 = sum(int(r.get("qty") or 0) for r in sales_t2)
+        today_t1 = sum(int(r.get("qty") or 0) for r in sales_t1)
+        today_t2 = sum(int(r.get("qty") or 0) for r in sales_t2)
+        today_rev = sum(int(r.get("qty") or 0) * float(r.get("price") or 0) for r in sales_t1 + sales_t2)
+        raw_data["today_units_t1"] = today_t1
+        raw_data["today_units_t2"] = today_t2
+        raw_data["today_revenue"] = round(today_rev)
 
         def _daily_avg(rows):
-            by_day = defaultdict(int)
-            for r in rows:
-                by_day[r.get("fecha", "")] += int(r.get("qty") or 0)
-            return sum(by_day.values()) / max(len(by_day), 1) if by_day else 0
+            by_d = defaultdict(int)
+            for r in rows: by_d[r.get("fecha", "")] += int(r.get("qty") or 0)
+            return sum(by_d.values()) / max(len(by_d), 1) if by_d else 0
 
-        avg_t1 = _daily_avg(week_t1)
-        avg_t2 = _daily_avg(week_t2)
-
-        raw_data["today_units_t1"] = today_units_t1
-        raw_data["today_units_t2"] = today_units_t2
-        raw_data["avg_7d_t1"] = round(avg_t1, 1)
-        raw_data["avg_7d_t2"] = round(avg_t2, 1)
-
-        # Compute adaptive threshold: if sales have been consistently low for
-        # multiple reports this feels like a slow day, not an alert — raise bar
-        hist_t1 = _historical_values("today_units_t1")
-        hist_t2 = _historical_values("today_units_t2")
-        slow_reports_t1 = sum(1 for v in hist_t1 if avg_t1 > 0 and (avg_t1 - v) / avg_t1 > 0.20)
-        slow_reports_t2 = sum(1 for v in hist_t2 if avg_t2 > 0 and (avg_t2 - v) / avg_t2 > 0.20)
-
+        avg_t1 = _daily_avg(week_t1); avg_t2 = _daily_avg(week_t2)
         if now.hour >= 10:
-            if avg_t1 > 0:
-                pct_t1 = (avg_t1 - today_units_t1) / avg_t1
-                threshold_t1 = 0.40 if slow_reports_t1 >= 3 else 0.30  # raise bar on persistently slow days
-                if pct_t1 > threshold_t1:
-                    trend = " — patrón de día lento" if slow_reports_t1 >= 3 else ""
-                    alerts.append(
-                        f"📉 Ventas hoy S1: {today_units_t1} pzas vs promedio {round(avg_t1)}"
-                        f" — {round(pct_t1 * 100)}% abajo{trend}"
-                    )
-            if avg_t2 > 0:
-                pct_t2 = (avg_t2 - today_units_t2) / avg_t2
-                threshold_t2 = 0.40 if slow_reports_t2 >= 3 else 0.30
-                if pct_t2 > threshold_t2:
-                    trend = " — patrón de día lento" if slow_reports_t2 >= 3 else ""
-                    alerts.append(
-                        f"📉 Ventas hoy S2: {today_units_t2} pzas vs promedio {round(avg_t2)}"
-                        f" — {round(pct_t2 * 100)}% abajo{trend}"
-                    )
+            for label, today, avg in [("S1", today_t1, avg_t1), ("S2", today_t2, avg_t2)]:
+                if avg > 0 and (avg - today) / avg > 0.30:
+                    alerts.append(f"📉 Ventas {label}: {today} vs avg {round(avg)} ({round((avg-today)/avg*100)}% abajo)")
 
-        # ── 4. Counting progress — flag if behind urgency threshold ───────────
-        try:
-            counting = await _counting_progress_data()
-            t1_prog = counting["terex1"]
-            t2_prog = counting["terex2"]
-            raw_data["conteo_pct_t1"] = t1_prog["pct"]
-            raw_data["conteo_pct_t2"] = t2_prog["pct"]
-            for label, branch_d in [("S1", t1_prog), ("S2", t2_prog)]:
-                urg = branch_d.get("urgency", "")
-                if "CRÍTICO" in urg or "URGENTE" in urg or "ATENCIÓN" in urg:
-                    alerts.append(
-                        f"{urg} Conteo {label}: {branch_d['pct']}% — "
-                        f"faltan {branch_d['remaining']:,} SKUs"
-                    )
-        except Exception as ce:
-            logger.warning("Conteo check failed in intelligence report: %s", ce)
-
-        # ── 5. Stockout risk ──────────────────────────────────────────────────
         low_count = len(low_stock)
         raw_data["stockout_risk_skus"] = low_count
-        hist_low = _historical_values("stockout_risk_skus")
-        hist_low_avg = sum(hist_low) / len(hist_low) if hist_low else low_count
         if low_count >= 10:
-            direction = (
-                " — empeorando" if low_count > hist_low_avg * 1.1
-                else " — mejorando" if low_count < hist_low_avg * 0.9
-                else " — estable"
-            )
-            alerts.append(f"⚠️ {low_count} SKUs con ≤2 unidades en S1 — riesgo de quiebre{direction}")
+            alerts.append(f"⚠️ {low_count} SKUs ≤2 unidades — riesgo quiebre")
 
-        # ── Build and send message ────────────────────────────────────────────
+        try:
+            counting = await _counting_progress_data()
+            for label, b in [("S1", counting["terex1"]), ("S2", counting["terex2"])]:
+                urg = b.get("urgency", "")
+                if "CRÍTICO" in urg or "URGENTE" in urg:
+                    alerts.append(f"{urg} Conteo {label}: {b['pct']}%")
+        except Exception:
+            pass
+
+        # ═══════════════════════════════════════════════════════════════════
+        # SECTION 2: ESTILO VELOCITY (NEW)
+        # ═══════════════════════════════════════════════════════════════════
+        tw_by_est = defaultdict(int)
+        lw_by_est = defaultdict(int)
+        for r in tw_sales: tw_by_est[r.get("estilo", "?")] += int(r.get("qty") or 0)
+        for r in lw_sales: lw_by_est[r.get("estilo", "?")] += int(r.get("qty") or 0)
+
+        # New estilos (sold this week, not last week)
+        new_estilos = [(e, q) for e, q in tw_by_est.items() if e not in lw_by_est and q >= 2]
+        new_estilos.sort(key=lambda x: -x[1])
+        if new_estilos:
+            top3 = ", ".join(f"{e}({q})" for e, q in new_estilos[:3])
+            insights.append(f"🆕 {len(new_estilos)} estilos nuevos vendidos: {top3}")
+            raw_data["new_estilos"] = [{"estilo": e, "qty": q} for e, q in new_estilos]
+
+        # Fastest growing estilos
+        growing = [(e, tw_by_est[e], lw_by_est.get(e, 0), tw_by_est[e] - lw_by_est.get(e, 0))
+                    for e in tw_by_est if tw_by_est[e] > lw_by_est.get(e, 0) and tw_by_est[e] >= 5]
+        growing.sort(key=lambda x: -x[3])
+        if growing:
+            top = growing[0]
+            insights.append(f"🚀 Más crecimiento: {top[0]} (+{top[3]} pzas, {top[2]}→{top[1]})")
+            raw_data["top_growing"] = {"estilo": top[0], "this_week": top[1], "last_week": top[2]}
+
+        # Declining estilos
+        declining = [(e, lw_by_est[e], tw_by_est.get(e, 0), lw_by_est[e] - tw_by_est.get(e, 0))
+                     for e in lw_by_est if lw_by_est[e] > tw_by_est.get(e, 0) + 5 and lw_by_est[e] >= 10]
+        declining.sort(key=lambda x: -x[3])
+        if declining:
+            top = declining[0]
+            insights.append(f"📉 Mayor caída: {top[0]} (-{top[3]} pzas, {top[1]}→{top[2]})")
+
+        # ═══════════════════════════════════════════════════════════════════
+        # SECTION 3: MODELO TRENDS (NEW)
+        # ═══════════════════════════════════════════════════════════════════
+        tw_by_mod = defaultdict(lambda: {"qty": 0, "rev": 0})
+        lw_by_mod = defaultdict(lambda: {"qty": 0, "rev": 0})
+        for r in tw_sales:
+            m = r.get("modelo", "?")
+            tw_by_mod[m]["qty"] += int(r.get("qty") or 0)
+            tw_by_mod[m]["rev"] += int(r.get("qty") or 0) * float(r.get("price") or 0)
+        for r in lw_sales:
+            m = r.get("modelo", "?")
+            lw_by_mod[m]["qty"] += int(r.get("qty") or 0)
+            lw_by_mod[m]["rev"] += int(r.get("qty") or 0) * float(r.get("price") or 0)
+
+        # Top modelo this week
+        top_mod = max(tw_by_mod.items(), key=lambda x: x[1]["qty"], default=None)
+        if top_mod:
+            lq = lw_by_mod.get(top_mod[0], {}).get("qty", 0)
+            diff = top_mod[1]["qty"] - lq
+            sign = f"+{diff}" if diff > 0 else str(diff)
+            insights.append(f"📱 Top modelo: {top_mod[0]} ({top_mod[1]['qty']} pzas, ${top_mod[1]['rev']:,.0f}, {sign} vs semana pasada)")
+
+        # New phone models gaining traction
+        new_mods = [(m, d["qty"]) for m, d in tw_by_mod.items()
+                    if m not in lw_by_mod and d["qty"] >= 3]
+        if new_mods:
+            insights.append(f"📲 Modelos nuevos: {', '.join(f'{m}({q})' for m,q in sorted(new_mods, key=lambda x:-x[1])[:3])}")
+
+        # ═══════════════════════════════════════════════════════════════════
+        # SECTION 4: STOCK ENTRIES vs SALES (NEW)
+        # ═══════════════════════════════════════════════════════════════════
+        ent_by_est = defaultdict(int)
+        for e in entradas: ent_by_est[e.get("estilo", "?")] += e.get("qty", 0)
+        total_entered = sum(ent_by_est.values())
+        if total_entered > 0:
+            # Which entries are actually selling?
+            selling = [(e, q, tw_by_est.get(e, 0)) for e, q in ent_by_est.items() if tw_by_est.get(e, 0) > 0]
+            not_selling = [(e, q) for e, q in ent_by_est.items() if tw_by_est.get(e, 0) == 0]
+            raw_data["entradas_total"] = total_entered
+            raw_data["entradas_selling"] = len(selling)
+            raw_data["entradas_not_selling"] = len(not_selling)
+            if not_selling:
+                top_dead = sorted(not_selling, key=lambda x: -x[1])[:2]
+                dead_str = ", ".join(f"{e}({q} pzas)" for e, q in top_dead)
+                insights.append(f"📦 Entradas sin venta: {dead_str}")
+
+        # ═══════════════════════════════════════════════════════════════════
+        # SECTION 5: BRANCH COMPARISON (NEW)
+        # ═══════════════════════════════════════════════════════════════════
+        tw_t1_qty = sum(int(r.get("qty") or 0) for r in _j(r_thisweek_t1))
+        tw_t2_qty = sum(int(r.get("qty") or 0) for r in _j(r_thisweek_t2))
+        tw_t1_rev = sum(int(r.get("qty") or 0) * float(r.get("price") or 0) for r in _j(r_thisweek_t1))
+        tw_t2_rev = sum(int(r.get("qty") or 0) * float(r.get("price") or 0) for r in _j(r_thisweek_t2))
+        raw_data["week_t1_qty"] = tw_t1_qty
+        raw_data["week_t2_qty"] = tw_t2_qty
+        if tw_t1_qty + tw_t2_qty > 0:
+            t1_pct = round(tw_t1_qty / (tw_t1_qty + tw_t2_qty) * 100)
+            insights.append(f"🏪 S1: {tw_t1_qty} pzas (${tw_t1_rev:,.0f}) · S2: {tw_t2_qty} pzas (${tw_t2_rev:,.0f}) — S1={t1_pct}%")
+
+        # ═══════════════════════════════════════════════════════════════════
+        # SECTION 6: REVENUE & PRICE INSIGHTS (NEW)
+        # ═══════════════════════════════════════════════════════════════════
+        tw_total_rev = tw_t1_rev + tw_t2_rev
+        lw_total_rev = sum(int(r.get("qty") or 0) * float(r.get("price") or 0) for r in lw_sales)
+        raw_data["week_revenue"] = round(tw_total_rev)
+        raw_data["last_week_revenue"] = round(lw_total_rev)
+        if lw_total_rev > 0:
+            rev_change = round((tw_total_rev - lw_total_rev) / lw_total_rev * 100)
+            if abs(rev_change) >= 10:
+                icon = "💰" if rev_change > 0 else "💸"
+                insights.append(f"{icon} Revenue semana: ${tw_total_rev:,.0f} ({'+' if rev_change>0 else ''}{rev_change}% vs semana pasada)")
+
+        # Zero-price sales today
+        zero_price = [r for r in sales_t1 + sales_t2 if float(r.get("price") or 0) == 0]
+        if zero_price:
+            alerts.append(f"🚨 {len(zero_price)} ventas a $0 hoy — revisar precios")
+
+        # ═══════════════════════════════════════════════════════════════════
+        # BUILD MESSAGE
+        # ═══════════════════════════════════════════════════════════════════
         reports_seen = len(past_reports)
-        if alerts:
-            lines = [f"🧠 ARGOS · Vigilancia Inteligente · {time_label}", ""]
-            lines.extend(alerts)
-            if reports_seen > 0:
-                lines.append(f"\n📚 Aprendiendo de {reports_seen} reportes anteriores")
-            msg = "\n".join(lines)
-        else:
-            msg = f"🧠 ARGOS · {time_label} — todo en orden, sin alertas."
+        lines = [f"🧠 ARGOS · {time_label}", ""]
 
-        send_telegram_message(msg)
+        if today_t1 + today_t2 > 0:
+            lines.append(f"Hoy: {today_t1 + today_t2} pzas · ${today_rev:,.0f}")
+            lines.append("")
+
+        if alerts:
+            lines.append("⚠️ ALERTAS:")
+            lines.extend(alerts)
+            lines.append("")
+
+        if insights:
+            lines.append("💡 INSIGHTS:")
+            lines.extend(insights)
+            lines.append("")
+
+        if reports_seen > 0:
+            lines.append(f"📚 Basado en {reports_seen} reportes previos")
+
+        msg = "\n".join(lines)
+
+        # Send as two messages if too long for Telegram (max ~4096 chars)
+        if len(msg) > 4000:
+            mid = msg.rfind("\n", 0, 4000)
+            asyncio.get_event_loop().run_in_executor(None, send_telegram_message, msg[:mid])
+            asyncio.get_event_loop().run_in_executor(None, send_telegram_message, msg[mid:])
+        else:
+            asyncio.get_event_loop().run_in_executor(None, send_telegram_message, msg)
         sent = True
 
     except Exception as e:
         logger.error("Hourly intelligence report error: %s", e)
-        msg = f"⚠️ Error en reporte inteligente: {e}"
+        msg = f"⚠️ ARGOS error: {e}"
         sent = False
 
     # ── Save to agent_insights ────────────────────────────────────────────────
