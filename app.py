@@ -529,6 +529,187 @@ ml_scheduler.add_job(
 )
 
 
+# ── Agent 7: ATLAS — Daily Stock & Asset Tracker ─────────────────────────────
+async def _atlas_daily_snapshot():
+    """Every night at 9pm: snapshot total inventory, asset value, and day's sales."""
+    _tz = pytz.timezone("America/Mexico_City")
+    now = datetime.now(_tz)
+    today_str = now.strftime("%Y-%m-%d")
+
+    try:
+        async with httpx.AsyncClient(timeout=25) as client:
+            r_stock, r_sales_t1, r_sales_t2, r_entradas = await asyncio.gather(
+                # Full inventory with prices
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/inventario1"
+                    "?select=terex1,terex2,precio"
+                    "&limit=5000",
+                    headers=HEADERS,
+                ),
+                # Today's sales T1
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex1"
+                    f"?fecha=eq.{today_str}"
+                    "&select=qty,price"
+                    "&limit=5000",
+                    headers=HEADERS,
+                ),
+                # Today's sales T2
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/ventas_terex2"
+                    f"?fecha=eq.{today_str}"
+                    "&select=qty,price"
+                    "&limit=5000",
+                    headers=HEADERS,
+                ),
+                # Today's entradas
+                client.get(
+                    f"{SUPABASE_URL}/rest/v1/entrada_mercancia"
+                    f"?created_at=gte.{today_str}"
+                    "&select=qty"
+                    "&limit=500",
+                    headers=HEADERS,
+                ),
+            )
+
+        def _j(r): return r.json() if r.status_code < 400 else []
+        inv = _j(r_stock)
+        sales = _j(r_sales_t1) + _j(r_sales_t2)
+        entradas = _j(r_entradas)
+
+        # Stock metrics
+        t1_pzas = sum(r.get('terex1') or 0 for r in inv if (r.get('terex1') or 0) > 0)
+        t2_pzas = sum(r.get('terex2') or 0 for r in inv if (r.get('terex2') or 0) > 0)
+        t1_skus = sum(1 for r in inv if (r.get('terex1') or 0) > 0)
+        t2_skus = sum(1 for r in inv if (r.get('terex2') or 0) > 0)
+        t1_asset = sum((r.get('terex1') or 0) * (r.get('precio') or 90) for r in inv if (r.get('terex1') or 0) > 0)
+        t2_asset = sum((r.get('terex2') or 0) * (r.get('precio') or 90) for r in inv if (r.get('terex2') or 0) > 0)
+
+        # Sales metrics
+        day_pzas = sum(int(r.get('qty') or 0) for r in sales)
+        day_rev = sum(int(r.get('qty') or 0) * float(r.get('price') or 0) for r in sales)
+        day_ent = sum(r.get('qty', 0) for r in entradas)
+
+        snapshot = {
+            "fecha": today_str,
+            "terex1_pzas": t1_pzas, "terex2_pzas": t2_pzas, "total_pzas": t1_pzas + t2_pzas,
+            "terex1_skus": t1_skus, "terex2_skus": t2_skus, "total_skus": t1_skus + t2_skus,
+            "terex1_asset": t1_asset, "terex2_asset": t2_asset, "total_asset": t1_asset + t2_asset,
+            "day_sales_pzas": day_pzas, "day_sales_rev": day_rev, "day_entradas": day_ent,
+        }
+
+        # Upsert (update if today already exists)
+        await supabase_request(
+            method="POST",
+            endpoint="/rest/v1/stock_snapshots",
+            json_data=snapshot,
+        )
+
+        # ── Load history for trend analysis ──────────────────────────────
+        history = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/stock_snapshots?order=fecha.desc&limit=30&select=fecha,total_pzas,total_asset,day_sales_rev,day_entradas",
+        ) or []
+
+        # Calculate retail/accounting KPIs
+        total_pzas = t1_pzas + t2_pzas
+        total_asset = t1_asset + t2_asset
+
+        # Inventory Turnover = Sales / Avg Inventory (annualized from last 7 days)
+        last_7 = [h for h in history if h.get('day_sales_rev')][:7]
+        week_rev = sum(h.get('day_sales_rev', 0) for h in last_7)
+        avg_inv = sum(h.get('total_asset', total_asset) for h in last_7) / max(len(last_7), 1)
+        turnover_annual = (week_rev / 7 * 365) / avg_inv if avg_inv > 0 else 0
+
+        # Days of Inventory (DOI) = Avg Inventory / Daily COGS
+        daily_sales = week_rev / 7 if last_7 else 0
+        doi = total_asset / daily_sales if daily_sales > 0 else 999
+
+        # Sell-Through Rate = Units Sold / (Units Sold + Current Stock)
+        week_pzas = sum(h.get('day_sales_pzas', 0) for h in last_7)
+        sell_through = week_pzas / (week_pzas + total_pzas) * 100 if (week_pzas + total_pzas) > 0 else 0
+
+        # GMROI = Gross Margin / Avg Inventory Cost (simplified: revenue / inventory value)
+        gmroi = (week_rev / 7 * 30) / total_asset if total_asset > 0 else 0
+
+        # Stock-to-Sales Ratio
+        stock_sales = total_pzas / (week_pzas / 7) if week_pzas > 0 else 999
+
+        # Trend: compare to 7 days ago
+        old_snap = history[6] if len(history) > 6 else None
+        stock_change = total_pzas - (old_snap.get('total_pzas', total_pzas) if old_snap else total_pzas)
+        asset_change = total_asset - (old_snap.get('total_asset', total_asset) if old_snap else total_asset)
+
+        # ── Build Telegram report ────────────────────────────────────────
+        lines = [
+            f"📊 ATLAS · Reporte Diario de Inventario · {today_str}",
+            "",
+            f"🏪 STOCK:",
+            f"  S1: {t1_pzas:,} pzas ({t1_skus} SKUs) · ${t1_asset:,.0f}",
+            f"  S2: {t2_pzas:,} pzas ({t2_skus} SKUs) · ${t2_asset:,.0f}",
+            f"  Total: {total_pzas:,} pzas · ${total_asset:,.0f}",
+            "",
+            f"📈 HOY:",
+            f"  Vendido: {day_pzas} pzas · ${day_rev:,.0f}",
+            f"  Entradas: {day_ent} pzas",
+            "",
+            f"📐 KPIs RETAIL:",
+            f"  Rotación anual: {turnover_annual:.1f}x",
+            f"  Días de inventario (DOI): {doi:.0f} días",
+            f"  Sell-through semanal: {sell_through:.1f}%",
+            f"  GMROI mensual: {gmroi:.2f}",
+            f"  Stock-to-Sales: {stock_sales:.0f} días",
+            "",
+            f"📉 TENDENCIA (7d):",
+            f"  Stock: {'+' if stock_change >= 0 else ''}{stock_change:,} pzas",
+            f"  Valor: {'+' if asset_change >= 0 else ''}${asset_change:,.0f}",
+        ]
+
+        msg = "\n".join(lines)
+        asyncio.get_event_loop().run_in_executor(None, send_telegram_message, msg)
+
+        # Save to agent_insights
+        try:
+            await supabase_request(
+                method="POST",
+                endpoint="/rest/v1/agent_insights",
+                json_data={
+                    "type": "atlas_daily",
+                    "summary": msg,
+                    "data": {
+                        **snapshot,
+                        "turnover_annual": round(turnover_annual, 2),
+                        "doi": round(doi),
+                        "sell_through_pct": round(sell_through, 1),
+                        "gmroi": round(gmroi, 3),
+                        "stock_to_sales": round(stock_sales),
+                    },
+                    "sent_telegram": True,
+                },
+            )
+        except Exception:
+            pass
+
+        logger.info("ATLAS snapshot saved: %s pzas, $%s", total_pzas, total_asset)
+
+    except Exception as e:
+        logger.error("ATLAS daily snapshot error: %s", e)
+        try:
+            asyncio.get_event_loop().run_in_executor(
+                None, send_telegram_message, f"⚠️ ATLAS error: {e}"
+            )
+        except Exception:
+            pass
+
+
+ml_scheduler.add_job(
+    _atlas_daily_snapshot,
+    CronTrigger(hour=21, minute=0, second=0, timezone="America/Mexico_City"),
+    id="atlas_daily_snapshot",
+    replace_existing=True,
+)
+
+
 # ── Agent 2: Visual Daily Report (3pm and 7pm) ────────────────────────────────
 async def _daily_visual_report():
     """Send top estilos/modelos sold today with images to Telegram at 3pm and 7pm."""
