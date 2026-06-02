@@ -1342,6 +1342,50 @@ async def test_whatsapp():
     return {"ok": True, "message": "WhatsApp report triggered — check your phone"}
 
 
+# ── Remote Python Runner ─────────────────────────────────────────────────────
+@app.post("/api/run-python")
+async def run_python_endpoint(request: Request):
+    """Execute Python code on the server. Returns stdout + result."""
+    import io as _io, traceback as _tb
+    body = await request.json()
+    code = body.get("code", "")
+    if not code:
+        return JSONResponse({"error": "No code provided"}, status_code=400)
+
+    old_stdout = sys.stdout
+    sys.stdout = captured = _io.StringIO()
+    result = None
+    error = None
+    try:
+        exec_globals = {
+            "__builtins__": __builtins__,
+            "supabase_request": supabase_request,
+            "SUPABASE_URL": SUPABASE_URL,
+            "SUPABASE_KEY": SUPABASE_KEY,
+            "HEADERS": HEADERS,
+            "httpx": httpx,
+            "asyncio": asyncio,
+            "json": json,
+            "defaultdict": defaultdict,
+            "datetime": datetime,
+            "timedelta": timedelta,
+            "send_telegram_message": send_telegram_message,
+        }
+        exec(code, exec_globals)
+        result = exec_globals.get("result", None)
+    except Exception:
+        error = _tb.format_exc()
+    finally:
+        sys.stdout = old_stdout
+
+    return {
+        "ok": error is None,
+        "output": captured.getvalue(),
+        "result": str(result) if result is not None else None,
+        "error": error,
+    }
+
+
 # ── Social Media Service URL (local Playwright service) ───────────────────────
 SOCIAL_SERVICE_URL = os.environ.get("SOCIAL_SERVICE_URL", LOCAL_CAMERA_SERVICE)
 FACEBOOK_PAGE_NAME = os.environ.get("FACEBOOK_PAGE_NAME", "")  # e.g. "fundastock" or page ID
