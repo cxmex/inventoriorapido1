@@ -8076,7 +8076,7 @@ async def api_save(payload: SavePayload):
             method="GET",
             endpoint="/rest/v1/inventario1",
             params={
-                "select": "modelo,modelo_id,estilo,estilo_id,terex1,precio",
+                "select": "modelo,modelo_id,estilo,estilo_id,color,color_id,terex1,precio",
                 "barcode": f"eq.{codigo}",
                 "limit": "1",
             },
@@ -8161,12 +8161,17 @@ async def api_save(payload: SavePayload):
             json_data={"terex1": new_qty},
         )
 
-        # Add to ticket items (use corrected sale_price)
+        # Track estilo/color info for Telegram photo
         items_for_ticket.append({
             "qty": p_dict.get('qty', 1),
             "name": p_dict.get('name', ''),
             "price": sale_price,
             "subtotal": p_dict.get('qty', 1) * sale_price,
+            "_estilo_id": inv.get("estilo_id"),
+            "_estilo": inv.get("estilo", ""),
+            "_color": inv.get("color", ""),
+            "_color_id": inv.get("color_id"),
+            "_codigo": codigo,
         })
 
     # Calculate total
@@ -8186,6 +8191,105 @@ async def api_save(payload: SavePayload):
 
         # Fire-and-forget: Telegram notification (sync → run in thread pool)
         asyncio.get_event_loop().run_in_executor(None, send_telegram_message, message)
+
+        # Send estilo/color photos for each product sold
+        async def _send_product_photos():
+            try:
+                # Build color name → color_id map for items without color_id
+                _name_to_cid = {}
+                try:
+                    cid_rows = await supabase_request(
+                        method="GET",
+                        endpoint="/rest/v1/inventario1?color_id=not.is.null&select=color,color_id&limit=500",
+                    ) or []
+                    for cr in cid_rows:
+                        if cr.get("color") and cr.get("color_id"):
+                            _name_to_cid[cr["color"].upper()] = cr["color_id"]
+                except Exception:
+                    pass
+
+                storage_headers = {
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": "application/json",
+                }
+
+                for item in items_for_ticket:
+                    eid = item.get("_estilo_id")
+                    color = item.get("_color", "")
+                    color_id = item.get("_color_id") or _name_to_cid.get(color.upper(), None)
+                    estilo = item.get("_estilo", "")
+                    codigo = item.get("_codigo", "")
+
+                    if not eid:
+                        continue
+
+                    photo_url = None
+                    photo_source = ""
+
+                    # 1. Try color-specific photo from image_uploads
+                    if color_id:
+                        try:
+                            img_rows = await supabase_request(
+                                method="GET",
+                                endpoint=f"/rest/v1/image_uploads?estilo_id=eq.{eid}&color_id=eq.{color_id}&select=public_url&limit=1",
+                            ) or []
+                            if img_rows and img_rows[0].get("public_url"):
+                                photo_url = img_rows[0]["public_url"]
+                                photo_source = "color"
+                        except Exception:
+                            pass
+
+                    # 2. Fallback: estilo photo from images_estilos bucket
+                    if not photo_url:
+                        try:
+                            async with httpx.AsyncClient(timeout=8) as hc:
+                                resp = await hc.post(
+                                    f"{SUPABASE_URL}/storage/v1/object/list/images_estilos",
+                                    headers=storage_headers,
+                                    json={"prefix": f"{eid}/", "limit": 1},
+                                )
+                            if resp.status_code < 400:
+                                files = [f for f in resp.json() if f.get("id")]
+                                if files:
+                                    photo_url = f"{SUPABASE_URL}/storage/v1/object/public/images_estilos/{eid}/{files[0]['name']}"
+                                    photo_source = "estilo"
+                        except Exception:
+                            pass
+
+                    # 3. Send photo or reminder
+                    if photo_url:
+                        caption = f"📸 {estilo}\n🎨 {color}\n📦 {codigo}"
+                        try:
+                            async with httpx.AsyncClient(timeout=15) as hc:
+                                for chat_id in TELEGRAM_CHAT_IDS:
+                                    await hc.post(
+                                        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
+                                        json={
+                                            "chat_id": chat_id,
+                                            "photo": photo_url,
+                                            "caption": caption,
+                                            "parse_mode": "HTML",
+                                        },
+                                    )
+                        except Exception:
+                            pass
+                    else:
+                        # No photo — send reminder
+                        reminder = (
+                            f"📷 RECORDAR QUE ESTE ESTILO/COLOR NO TIENE FOTO "
+                            f"Y SE LE TIENE QUE DAR A EMANUEL\n\n"
+                            f"Estilo: {estilo} (id={eid})\n"
+                            f"Color: {color}\n"
+                            f"Codigo: {codigo}"
+                        )
+                        asyncio.get_event_loop().run_in_executor(
+                            None, send_telegram_message, reminder
+                        )
+            except Exception as e:
+                logger.warning("Product photo send error: %s", e)
+
+        asyncio.create_task(_send_product_photos())
 
         # Camera picture — also fire-and-forget
         try:
