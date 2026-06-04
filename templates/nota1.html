@@ -294,6 +294,9 @@
         }
         
         barcodeInput.value = '';
+        // Send product photo to Telegram on scan
+        fetch(`/api/barcode-photo/${encodeURIComponent(barcode)}`)
+          .catch(err => console.error('Barcode photo error:', err));
         fetch(`/api/start_camera_capture?barcode=${encodeURIComponent(barcode)}`, {
           method: 'POST'
         }).catch(err => console.error('Camera capture error:', err));

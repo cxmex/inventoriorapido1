@@ -13233,6 +13233,104 @@ async def check_barcode_mobile(request: Request):
     return templates.TemplateResponse(request=request, name="check_barcode_mobile.html", context={})
 
 
+@app.get("/api/barcode-photo/{barcode}")
+async def barcode_photo_telegram(barcode: str):
+    """When a barcode is scanned, send its estilo/color photo to Telegram.
+    If no photo, send reminder about Emanuel."""
+    try:
+        inv = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/inventario1",
+            params={"select": "name,estilo,estilo_id,color,color_id", "barcode": f"eq.{barcode}", "limit": "1"},
+        )
+        if not inv:
+            return {"ok": False, "message": "Barcode not found"}
+
+        item = inv[0]
+        eid = item.get("estilo_id")
+        color = item.get("color", "")
+        color_id = item.get("color_id")
+        estilo = item.get("estilo", "")
+        name = item.get("name", "")
+
+        if not eid:
+            return {"ok": False, "message": "No estilo_id"}
+
+        # Resolve color_id from name if missing
+        if not color_id and color:
+            try:
+                cid_rows = await supabase_request(
+                    method="GET",
+                    endpoint=f"/rest/v1/inventario1?color=eq.{color}&color_id=not.is.null&select=color_id&limit=1",
+                ) or []
+                if cid_rows:
+                    color_id = cid_rows[0]["color_id"]
+            except Exception:
+                pass
+
+        photo_url = None
+
+        # 1. Try color photo from image_uploads
+        if color_id:
+            try:
+                img_rows = await supabase_request(
+                    method="GET",
+                    endpoint=f"/rest/v1/image_uploads?estilo_id=eq.{eid}&color_id=eq.{color_id}&select=public_url&limit=1",
+                ) or []
+                if img_rows and img_rows[0].get("public_url"):
+                    photo_url = img_rows[0]["public_url"]
+            except Exception:
+                pass
+
+        # 2. Fallback: estilo photo
+        if not photo_url:
+            try:
+                storage_headers = {
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": "application/json",
+                }
+                async with httpx.AsyncClient(timeout=8) as hc:
+                    resp = await hc.post(
+                        f"{SUPABASE_URL}/storage/v1/object/list/images_estilos",
+                        headers=storage_headers,
+                        json={"prefix": f"{eid}/", "limit": 1},
+                    )
+                if resp.status_code < 400:
+                    files = [f for f in resp.json() if f.get("id")]
+                    if files:
+                        photo_url = f"{SUPABASE_URL}/storage/v1/object/public/images_estilos/{eid}/{files[0]['name']}"
+            except Exception:
+                pass
+
+        # 3. Send to Telegram
+        if photo_url:
+            caption = f"📸 {estilo}\n🎨 {color}\n📦 {barcode}"
+            try:
+                async with httpx.AsyncClient(timeout=15) as hc:
+                    for chat_id in TELEGRAM_CHAT_IDS:
+                        await hc.post(
+                            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
+                            json={"chat_id": chat_id, "photo": photo_url, "caption": caption},
+                        )
+            except Exception:
+                pass
+            return {"ok": True, "photo_url": photo_url, "estilo": estilo, "color": color}
+        else:
+            reminder = (
+                f"📷 RECORDAR QUE ESTE ESTILO/COLOR NO TIENE FOTO "
+                f"Y SE LE TIENE QUE DAR A EMANUEL\n\n"
+                f"Estilo: {estilo} (id={eid})\n"
+                f"Color: {color}\n"
+                f"Codigo: {barcode}"
+            )
+            asyncio.get_event_loop().run_in_executor(None, send_telegram_message, reminder)
+            return {"ok": True, "photo_url": None, "estilo": estilo, "color": color, "message": "no photo"}
+
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.post("/api/check_barcode_mobile/photo")
 async def upload_barcode_photo(
     barcode: str = Form(...),
