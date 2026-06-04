@@ -559,6 +559,167 @@ async def _hourly_intelligence_report():
             logger.warning("Reorder intelligence error: %s", reorder_err)
 
         # ═══════════════════════════════════════════════════════════════════
+        # SECTION 8: MANAGERIAL ACCOUNTING — margin, ABC, ROI, dead stock
+        # ═══════════════════════════════════════════════════════════════════
+        try:
+            # Fetch cost data from inventario_estilos
+            async with httpx.AsyncClient(timeout=15) as client:
+                r_costs = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/inventario_estilos"
+                    "?select=id,nombre,precio,cost"
+                    "&limit=500",
+                    headers=HEADERS,
+                )
+            cost_data = r_costs.json() if r_costs.status_code < 400 else []
+            cost_map = {}  # estilo_id -> {precio, cost}
+            for cd in cost_data:
+                cost_map[cd["id"]] = {
+                    "precio": cd.get("precio") or 90,
+                    "cost": cd.get("cost") or round((cd.get("precio") or 90) * 0.48),
+                }
+
+            # Build full financial picture per estilo
+            LEAD_TIME_DAYS = 14  # days from order to delivery
+            HOLDING_COST_PCT = 0.25  # 25% annual holding cost
+            acct = []
+
+            all_estilos_this_week = set(list(tw_by_est.keys()) + list(stock_by_est.keys()))
+            for est in all_estilos_this_week:
+                # Find estilo_id
+                eid = None
+                for item in tw_sales + lw_sales:
+                    if item.get("estilo") == est and item.get("estilo_id"):
+                        eid = item["estilo_id"]; break
+                if not eid:
+                    for cd in cost_data:
+                        if cd["nombre"] == est:
+                            eid = cd["id"]; break
+
+                costs = cost_map.get(eid, {"precio": 90, "cost": 43})
+                precio = costs["precio"]
+                cost = costs["cost"]
+                margin_pct = round((precio - cost) / precio * 100) if precio > 0 else 0
+
+                stock = stock_by_est.get(est, 0)
+                sold_tw = tw_by_est.get(est, 0)
+                sold_lw = lw_by_est.get(est, 0)
+                n_days_tw = max(len(week_days.get(est, set())), 1) if est in week_days else 1
+                daily_rate = sold_tw / n_days_tw if sold_tw > 0 else (sold_lw / 7 if sold_lw > 0 else 0)
+
+                # Financial metrics
+                revenue_tw = sold_tw * precio
+                gross_profit_tw = sold_tw * (precio - cost)
+                stock_value = stock * cost  # inventory at cost
+                stock_retail = stock * precio  # inventory at retail
+
+                # DOI
+                doi = round(stock / daily_rate) if daily_rate > 0 else 999
+
+                # Reorder Point = (daily_rate × lead_time) + safety_stock
+                safety_stock = round(daily_rate * 3)  # 3 days safety
+                rop = round(daily_rate * LEAD_TIME_DAYS + safety_stock)
+
+                # EOQ = sqrt(2 × annual_demand × order_cost / holding_cost_per_unit)
+                annual_demand = daily_rate * 365
+                order_cost = 500  # estimated cost per order (shipping, handling)
+                holding_per_unit = cost * HOLDING_COST_PCT
+                eoq = round((2 * annual_demand * order_cost / max(holding_per_unit, 1)) ** 0.5) if annual_demand > 0 else 0
+
+                # GMROI = gross_margin / avg_inventory_cost
+                gmroi = round(gross_profit_tw * 52 / max(stock_value, 1), 2) if stock_value > 0 else 0
+
+                # Dead stock cost (monthly holding)
+                monthly_holding = round(stock_value * HOLDING_COST_PCT / 12)
+
+                # Stockout cost = potential lost daily sales × margin
+                daily_lost_margin = round(daily_rate * (precio - cost))
+
+                acct.append({
+                    "estilo": est, "eid": eid,
+                    "stock": stock, "sold_tw": sold_tw, "daily_rate": round(daily_rate, 1),
+                    "precio": precio, "cost": cost, "margin_pct": margin_pct,
+                    "revenue_tw": revenue_tw, "gross_profit_tw": gross_profit_tw,
+                    "stock_value": stock_value, "doi": doi,
+                    "rop": rop, "eoq": eoq, "gmroi": gmroi,
+                    "monthly_holding": monthly_holding, "daily_lost_margin": daily_lost_margin,
+                    "needs_reorder": stock <= rop and daily_rate > 0,
+                })
+
+            # ABC Classification (by revenue)
+            acct.sort(key=lambda x: -x["revenue_tw"])
+            total_rev = sum(a["revenue_tw"] for a in acct)
+            cumulative = 0
+            for a in acct:
+                cumulative += a["revenue_tw"]
+                pct = cumulative / max(total_rev, 1)
+                a["abc"] = "A" if pct <= 0.80 else ("B" if pct <= 0.95 else "C")
+
+            raw_data["acct_summary"] = {
+                "total_stock_value": sum(a["stock_value"] for a in acct),
+                "total_stock_retail": sum(a["stock"] * a["precio"] for a in acct),
+                "weekly_revenue": total_rev,
+                "weekly_gross_profit": sum(a["gross_profit_tw"] for a in acct),
+                "monthly_holding_cost": sum(a["monthly_holding"] for a in acct),
+                "a_items": len([a for a in acct if a["abc"] == "A"]),
+                "b_items": len([a for a in acct if a["abc"] == "B"]),
+                "c_items": len([a for a in acct if a["abc"] == "C"]),
+                "items_below_rop": len([a for a in acct if a["needs_reorder"]]),
+            }
+
+            # Generate accounting insights
+            acct_insights = []
+
+            # Items below reorder point
+            below_rop = [a for a in acct if a["needs_reorder"]]
+            below_rop.sort(key=lambda x: -x["daily_lost_margin"])
+            if below_rop:
+                top3 = below_rop[:3]
+                for a in top3:
+                    acct_insights.append(
+                        f"🛒 REORDER: {a['estilo']} — stock={a['stock']} < ROP={a['rop']} "
+                        f"(pedir {a['eoq']} pzas, pierde ${a['daily_lost_margin']}/dia si se agota)"
+                    )
+
+            # Best GMROI (most profitable per dollar invested)
+            best_gmroi = sorted([a for a in acct if a["gmroi"] > 0 and a["sold_tw"] >= 3], key=lambda x: -x["gmroi"])[:2]
+            if best_gmroi:
+                g = best_gmroi[0]
+                acct_insights.append(
+                    f"💎 Mejor GMROI: {g['estilo']} — ${g['gross_profit_tw']}/sem sobre ${g['stock_value']} invertido (GMROI={g['gmroi']})"
+                )
+
+            # Worst performers (high stock, low/no sales, high holding cost)
+            dead = sorted([a for a in acct if a["sold_tw"] == 0 and a["stock_value"] > 1000], key=lambda x: -x["monthly_holding"])[:2]
+            if dead:
+                d = dead[0]
+                acct_insights.append(
+                    f"💀 Dead stock: {d['estilo']} — ${d['stock_value']:,} invertido, $0 vendido, cuesta ${d['monthly_holding']}/mes tenerlo"
+                )
+
+            # ABC summary
+            a_rev = sum(x["revenue_tw"] for x in acct if x["abc"] == "A")
+            a_count = len([x for x in acct if x["abc"] == "A"])
+            total_count = len(acct)
+            if a_count > 0:
+                acct_insights.append(
+                    f"📊 ABC: {a_count} estilos 'A' ({round(a_count/max(total_count,1)*100)}%) generan ${a_rev:,} ({round(a_rev/max(total_rev,1)*100)}% revenue)"
+                )
+
+            # Total holding cost
+            total_holding = sum(a["monthly_holding"] for a in acct)
+            total_stock_val = sum(a["stock_value"] for a in acct)
+            if total_holding > 0:
+                acct_insights.append(
+                    f"🏦 Inventario: ${total_stock_val:,} a costo | Costo de tener: ${total_holding:,}/mes"
+                )
+
+            # Add to insights
+            insights.extend(acct_insights)
+
+        except Exception as acct_err:
+            logger.warning("Managerial accounting error: %s", acct_err)
+
+        # ═══════════════════════════════════════════════════════════════════
         # BUILD MESSAGE
         # ═══════════════════════════════════════════════════════════════════
         reports_seen = len(past_reports)
