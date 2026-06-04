@@ -468,6 +468,97 @@ async def _hourly_intelligence_report():
             alerts.append(f"🚨 {len(zero_price)} ventas a $0 hoy — revisar precios")
 
         # ═══════════════════════════════════════════════════════════════════
+        # SECTION 7: REORDER INTELLIGENCE — velocity spikes + stockout risk
+        # ═══════════════════════════════════════════════════════════════════
+        try:
+            # Get today's sales by estilo (already have sales_t1, sales_t2)
+            today_by_est = defaultdict(int)
+            for r in sales_t1 + sales_t2:
+                today_by_est[r.get("estilo", "?")] += int(r.get("qty") or 0)
+
+            # Get last 7 days avg by estilo (from tw_sales which is this week)
+            week_by_est = defaultdict(int)
+            week_days = defaultdict(set)
+            for r in tw_sales:
+                e = r.get("estilo", "?")
+                week_by_est[e] += int(r.get("qty") or 0)
+                week_days[e].add(r.get("fecha", ""))
+
+            # Get current stock per estilo
+            async with httpx.AsyncClient(timeout=15) as client:
+                r_stock = await client.get(
+                    f"{SUPABASE_URL}/rest/v1/inventario1"
+                    "?or=(terex1.gt.0,terex2.gt.0)"
+                    "&select=estilo,terex1,terex2"
+                    "&limit=5000",
+                    headers=HEADERS,
+                )
+            stock_rows = r_stock.json() if r_stock.status_code < 400 else []
+            stock_by_est = defaultdict(int)
+            for r in stock_rows:
+                stock_by_est[r.get("estilo", "?")] += (r.get("terex1") or 0) + (r.get("terex2") or 0)
+
+            reorder_alerts = []
+            for est, today_qty in today_by_est.items():
+                if today_qty < 3:
+                    continue
+                # Calculate daily avg (this week)
+                total_week = week_by_est.get(est, today_qty)
+                n_days = max(len(week_days.get(est, set())), 1)
+                daily_avg = total_week / n_days
+
+                # Velocity spike: today > 3x daily avg
+                if daily_avg > 0 and today_qty > daily_avg * 3 and today_qty >= 5:
+                    stock = stock_by_est.get(est, 0)
+                    doi = round(stock / (today_qty)) if today_qty > 0 else 999
+                    reorder_alerts.append({
+                        "estilo": est,
+                        "today": today_qty,
+                        "avg": round(daily_avg, 1),
+                        "spike": round(today_qty / daily_avg, 1),
+                        "stock": stock,
+                        "doi": doi,
+                    })
+
+                # Stockout countdown: less than 14 days at current rate
+                stock = stock_by_est.get(est, 0)
+                if stock > 0 and daily_avg > 0:
+                    doi = stock / daily_avg
+                    if doi < 14 and total_week >= 5:
+                        # Check if already in reorder_alerts
+                        if not any(a["estilo"] == est for a in reorder_alerts):
+                            reorder_alerts.append({
+                                "estilo": est,
+                                "today": today_qty,
+                                "avg": round(daily_avg, 1),
+                                "spike": round(today_qty / max(daily_avg, 0.1), 1),
+                                "stock": stock,
+                                "doi": round(doi),
+                            })
+
+            reorder_alerts.sort(key=lambda x: x["doi"])
+            raw_data["reorder_alerts"] = reorder_alerts
+
+            for a in reorder_alerts[:5]:
+                if a["spike"] >= 3:
+                    alerts.append(
+                        f"🔥 SPIKE: {a['estilo']} — {a['today']} pzas hoy ({a['spike']}x su promedio de {a['avg']}/dia)"
+                        f" | stock={a['stock']} ({a['doi']}d)"
+                    )
+                elif a["doi"] <= 7:
+                    alerts.append(
+                        f"🛒 REORDENAR: {a['estilo']} — solo {a['doi']} dias de stock"
+                        f" ({a['stock']} pzas, vende {a['avg']}/dia)"
+                    )
+                elif a["doi"] <= 14:
+                    insights.append(
+                        f"⏰ {a['estilo']}: {a['doi']}d de stock ({a['stock']} pzas, {a['avg']}/dia)"
+                    )
+
+        except Exception as reorder_err:
+            logger.warning("Reorder intelligence error: %s", reorder_err)
+
+        # ═══════════════════════════════════════════════════════════════════
         # BUILD MESSAGE
         # ═══════════════════════════════════════════════════════════════════
         reports_seen = len(past_reports)
