@@ -1975,6 +1975,11 @@ async def health_check():
     return {"status": "ok", "mode": "backup" if IS_BACKUP else "primary"}
 
 
+@app.get("/catalogo", response_class=HTMLResponse)
+async def catalogo(request: Request):
+    return templates.TemplateResponse(request=request, name="catalogo.html")
+
+
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
