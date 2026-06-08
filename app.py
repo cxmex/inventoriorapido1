@@ -2142,6 +2142,158 @@ async def catalogo(request: Request):
     return templates.TemplateResponse(request=request, name="catalogo.html")
 
 
+# ── Team Chat ────────────────────────────────────────────────────────────────
+@app.get("/chat", response_class=HTMLResponse)
+async def team_chat_page(request: Request):
+    return templates.TemplateResponse(request=request, name="team_chat.html")
+
+
+@app.post("/api/chat/login")
+async def chat_login(request: Request):
+    body = await request.json()
+    username = (body.get("username") or "").strip().lower()
+    password = body.get("password") or ""
+    try:
+        rows = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/chat_users",
+            params={"username": f"eq.{username}", "password": f"eq.{password}", "select": "id,username,display_name,avatar_color,role", "limit": "1"},
+        )
+        if not rows:
+            return JSONResponse({"ok": False, "error": "Usuario o contrasena incorrectos"}, status_code=401)
+        user = rows[0]
+        # Update last_seen
+        try:
+            await supabase_request(method="PATCH", endpoint=f"/rest/v1/chat_users?id=eq.{user['id']}", json_data={"last_seen": datetime.now(_TZ).isoformat()})
+        except Exception:
+            pass
+        return {"ok": True, "user": user}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.get("/api/chat/channels")
+async def chat_channels():
+    try:
+        rows = await supabase_request(method="GET", endpoint="/rest/v1/chat_channels?select=name,description,icon&order=id.asc&limit=20")
+        return rows or []
+    except Exception:
+        return []
+
+
+@app.get("/api/chat/users")
+async def chat_users():
+    try:
+        rows = await supabase_request(method="GET", endpoint="/rest/v1/chat_users?select=id,username,display_name,avatar_color,role,last_seen&order=display_name.asc&limit=20")
+        return rows or []
+    except Exception:
+        return []
+
+
+@app.get("/api/chat/messages")
+async def chat_messages(channel: str = None, dm_user: int = None, user_id: int = None, after: int = 0):
+    try:
+        if dm_user and user_id:
+            # Private messages between two users
+            rows = await supabase_request(
+                method="GET",
+                endpoint=(
+                    f"/rest/v1/chat_messages?channel=eq.private"
+                    f"&or=(and(sender_id.eq.{user_id},recipient_id.eq.{dm_user}),and(sender_id.eq.{dm_user},recipient_id.eq.{user_id}))"
+                    f"&id=gt.{after}"
+                    f"&select=id,sender_id,sender_name,content,file_url,file_type,file_name,is_ai,created_at"
+                    f"&order=created_at.asc&limit=200"
+                ),
+            )
+        else:
+            rows = await supabase_request(
+                method="GET",
+                endpoint=(
+                    f"/rest/v1/chat_messages?channel=eq.{channel or 'general'}"
+                    f"&id=gt.{after}"
+                    f"&select=id,sender_id,sender_name,content,file_url,file_type,file_name,is_ai,created_at"
+                    f"&order=created_at.asc&limit=200"
+                ),
+            )
+        # Add sender color
+        users_cache = {}
+        for msg in (rows or []):
+            sid = msg.get("sender_id")
+            if sid and sid not in users_cache:
+                try:
+                    u = await supabase_request(method="GET", endpoint=f"/rest/v1/chat_users?id=eq.{sid}&select=avatar_color&limit=1")
+                    users_cache[sid] = u[0]["avatar_color"] if u else "#555"
+                except Exception:
+                    users_cache[sid] = "#555"
+            msg["sender_color"] = users_cache.get(sid, "#555")
+        return rows or []
+    except Exception as e:
+        return []
+
+
+@app.post("/api/chat/send")
+async def chat_send(request: Request):
+    body = await request.json()
+    record = {
+        "sender_id": body.get("sender_id"),
+        "sender_name": body.get("sender_name", ""),
+        "recipient_id": body.get("recipient_id"),
+        "channel": body.get("channel", "general"),
+        "content": body.get("content", ""),
+        "is_ai": body.get("is_ai", False),
+    }
+    try:
+        await supabase_request(method="POST", endpoint="/rest/v1/chat_messages", json_data=record)
+        return {"ok": True}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/api/chat/upload")
+async def chat_upload(
+    file: UploadFile = File(...),
+    sender_id: int = Form(...),
+    sender_name: str = Form(""),
+    channel: str = Form("general"),
+    recipient_id: int = Form(None),
+):
+    try:
+        contents = await file.read()
+        ext = file.filename.rsplit(".", 1)[-1] if "." in file.filename else "bin"
+        filename = f"chat/{int(time.time())}_{file.filename}"
+        file_type = "image" if ext.lower() in ("jpg","jpeg","png","gif","webp") else "document"
+
+        # Upload to Supabase storage
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"{SUPABASE_URL}/storage/v1/object/chat-files/{filename}",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": file.content_type or "application/octet-stream",
+                    "x-upsert": "true",
+                },
+                content=contents,
+            )
+        file_url = f"{SUPABASE_URL}/storage/v1/object/public/chat-files/{filename}" if resp.status_code in (200, 201) else None
+
+        # Save message
+        record = {
+            "sender_id": sender_id,
+            "sender_name": sender_name,
+            "recipient_id": recipient_id,
+            "channel": channel,
+            "content": f"📎 {file.filename}",
+            "file_url": file_url,
+            "file_type": file_type,
+            "file_name": file.filename,
+        }
+        await supabase_request(method="POST", endpoint="/rest/v1/chat_messages", json_data=record)
+        return {"ok": True, "file_url": file_url}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
