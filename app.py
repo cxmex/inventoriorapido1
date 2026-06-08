@@ -13823,6 +13823,53 @@ async def save_conteo_previo(payload: dict):
         if not caja_numero or not items:
             return JSONResponse({"error": "caja_numero e items requeridos"}, status_code=400)
 
+        # ── POLICY: previous caja must be fully entered before registering a new one ──
+        try:
+            # Get all pending (unreconciled) cajas
+            pending_resp = await supabase_request(
+                method="GET",
+                endpoint="/rest/v1/conteo_previo?reconciled=eq.false&select=caja_numero,qty&limit=500",
+            ) or []
+            pending_cajas = {}
+            for pr in pending_resp:
+                cn = pr.get("caja_numero")
+                if cn and cn != caja_numero:
+                    pending_cajas[cn] = pending_cajas.get(cn, 0) + pr.get("qty", 0)
+
+            if pending_cajas:
+                # Check if those pending cajas have been entered in entradas
+                for pcn, conteo_qty in pending_cajas.items():
+                    ent_resp = await supabase_request(
+                        method="GET",
+                        endpoint=f"/rest/v1/entrada_mercancia?conteo_previo_caja=eq.{pcn}&select=qty&limit=500",
+                    ) or []
+                    ent_resp2 = await supabase_request(
+                        method="GET",
+                        endpoint=f"/rest/v1/entrada_mercancia_2?conteo_previo_caja=eq.{pcn}&select=qty&limit=500",
+                    ) or []
+                    entered_qty = sum(r.get("qty", 0) for r in ent_resp + ent_resp2)
+
+                    if entered_qty < conteo_qty * 0.8:  # less than 80% entered
+                        missing = conteo_qty - entered_qty
+                        # Alert on Telegram
+                        asyncio.get_event_loop().run_in_executor(
+                            None, send_telegram_message,
+                            f"🛡️ SENTINEL: Caja {caja_numero} bloqueada\n\n"
+                            f"Caja {pcn} tiene {conteo_qty} pzas contadas pero solo {entered_qty} ingresadas.\n"
+                            f"Faltan {missing} pzas por ingresar.\n\n"
+                            f"Primero terminar de ingresar Caja {pcn} antes de registrar Caja {caja_numero}."
+                        )
+                        return JSONResponse({
+                            "error": f"Primero ingresa la mercancia de Caja {pcn}. "
+                                     f"Tiene {conteo_qty} pzas contadas pero solo {entered_qty} ingresadas. "
+                                     f"Faltan {missing} pzas.",
+                            "blocked_by_caja": pcn,
+                            "conteo_qty": conteo_qty,
+                            "entered_qty": entered_qty,
+                        }, status_code=400)
+        except Exception as policy_err:
+            logger.warning("Conteo policy check error (non-blocking): %s", policy_err)
+
         rows = [
             {
                 "caja_numero": caja_numero,
