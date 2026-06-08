@@ -13859,14 +13859,8 @@ async def save_conteo_previo(payload: dict):
                             f"Faltan {missing} pzas por ingresar.\n\n"
                             f"Primero terminar de ingresar Caja {pcn} antes de registrar Caja {caja_numero}."
                         )
-                        return JSONResponse({
-                            "error": f"Primero ingresa la mercancia de Caja {pcn}. "
-                                     f"Tiene {conteo_qty} pzas contadas pero solo {entered_qty} ingresadas. "
-                                     f"Faltan {missing} pzas.",
-                            "blocked_by_caja": pcn,
-                            "conteo_qty": conteo_qty,
-                            "entered_qty": entered_qty,
-                        }, status_code=400)
+                        # Don't block — just alert via Telegram
+                        pass  # alert already sent above
         except Exception as policy_err:
             logger.warning("Conteo policy check error (non-blocking): %s", policy_err)
 
@@ -13925,6 +13919,19 @@ async def save_conteo_previo(payload: dict):
 
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/modelos-list")
+async def modelos_list():
+    """Return all modelo names from inventario_modelos for datalist autocomplete."""
+    try:
+        rows = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/inventario_modelos?select=modelo&order=modelo.asc&limit=500",
+        ) or []
+        return sorted(set(r["modelo"] for r in rows if r.get("modelo")))
+    except Exception:
+        return []
 
 
 @app.get("/api/conteo-previo/cajas")

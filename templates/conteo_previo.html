@@ -180,20 +180,24 @@
     .fade{animation:fadeIn .3s ease;}
   </style>
 
-  <datalist id="modelos">
-    <option value="IP 17 PM"/><option value="IP 17 PLUS"/><option value="IP 17"/>
-    <option value="IP 16 PM"/><option value="IP 16 PLUS"/><option value="IP 16"/>
-    <option value="IP 15 PM"/><option value="IP 15 PLUS"/><option value="IP 15"/>
-    <option value="IP 14 PM"/><option value="IP 14 PLUS"/><option value="IP 14"/>
-    <option value="IP 13 PM"/><option value="IP 13 MINI"/><option value="IP 13"/>
-    <option value="IP 13/14"/><option value="IP 12 PM"/><option value="IP 12 MINI"/>
-    <option value="IP 12"/><option value="IP 11"/>
-    <option value="SAM S25 ULTRA"/><option value="SAM S25 PLUS"/><option value="SAM S25"/>
-    <option value="SAM S24 ULTRA"/><option value="SAM S24 PLUS"/><option value="SAM S24"/>
-    <option value="SAM A56"/><option value="SAM A55"/><option value="SAM A54"/>
-    <option value="SAM A35"/><option value="SAM A25"/><option value="SAM A16"/>
-    <option value="SAM A15"/><option value="SAM A06"/><option value="SAM A05S"/>
-  </datalist>
+  <datalist id="modelos"></datalist>
+  <script>
+  // Load models dynamically from inventario_modelos
+  (async function loadModelos() {
+    try {
+      const resp = await fetch('/api/modelos-list');
+      const modelos = await resp.json();
+      const dl = document.getElementById('modelos');
+      modelos.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        dl.appendChild(opt);
+      });
+    } catch(e) {
+      console.error('Could not load modelos:', e);
+    }
+  })();
+  </script>
   <datalist id="colores">
     <option value="NEGRO"/><option value="ROSA"/><option value="PISTACHE"/>
     <option value="AZUL"/><option value="BLANCO"/><option value="MORADO"/>
