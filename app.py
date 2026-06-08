@@ -963,6 +963,168 @@ ml_scheduler.add_job(
 )
 
 
+# ── Agent 8: SENTINEL — Inventory Integrity Watchdog ─────────────────────────
+async def _sentinel_integrity_check():
+    """Daily check for mismatches between conteo previo, entradas, and actual stock."""
+    _tz = pytz.timezone("America/Mexico_City")
+    now = datetime.now(_tz)
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r_conteo, r_ent1, r_ent2, r_hist1, r_hist2 = await asyncio.gather(
+                client.get(f"{SUPABASE_URL}/rest/v1/conteo_previo?select=caja_numero,qty,reconciled,fecha,estilo&limit=1000", headers=HEADERS),
+                client.get(f"{SUPABASE_URL}/rest/v1/entrada_mercancia?select=qty,barcode,conteo_previo_caja,created_at&limit=1000", headers=HEADERS),
+                client.get(f"{SUPABASE_URL}/rest/v1/entrada_mercancia_2?select=qty,barcode,conteo_previo_caja,created_at&limit=1000", headers=HEADERS),
+                client.get(f"{SUPABASE_URL}/rest/v1/terex1_history?select=barcode,qty_before,qty_counted,difference,created_at&created_at=gte.{(now-timedelta(days=7)).strftime('%Y-%m-%d')}&limit=1000", headers=HEADERS),
+                client.get(f"{SUPABASE_URL}/rest/v1/terex2_history?select=barcode,qty_before,qty_counted,difference,created_at&created_at=gte.{(now-timedelta(days=7)).strftime('%Y-%m-%d')}&limit=1000", headers=HEADERS),
+            )
+
+        def _j(r): return r.json() if r.status_code < 400 else []
+        conteo = _j(r_conteo)
+        ent1 = _j(r_ent1); ent2 = _j(r_ent2)
+        hist1 = _j(r_hist1); hist2 = _j(r_hist2)
+
+        alerts = []
+        raw_data = {}
+
+        # ── 1. Conteo previo vs entradas mismatch ────────────────────────
+        from collections import defaultdict as _dd
+        cajas_conteo = _dd(int)
+        cajas_pending = set()
+        for r in conteo:
+            cn = r.get("caja_numero")
+            cajas_conteo[cn] += r.get("qty", 0)
+            if not r.get("reconciled"):
+                cajas_pending.add(cn)
+
+        cajas_entrada = _dd(int)
+        for r in ent1 + ent2:
+            cn = r.get("conteo_previo_caja")
+            if cn:
+                cajas_entrada[cn] += r.get("qty", 0)
+
+        mismatches = []
+        for cn in cajas_conteo:
+            conteo_qty = cajas_conteo[cn]
+            entrada_qty = cajas_entrada.get(cn, 0)
+            diff = entrada_qty - conteo_qty
+            if abs(diff) >= 5:
+                mismatches.append({"caja": cn, "conteo": conteo_qty, "entrada": entrada_qty, "diff": diff})
+
+        raw_data["mismatches"] = mismatches
+        if mismatches:
+            worst = sorted(mismatches, key=lambda x: x["diff"])
+            for m in worst[:3]:
+                if m["diff"] < 0:
+                    alerts.append(
+                        f"📦 Caja {m['caja']}: conteo={m['conteo']} pero solo {m['entrada']} ingresados "
+                        f"({abs(m['diff'])} pzas sin ingresar)"
+                    )
+                else:
+                    alerts.append(
+                        f"📦 Caja {m['caja']}: ingresaron {m['entrada']} pero conteo solo {m['conteo']} "
+                        f"(+{m['diff']} pzas de mas)"
+                    )
+
+        # ── 2. Pending cajas (old ones) ──────────────────────────────────
+        old_pending = [cn for cn in cajas_pending]
+        raw_data["pending_cajas"] = len(old_pending)
+        if old_pending:
+            total_pending_qty = sum(cajas_conteo[cn] for cn in old_pending)
+            alerts.append(
+                f"⏳ {len(old_pending)} cajas sin verificar ({total_pending_qty:,} pzas en limbo)"
+            )
+
+        # ── 3. Entradas without conteo link (untraceable) ───────────────
+        no_link = sum(1 for r in ent1 + ent2 if not r.get("conteo_previo_caja"))
+        with_link = sum(1 for r in ent1 + ent2 if r.get("conteo_previo_caja"))
+        total_ent = no_link + with_link
+        raw_data["entries_no_link"] = no_link
+        raw_data["entries_with_link"] = with_link
+        if total_ent > 0:
+            pct_no_link = round(no_link / total_ent * 100)
+            if pct_no_link > 50:
+                alerts.append(
+                    f"🔍 {pct_no_link}% de entradas sin vincular a caja ({no_link}/{total_ent}) — sin trazabilidad"
+                )
+
+        # ── 4. Counting history anomalies (last 7 days) ─────────────────
+        big_pos_t1 = sum(1 for r in hist1 if (r.get("difference") or 0) > 10)
+        big_neg_t1 = sum(1 for r in hist1 if (r.get("difference") or 0) < -10)
+        big_pos_t2 = sum(1 for r in hist2 if (r.get("difference") or 0) > 10)
+        big_neg_t2 = sum(1 for r in hist2 if (r.get("difference") or 0) < -10)
+        net_t1 = sum(r.get("difference", 0) for r in hist1)
+        net_t2 = sum(r.get("difference", 0) for r in hist2)
+        raw_data["net_diff_t1"] = net_t1
+        raw_data["net_diff_t2"] = net_t2
+
+        if abs(net_t1) > 50:
+            direction = "MAS en fisico" if net_t1 > 0 else "MENOS en fisico"
+            alerts.append(f"🔢 S1: {direction} ({'+' if net_t1>0 else ''}{net_t1} pzas netas esta semana)")
+        if abs(net_t2) > 50:
+            direction = "MAS en fisico" if net_t2 > 0 else "MENOS en fisico"
+            alerts.append(f"🔢 S2: {direction} ({'+' if net_t2>0 else ''}{net_t2} pzas netas esta semana)")
+
+        if big_neg_t1 + big_neg_t2 > 5:
+            alerts.append(
+                f"🚨 {big_neg_t1 + big_neg_t2} items con >10 pzas MENOS que sistema — posible robo o error"
+            )
+
+        # ── 5. Entradas at suspicious hours ──────────────────────────────
+        late_entries = []
+        for r in ent1 + ent2:
+            ts = r.get("created_at", "")
+            if len(ts) > 13:
+                hour = int(ts[11:13])
+                if hour >= 23 or hour < 6:
+                    late_entries.append(ts)
+        if late_entries:
+            alerts.append(f"🕐 {len(late_entries)} entradas en horario inusual (11pm-6am)")
+
+        # ── Build and send ───────────────────────────────────────────────
+        if alerts:
+            lines = [f"🛡️ SENTINEL · Control de Inventario · {now.strftime('%d %b %H:%M')}", ""]
+            lines.extend(alerts)
+
+            # Summary
+            lines.append("")
+            lines.append(f"📋 Resumen: {len(mismatches)} cajas con diferencia, "
+                        f"{len(old_pending)} sin verificar, "
+                        f"S1 neto={'+' if net_t1>=0 else ''}{net_t1} S2 neto={'+' if net_t2>=0 else ''}{net_t2}")
+
+            msg = "\n".join(lines)
+        else:
+            msg = f"🛡️ SENTINEL · {now.strftime('%d %b')} — inventario sin anomalias detectadas"
+
+        asyncio.get_event_loop().run_in_executor(None, send_telegram_message, msg)
+
+        # Save to agent_insights
+        try:
+            await supabase_request(
+                method="POST",
+                endpoint="/rest/v1/agent_insights",
+                json_data={
+                    "type": "sentinel",
+                    "summary": msg,
+                    "data": raw_data,
+                    "sent_telegram": True,
+                },
+            )
+        except Exception:
+            pass
+
+    except Exception as e:
+        logger.error("SENTINEL error: %s", e)
+
+
+ml_scheduler.add_job(
+    _sentinel_integrity_check,
+    CronTrigger(hour=10, minute=30, second=0, timezone="America/Mexico_City"),
+    id="sentinel_integrity",
+    replace_existing=True,
+)
+
+
 # ── Agent 2: Visual Daily Report (3pm and 7pm) ────────────────────────────────
 async def _daily_visual_report():
     """Send top estilos/modelos sold today with images to Telegram at 3pm and 7pm."""
