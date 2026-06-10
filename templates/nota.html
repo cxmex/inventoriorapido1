@@ -213,14 +213,24 @@
       
       try {
         console.log('Saving products:', products);
-        
+
+        const idempotencyKey = Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+
         const response = await fetch('/api/save', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ products })
+          body: JSON.stringify({ products, idempotency_key: idempotencyKey })
         });
-        
+
         if (!response.ok) {
+          if (response.status === 409) {
+            tbody.innerHTML = '';
+            recalcTotal();
+            saveMsg.textContent = '⚠️ Esta venta ya se guardó — no se duplicó';
+            saveMsg.className = 'status success';
+            saveBtn.disabled = false;
+            return;
+          }
           const error = await response.json();
           throw new Error(error.detail || 'Error al guardar');
         }

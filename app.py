@@ -2352,6 +2352,7 @@ class SavePayload(BaseModel):
     cliente_id: Optional[int] = None
     cliente: Optional[str] = None
     whatsapp: Optional[str] = None
+    idempotency_key: Optional[str] = None
 
 
 class InventarioEstilo(BaseModel):
@@ -8584,16 +8585,42 @@ async def create_barcode_for_existing_customer(email: str):
         return None
 
 
+_recent_sales_keys: dict[str, float] = {}  # idempotency_key → timestamp
+
 @app.post("/api/save")
 async def api_save(payload: SavePayload):
     """Enhanced save function that processes loyalty deductions and payment method"""
     if not payload.products:
         raise HTTPException(status_code=400, detail="No products provided")
 
+    # ── Duplicate submission guard ─────────────────────────────────────
+    now_ts = time.time()
+    # Clean old keys (older than 60s)
+    stale = [k for k, t in _recent_sales_keys.items() if now_ts - t > 60]
+    for k in stale:
+        _recent_sales_keys.pop(k, None)
+
+    # Build a fingerprint from the products if no idempotency_key sent
+    idem_key = payload.idempotency_key
+    if not idem_key:
+        # Fallback: hash of sorted barcodes + quantities + prices
+        parts = sorted(
+            f"{p.get('codigo','')}-{p.get('qty',1)}-{p.get('price',0)}"
+            for p in payload.products
+        )
+        idem_key = "|".join(parts)
+
+    if idem_key in _recent_sales_keys:
+        elapsed = now_ts - _recent_sales_keys[idem_key]
+        logger.warning("⚠️ Duplicate sale blocked (key=%s, %.1fs ago)", idem_key, elapsed)
+        raise HTTPException(
+            status_code=409,
+            detail="Venta duplicada detectada — esta venta ya se guardó hace unos segundos"
+        )
+    _recent_sales_keys[idem_key] = now_ts
+
     # Get payment method with fallback
     payment_method = getattr(payload, 'payment_method', 'efectivo')
-    print(f"DEBUG: Received payment_method: {payment_method}")  # Debug log
-    
 
     next_order_id = await get_next_order_id()
     mexico_tz = pytz.timezone("America/Mexico_City")

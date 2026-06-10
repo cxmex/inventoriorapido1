@@ -366,9 +366,13 @@
         console.log('Payment method:', paymentMethod);
         console.log('Cliente:', selectedCliente);
 
+        // Generate unique idempotency key to prevent double submissions
+        const idempotencyKey = Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+
         const body = {
           products: products,
           payment_method: paymentMethod,
+          idempotency_key: idempotencyKey,
         };
         if (selectedCliente) {
           body.cliente_id = selectedCliente.id;
@@ -381,7 +385,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body)
         });
-        
+
         if (!response.ok) {
           let errorMsg = 'Error al guardar';
           try {
@@ -389,6 +393,16 @@
             errorMsg = error.detail || errorMsg;
           } catch(e) {
             errorMsg = `Error ${response.status}: ${response.statusText}`;
+          }
+          if (response.status === 409) {
+            // Duplicate — sale already saved, just clear and show success
+            tbody.innerHTML = '';
+            recalcTotal();
+            clearSelectedCliente();
+            saveMsg.textContent = '⚠️ Esta venta ya se guardó — no se duplicó';
+            saveMsg.className = 'status success';
+            saveBtn.disabled = false;
+            return;
           }
           throw new Error(errorMsg);
         }
