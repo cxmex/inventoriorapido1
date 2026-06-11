@@ -2730,86 +2730,71 @@ async def home(request: Request):
             }
         )
         
-        # Fetch total terex1 sums
-        totals_map = {}
-        try:
-            total_terex1_response = await supabase_rpc("sum_terex1_by_estilo")
-            
-            for item in total_terex1_response:
-                estilo_name = item.get('estilo', '')
-                sum_value = 0
-                
-                if item.get('sum') is not None:
-                    if isinstance(item['sum'], int):
-                        sum_value = item['sum']
-                    elif isinstance(item['sum'], float):
-                        sum_value = round(item['sum'])
-                    else:
-                        try:
-                            sum_value = int(item['sum'])
-                        except (ValueError, TypeError):
-                            sum_value = 0
-                
-                if estilo_name:
-                    totals_map[estilo_name] = sum_value
-        except Exception as e:
-            print(f"Error fetching total terex1: {str(e)}", flush=True)
-        
-        # Fetch negative terex1 counts
-        negatives_map = {}
-        try:
-            negative_counts_response = await supabase_rpc("count_negative_terex1_by_estilo")
-            
-            for item in negative_counts_response:
-                estilo_name = item.get('estilo', '')
-                count = 0
-                
-                if item.get('count') is not None:
-                    if isinstance(item['count'], int):
-                        count = item['count']
-                    else:
-                        try:
-                            count = int(item['count'])
-                        except (ValueError, TypeError):
-                            count = 0
-                
-                if estilo_name:
-                    negatives_map[estilo_name] = count
-        except Exception as e:
-            print(f"Error fetching negative counts: {str(e)}", flush=True)
-        
-        # Fetch sales data for the last 7 days
-        ventas_por_estilo = {}
-        try:
-            seven_days_ago = datetime.now() - timedelta(days=7)
-            formatted_date = seven_days_ago.strftime("%Y-%m-%d")
-            
-            ventas_response = await supabase_request(
+        # Fetch totals, negatives, and sales in parallel
+        seven_days_ago = datetime.now() - timedelta(days=7)
+        formatted_date = seven_days_ago.strftime("%Y-%m-%d")
+
+        total_terex1_response, negative_counts_response, ventas_response = await asyncio.gather(
+            supabase_rpc("sum_terex1_by_estilo"),
+            supabase_rpc("count_negative_terex1_by_estilo"),
+            supabase_request(
                 method="GET",
                 endpoint="/rest/v1/ventas_terex1",
                 params={
                     "select": "estilo,qty",
                     "fecha": f"gte.{formatted_date}"
                 }
-            )
-            
+            ),
+            return_exceptions=True
+        )
+
+        # Process totals
+        totals_map = {}
+        if not isinstance(total_terex1_response, Exception):
+            for item in total_terex1_response:
+                estilo_name = item.get('estilo', '')
+                sum_value = 0
+                if item.get('sum') is not None:
+                    try:
+                        sum_value = int(item['sum']) if not isinstance(item['sum'], int) else item['sum']
+                    except (ValueError, TypeError):
+                        sum_value = 0
+                if estilo_name:
+                    totals_map[estilo_name] = sum_value
+        else:
+            print(f"Error fetching total terex1: {total_terex1_response}", flush=True)
+
+        # Process negatives
+        negatives_map = {}
+        if not isinstance(negative_counts_response, Exception):
+            for item in negative_counts_response:
+                estilo_name = item.get('estilo', '')
+                count = 0
+                if item.get('count') is not None:
+                    try:
+                        count = int(item['count']) if not isinstance(item['count'], int) else item['count']
+                    except (ValueError, TypeError):
+                        count = 0
+                if estilo_name:
+                    negatives_map[estilo_name] = count
+        else:
+            print(f"Error fetching negative counts: {negative_counts_response}", flush=True)
+
+        # Process sales
+        ventas_por_estilo = {}
+        if not isinstance(ventas_response, Exception):
             for venta in ventas_response:
                 estilo = venta.get('estilo', '')
                 qty = 0
-                
                 if venta.get('qty') is not None:
-                    if isinstance(venta['qty'], int):
-                        qty = venta['qty']
-                    else:
-                        try:
-                            qty = int(venta['qty'])
-                        except (ValueError, TypeError):
-                            qty = 0
-                
+                    try:
+                        qty = int(venta['qty']) if not isinstance(venta['qty'], int) else venta['qty']
+                    except (ValueError, TypeError):
+                        qty = 0
                 if estilo:
                     ventas_por_estilo[estilo] = ventas_por_estilo.get(estilo, 0) + qty
-        except Exception as e:
-            print(f"Error fetching sales data: {str(e)}", flush=True)
+        else:
+            print(f"Error fetching sales data: {ventas_response}", flush=True)
         
         # Calculate turnover rates and enhance the inventory items
         enhanced_items = []
@@ -12307,18 +12292,15 @@ async def create_conteo(data: ConteoEfectivoCreate):
         
         print(f"DEBUG: Sending payload: {payload}")
         
-        # Send request to Supabase
-        response = requests.post(url, headers=HEADERS, json=payload)
-        
-        # Log error details if request fails
-        if not response.ok:
-            print(f"ERROR: Status {response.status_code}")
-            print(f"ERROR: Response: {response.text}")
-        
-        response.raise_for_status()
-        
-        entry = response.json()[0]
-        
+        # Send request to Supabase (async)
+        result = await supabase_request(
+            method="POST",
+            endpoint="/rest/v1/conteo_efectivo",
+            json_data=payload
+        )
+
+        entry = result[0] if isinstance(result, list) else result
+
         # Log the conteo result
         if data.tipo == 'conteo':
             if diferencia == 0:
@@ -12327,7 +12309,7 @@ async def create_conteo(data: ConteoEfectivoCreate):
                 print(f"💰 Sobrante en caja: ${diferencia:.2f} (Esperado: ${current_balance:.2f}, Contado: ${data.amount:.2f})")
             else:
                 print(f"⚠️ Faltante en caja: ${abs(diferencia):.2f} (Esperado: ${current_balance:.2f}, Contado: ${data.amount:.2f})")
-        
+
         return ConteoEfectivoResponse(
             id=entry["id"],
             nombre=entry["nombre"],
@@ -12347,16 +12329,15 @@ async def create_conteo(data: ConteoEfectivoCreate):
 async def get_conteo(limit: Optional[int] = 100):
     """Get cash movement entries (most recent first)"""
     try:
-        url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo?order=created_at.desc&limit={limit}"
-        
-        response = requests.get(url, headers=HEADERS)
-        response.raise_for_status()
-        
-        data = response.json()
-        
+        data = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/conteo_efectivo",
+            params={"order": "created_at.desc", "limit": str(limit)}
+        )
+
         if not data:
             return []
-        
+
         return [
             ConteoEfectivoResponse(
                 id=entry["id"],
@@ -12367,7 +12348,7 @@ async def get_conteo(limit: Optional[int] = 100):
                 created_at=entry["created_at"],
                 order_id=entry.get("order_id"),
                 descripcion=entry.get("descripcion"),
-                diferencia=entry.get("diferencia")  # Include diferencia
+                diferencia=entry.get("diferencia")
             )
             for entry in data
         ]
@@ -12394,18 +12375,21 @@ async def delete_conteo(conteo_id: int):
     """Delete a cash movement entry and recalculate all balances"""
     try:
         # Check if trying to delete the initial balance
-        check_url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo?id=eq.{conteo_id}"
-        check_response = requests.get(check_url, headers=HEADERS)
-        check_response.raise_for_status()
-        entry_data = check_response.json()
-        
+        entry_data = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/conteo_efectivo",
+            params={"id": f"eq.{conteo_id}"}
+        )
+
         if entry_data and entry_data[0].get('tipo') == 'inicial':
             raise HTTPException(status_code=400, detail="Cannot delete initial balance")
-        
+
         # Delete the entry
-        url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo?id=eq.{conteo_id}"
-        response = requests.delete(url, headers=HEADERS)
-        response.raise_for_status()
+        await supabase_request(
+            method="DELETE",
+            endpoint="/rest/v1/conteo_efectivo",
+            params={"id": f"eq.{conteo_id}"}
+        )
         
         # Recalculate all balances
         await recalculate_balances()
@@ -12420,14 +12404,15 @@ async def delete_conteo(conteo_id: int):
 async def get_current_balance():
     """Get the current balance from the last entry"""
     try:
-        url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo?order=created_at.desc&limit=1"
-        response = requests.get(url, headers=HEADERS)
-        response.raise_for_status()
-        data = response.json()
-        
+        data = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/conteo_efectivo",
+            params={"order": "created_at.desc", "limit": "1"}
+        )
+
         if not data:
             return 0.0
-        
+
         return float(data[0].get('balance', 0.0))
     except Exception as e:
         print(f"Error getting current balance: {e}")
@@ -12436,14 +12421,14 @@ async def get_current_balance():
 async def recalculate_balances():
     """Recalculate all balances after a deletion"""
     try:
-        # Get all entries ordered by creation time
-        url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo?order=created_at.asc"
-        response = requests.get(url, headers=HEADERS)
-        response.raise_for_status()
-        entries = response.json()
-        
+        entries = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/conteo_efectivo",
+            params={"order": "created_at.asc"}
+        )
+
         running_balance = 0.0
-        
+
         for entry in entries:
             if entry['tipo'] == 'inicial':
                 running_balance = float(entry['amount'])
@@ -12451,16 +12436,14 @@ async def recalculate_balances():
                 running_balance += float(entry['amount'])
             elif entry['tipo'] == 'debito':
                 running_balance -= float(entry['amount'])
-            
-            # Update the entry's balance
-            update_url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo?id=eq.{entry['id']}"
-            update_response = requests.patch(
-                update_url,
-                headers=HEADERS,
-                json={"balance": running_balance}
+
+            await supabase_request(
+                method="PATCH",
+                endpoint="/rest/v1/conteo_efectivo",
+                params={"id": f"eq.{entry['id']}"},
+                json_data={"balance": running_balance}
             )
-            update_response.raise_for_status()
-        
+
         return running_balance
     except Exception as e:
         print(f"Error recalculating balances: {e}")
@@ -12491,20 +12474,20 @@ async def create_conteo(data: ConteoEfectivoCreate):
             raise HTTPException(status_code=400, detail="Tipo must be 'credito', 'debito', or 'conteo'")
         
         # Insert new entry
-        url = f"{SUPABASE_URL}/rest/v1/conteo_efectivo"
-        payload = {
-            "nombre": data.nombre,
-            "tipo": data.tipo,
-            "amount": data.amount,
-            "balance": new_balance,
-            "diferencia": diferencia
-        }
-        
-        response = requests.post(url, headers=HEADERS, json=payload)
-        response.raise_for_status()
-        
-        entry = response.json()[0]
-        
+        result = await supabase_request(
+            method="POST",
+            endpoint="/rest/v1/conteo_efectivo",
+            json_data={
+                "nombre": data.nombre,
+                "tipo": data.tipo,
+                "amount": data.amount,
+                "balance": new_balance,
+                "diferencia": diferencia
+            }
+        )
+
+        entry = result[0] if isinstance(result, list) else result
+
         # Log the conteo result
         if data.tipo == 'conteo':
             if diferencia == 0:
@@ -12513,7 +12496,7 @@ async def create_conteo(data: ConteoEfectivoCreate):
                 print(f"💰 Sobrante en caja: ${diferencia:.2f} (Esperado: ${current_balance:.2f}, Contado: ${data.amount:.2f})")
             else:
                 print(f"⚠️ Faltante en caja: ${abs(diferencia):.2f} (Esperado: ${current_balance:.2f}, Contado: ${data.amount:.2f})")
-        
+
         return ConteoEfectivoResponse(
             id=entry["id"],
             nombre=entry["nombre"],
@@ -12534,10 +12517,11 @@ async def send_push_notification(order_id: int, total: float, items_count: int, 
     """Send push notification to all registered devices"""
     try:
         # Get all active FCM tokens
-        url = f"{SUPABASE_URL}/rest/v1/fcm_tokens?active=eq.true"
-        response = requests.get(url, headers=HEADERS)
-        response.raise_for_status()
-        tokens_data = response.json()
+        tokens_data = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/fcm_tokens",
+            params={"active": "eq.true"}
+        )
         
         if not tokens_data:
             print("No FCM tokens registered")
@@ -12592,12 +12576,14 @@ async def send_push_notification(order_id: int, total: float, items_count: int, 
                 print(f"Error sending to token {fcm_token[:20]}...: {e}")
         
         # Update last_used timestamp
-        update_url = f"{SUPABASE_URL}/rest/v1/fcm_tokens"
-        requests.patch(
-            update_url,
-            headers=HEADERS,
-            json={"last_used": "now()"}
-        )
+        try:
+            await supabase_request(
+                method="PATCH",
+                endpoint="/rest/v1/fcm_tokens",
+                json_data={"last_used": "now()"}
+            )
+        except Exception:
+            pass
         
     except Exception as e:
         print(f"Error in send_push_notification: {e}")
@@ -12618,18 +12604,13 @@ async def register_fcm_token(data: FCMTokenRegistration):
         }
         
         # Use upsert to handle duplicate tokens
-        response = requests.post(
-            url,
-            headers={**HEADERS, "Prefer": "resolution=merge-duplicates"},
-            json=payload
+        result = await supabase_request(
+            method="POST",
+            endpoint="/rest/v1/fcm_tokens",
+            json_data=payload
         )
-        
-        if response.status_code in [200, 201]:
-            print(f"✅ FCM Token registered: {data.fcm_token[:20]}...")
-            return {"success": True, "message": "Token registered successfully"}
-        else:
-            print(f"Error registering token: {response.text}")
-            raise HTTPException(status_code=400, detail="Failed to register token")
+        print(f"✅ FCM Token registered: {data.fcm_token[:20]}...")
+        return {"success": True, "message": "Token registered successfully"}
             
     except Exception as e:
         print(f"Error in register_fcm_token: {e}")
@@ -12639,10 +12620,12 @@ async def register_fcm_token(data: FCMTokenRegistration):
 async def get_fcm_tokens():
     """Get all registered FCM tokens (for debugging)"""
     try:
-        url = f"{SUPABASE_URL}/rest/v1/fcm_tokens?active=eq.true&order=created_at.desc"
-        response = requests.get(url, headers=HEADERS)
-        response.raise_for_status()
-        return response.json()
+        data = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/fcm_tokens",
+            params={"active": "eq.true", "order": "created_at.desc"}
+        )
+        return data
     except Exception as e:
         print(f"Error getting tokens: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -12651,13 +12634,12 @@ async def get_fcm_tokens():
 async def deactivate_fcm_token(token_id: int):
     """Deactivate an FCM token"""
     try:
-        url = f"{SUPABASE_URL}/rest/v1/fcm_tokens?id=eq.{token_id}"
-        response = requests.patch(
-            url,
-            headers=HEADERS,
-            json={"active": False}
+        await supabase_request(
+            method="PATCH",
+            endpoint="/rest/v1/fcm_tokens",
+            params={"id": f"eq.{token_id}"},
+            json_data={"active": False}
         )
-        response.raise_for_status()
         return {"success": True, "message": "Token deactivated"}
     except Exception as e:
         print(f"Error deactivating token: {e}")
@@ -12668,12 +12650,8 @@ async def deactivate_fcm_token(token_id: int):
 async def sync_prices():
     """Sync prices from inventario_estilos to inventario1"""
     try:
-        url = f"{SUPABASE_URL}/rest/v1/rpc/sync_inventario_prices"
-        response = requests.post(url, headers=HEADERS)
-        response.raise_for_status()
-        
-        result = response.json()
-        updated_count = result[0].get('updated_count', 0) if result else 0
+        result = await supabase_rpc("sync_inventario_prices")
+        updated_count = result[0].get('updated_count', 0) if isinstance(result, list) and result else 0
         
         print(f"✅ Synced {updated_count} prices")
         return {"success": True, "updated": updated_count}
@@ -12795,30 +12773,32 @@ async def get_inventoryxbarcode_page(request: Request):
 async def get_product_by_barcode(barcode: str):
     """Fetch product + its full history from terex1_history"""
     try:
-        # Product
-        url = (
-            f"{SUPABASE_URL}/rest/v1/inventario1"
-            f"?barcode=eq.{barcode}"
-            f"&select=barcode,name,estilo,estilo_id,marca,color,terex1"
-            f"&limit=1"
+        # Fetch product and history in parallel
+        product_data, history_data = await asyncio.gather(
+            supabase_request(
+                method="GET",
+                endpoint="/rest/v1/inventario1",
+                params={
+                    "barcode": f"eq.{barcode}",
+                    "select": "barcode,name,estilo,estilo_id,marca,color,terex1",
+                    "limit": "1"
+                }
+            ),
+            supabase_request(
+                method="GET",
+                endpoint="/rest/v1/terex1_history",
+                params={
+                    "barcode": f"eq.{barcode}",
+                    "order": "created_at.desc",
+                    "limit": "20"
+                }
+            )
         )
-        resp = requests.get(url, headers=HEADERS)
-        resp.raise_for_status()
-        data = resp.json()
-        if not data:
-            return None
-        product = data[0]
 
-        # History for this barcode
-        hist_url = (
-            f"{SUPABASE_URL}/rest/v1/terex1_history"
-            f"?barcode=eq.{barcode}"
-            f"&order=created_at.desc"
-            f"&limit=20"
-        )
-        hist_resp = requests.get(hist_url, headers=HEADERS)
-        hist_resp.raise_for_status()
-        product["history"] = hist_resp.json()
+        if not product_data:
+            return None
+        product = product_data[0]
+        product["history"] = history_data
 
         return product
     except Exception as e:
@@ -12837,24 +12817,30 @@ async def update_terex1(payload: dict):
         if barcode is None or terex1 is None:
             raise HTTPException(status_code=400, detail="barcode and terex1 required")
 
-        # Update inventario1
-        url = f"{SUPABASE_URL}/rest/v1/inventario1?barcode=eq.{barcode}"
-        resp = requests.patch(url, headers=HEADERS, json={"terex1": terex1})
-        resp.raise_for_status()
-
-        # Insert into terex1_history
+        # Update inventario1 and insert history in parallel
         matches    = int(qty_before) == int(terex1)
         difference = int(terex1) - int(qty_before)
-        hist_url   = f"{SUPABASE_URL}/rest/v1/terex1_history"
-        hist_payload = {
-            "barcode":      int(barcode),
-            "product_name": product_name,
-            "qty_before":   int(qty_before),
-            "qty_counted":  int(terex1),
-            "matches":      matches,
-            "difference":   difference,
-        }
-        requests.post(hist_url, headers=HEADERS, json=hist_payload)
+
+        await asyncio.gather(
+            supabase_request(
+                method="PATCH",
+                endpoint="/rest/v1/inventario1",
+                params={"barcode": f"eq.{barcode}"},
+                json_data={"terex1": terex1}
+            ),
+            supabase_request(
+                method="POST",
+                endpoint="/rest/v1/terex1_history",
+                json_data={
+                    "barcode":      int(barcode),
+                    "product_name": product_name,
+                    "qty_before":   int(qty_before),
+                    "qty_counted":  int(terex1),
+                    "matches":      matches,
+                    "difference":   difference,
+                }
+            )
+        )
 
         return {"success": True}
     except Exception as e:
@@ -12865,16 +12851,17 @@ async def update_terex1(payload: dict):
 async def get_pendientes1():
     """Products in inventario1 where terex1 < 0"""
     try:
-        url = (
-            f"{SUPABASE_URL}/rest/v1/inventario1"
-            f"?terex1=lt.0"
-            f"&select=barcode,name,estilo,marca,color,terex1"
-            f"&order=terex1.asc"
-            f"&limit=200"
+        data = await supabase_request(
+            method="GET",
+            endpoint="/rest/v1/inventario1",
+            params={
+                "terex1": "lt.0",
+                "select": "barcode,name,estilo,marca,color,terex1",
+                "order": "terex1.asc",
+                "limit": "200"
+            }
         )
-        resp = requests.get(url, headers=HEADERS)
-        resp.raise_for_status()
-        return resp.json()
+        return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
