@@ -2382,18 +2382,9 @@ async def supabase_request(
     url = f"{SUPABASE_URL}{endpoint}"
 
     async with httpx.AsyncClient(timeout=15) as client:
-        if method == "GET":
-            response = await client.get(url, headers=HEADERS, params=params)
-        elif method == "POST":
-            response = await client.post(url, headers=HEADERS, json=json_data)
-        elif method == "PUT":
-            response = await client.put(url, headers=HEADERS, json=json_data)
-        elif method == "PATCH":
-            response = await client.patch(url, headers=HEADERS, json=json_data)
-        elif method == "DELETE":
-            response = await client.delete(url, headers=HEADERS, params=params)
-        else:
-            raise ValueError(f"Unsupported HTTP method: {method}")
+        response = await client.request(
+            method.upper(), url, headers=HEADERS, params=params, json=json_data
+        )
     
     if response.status_code >= 400:
         raise HTTPException(
